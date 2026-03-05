@@ -1,0 +1,94 @@
+#+title: clime
+#+author:
+#+language: en
+
+* Overview
+
+A template for bootstrapping new Emacs Lisp projects with sensible
+defaults: tests, Makefile, documentation, and standard file structure.
+
+Clone it, run ~init.sh~, and start building.
+
+* Quick Start
+
+#+begin_src sh
+git clone https://github.com/YOU/emacs-clime my-project
+cd my-project
+./init.sh my-project "Your Name"
+make test
+git rm init.sh
+git commit -am "Instantiate my-project from clime"
+#+end_src
+
+* What You Get
+
+#+begin_example
+.dir-locals.el                 Editor settings (indent, fill-column)
+.gitignore                     Elisp, macOS, embead ignores
+.github/workflows/ci.yml       GitHub Actions CI (multi-version)
+LICENSE                        MIT license
+Makefile                       compile, lint, test, clean
+README.org                     This file (updated by init.sh)
+CONTRIBUTING.org               Dev setup, code style, PR workflow
+init.sh                        One-shot rename script
+
+clime.el                    Entry point
+clime-core.el               Core domain logic and data structures
+clime-settings.el           defgroup + defcustom configuration
+
+tests/
+  clime-tests-runner.el     Batch + interactive test runner
+  clime-test-helpers.el     Temp dirs, message capture macros
+  clime-core-tests.el       Example tests
+#+end_example
+
+All files, symbols, and references are renamed by ~init.sh~.
+
+* init.sh
+
+#+begin_src sh
+./init.sh <project-name> [author]
+#+end_src
+
+- Renames files: ~clime*.el~ → ~<project-name>*.el~
+- Replaces all ~clime~ prefixes in code, Makefile, and docs
+- Capitalizes the buffer name (~*My-Project Log*~)
+- Sets author in file headers and README if provided
+- Uses ~git mv~ so history stays clean
+
+After running, delete the script and commit.
+
+* Makefile Targets
+
+| Target    | Description                              |
+|-----------+------------------------------------------|
+| ~compile~ | Byte-compile all ~.el~ files             |
+| ~lint~    | Byte-compile with warnings + checkdoc    |
+| ~test~    | Run tests (~SELECT=~ to filter)          |
+| ~clean~   | Remove ~.elc~ files and build output     |
+| ~help~    | Show available targets                   |
+
+#+begin_src sh
+make test                              # all tests
+make test SELECT="^clime-test-core" # filter by pattern
+#+end_src
+
+* Conventions
+
+- ~lexical-binding: t~ in every file
+- Public symbols: ~prefix-name~, internal: ~prefix--name~
+- Immutable structs (~:read-only t~, private constructors)
+- Tests named ~prefix-test-*~, one test file per module
+- Section dividers: ~;;; ─── Section Name ──────~
+
+* Adding a Module
+
+1. Create ~clime-foo.el~ with standard header
+2. Add ~(require 'clime-foo)~ to ~clime.el~
+3. Create ~tests/clime-foo-tests.el~
+4. Add ~(require 'clime-foo-tests)~ to ~tests/clime-tests-runner.el~
+5. Run ~make test~
+
+* License
+
+MIT

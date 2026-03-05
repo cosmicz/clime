@@ -1,0 +1,27 @@
+# -*- mode: gitignore; -*-
+
+.DS_Store
+.idea
+*.log
+tmp/
+
+# Byte-compiled Elisp
+*.elc
+*-autoloads.el
+
+# Project metadata
+.claude
+
+# Package cache
+.packages
+
+# Development tracking
+DEVELOPMENT.org
+
+# Issue tracking (embead) — remove if not using embead
+.beads
+.embead/.current*
+.embead/.worktrees/
+.embead/beads.org
+.embead/beads_archive.org
+.embead/archive-*.org
