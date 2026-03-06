@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main, trunk]
+  pull_request:
+    branches: [main, trunk]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        emacs-version: ['29.1', '29.4', 'snapshot']
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: purcell/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs-version }}
+
+      - name: Byte-compile
+        run: make compile
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test

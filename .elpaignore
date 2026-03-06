@@ -1,0 +1,11 @@
+tests/
+examples/
+dist/
+.github/
+.embead/
+AGENTS.md
+CONTRIBUTING.org
+DEVELOPMENT.org
+README.org
+Cask
+Makefile

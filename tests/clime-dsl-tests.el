@@ -1,0 +1,430 @@
+;;; clime-dsl-tests.el --- Tests for clime-dsl  -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026
+
+;; This file is not part of GNU Emacs.
+
+;;; Commentary:
+
+;; Tests for the declarative DSL macros.
+
+;;; Code:
+
+(require 'ert)
+(require 'clime-core)
+(require 'clime-parse)
+(require 'clime-dsl)
+(require 'clime-test-helpers)
+
+;;; ─── Simple App ─────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/simple-app ()
+  "clime-app creates a clime-app struct bound to a variable."
+  (eval '(clime-app clime-test--dsl-simple
+           :version "1.0"
+           :help "A test app"
+           (clime-command ping
+             :help "Ping command"
+             (clime-handler (ctx) "pong")))
+        t)
+  (should (clime-app-p clime-test--dsl-simple))
+  (should (equal (clime-app-name clime-test--dsl-simple) "clime-test--dsl-simple"))
+  (should (equal (clime-app-version clime-test--dsl-simple) "1.0")))
+
+;;; ─── Command With Options and Args ──────────────────────────────────────
+
+(ert-deftest clime-test-dsl/command-options-args ()
+  "Command with options and args creates correct structs."
+  (eval '(clime-app clime-test--dsl-opts
+           :version "1"
+           (clime-command show
+             :help "Show a thing"
+             :aliases ("get")
+             (clime-option format ("-f" "--format") :default "text" :help "Output format")
+             (clime-arg id :help "Resource ID")
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((app clime-test--dsl-opts)
+         (show (cdr (assoc "show" (clime-group-children app)))))
+    (should (clime-command-p show))
+    (should (equal (clime-command-name show) "show"))
+    (should (equal (clime-command-aliases show) '("get")))
+    (should (= (length (clime-command-options show)) 1))
+    (should (= (length (clime-command-args show)) 1))
+    (let ((opt (car (clime-command-options show))))
+      (should (eq (clime-option-name opt) 'format))
+      (should (equal (clime-option-flags opt) '("-f" "--format")))
+      (should (equal (clime-option-default opt) "text")))
+    (let ((arg (car (clime-command-args show))))
+      (should (eq (clime-arg-name arg) 'id)))))
+
+;;; ─── Root Options ───────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/root-options ()
+  "Options at app level become root options."
+  (eval '(clime-app clime-test--dsl-root-opts
+           :version "1"
+           (clime-option verbose ("-v" "--verbose") :count t :help "Verbosity")
+           (clime-command ping
+             :help "Ping"
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((app clime-test--dsl-root-opts))
+    (should (= (length (clime-group-options app)) 1))
+    (let ((opt (car (clime-group-options app))))
+      (should (eq (clime-option-name opt) 'verbose))
+      (should (clime-option-count opt)))))
+
+;;; ─── Group With Subcommands ─────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/group ()
+  "clime-group creates a group with child commands."
+  (eval '(clime-app clime-test--dsl-grp
+           :version "1"
+           (clime-group dep
+             :help "Dependencies"
+             (clime-command add
+               :help "Add dep"
+               (clime-arg id :help "Dep ID")
+               (clime-handler (ctx) nil))
+             (clime-command remove
+               :aliases ("rm")
+               :help "Remove dep"
+               (clime-arg id :help "Dep ID")
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((app clime-test--dsl-grp)
+         (dep (cdr (assoc "dep" (clime-group-children app)))))
+    (should (clime-group-p dep))
+    (should (equal (clime-group-name dep) "dep"))
+    (should (= (length (clime-group-children dep)) 2))
+    (should (cdr (assoc "add" (clime-group-children dep))))
+    (should (cdr (assoc "remove" (clime-group-children dep))))))
+
+;;; ─── Nested Groups ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/nested-groups ()
+  "Groups can be nested inside groups."
+  (eval '(clime-app clime-test--dsl-nested
+           :version "1"
+           (clime-group config
+             :help "Configuration"
+             (clime-group profile
+               :help "Profile management"
+               (clime-command list
+                 :help "List profiles"
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((app clime-test--dsl-nested)
+         (config (cdr (assoc "config" (clime-group-children app))))
+         (profile (cdr (assoc "profile" (clime-group-children config)))))
+    (should (clime-group-p config))
+    (should (clime-group-p profile))
+    (should (cdr (assoc "list" (clime-group-children profile))))))
+
+;;; ─── Handler ────────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/handler-is-function ()
+  "clime-handler produces a callable function on the command."
+  (eval '(clime-app clime-test--dsl-handler
+           :version "1"
+           (clime-command echo
+             :help "Echo"
+             (clime-arg msg :help "Message")
+             (clime-handler (ctx) (concat "echo: " (clime-ctx-get ctx 'msg)))))
+        t)
+  (let* ((app clime-test--dsl-handler)
+         (cmd (cdr (assoc "echo" (clime-group-children app)))))
+    (should (functionp (clime-command-handler cmd)))
+    (let ((ctx (clime-context--create :params '(msg "hi"))))
+      (should (equal (funcall (clime-command-handler cmd) ctx)
+                     "echo: hi")))))
+
+;;; ─── Boolean / Count / Multiple Options ─────────────────────────────────
+
+(ert-deftest clime-test-dsl/option-types ()
+  "Options with :count, :nargs 0, :multiple create correct specs."
+  (eval '(clime-app clime-test--dsl-opt-types
+           :version "1"
+           (clime-command test
+             :help "Test"
+             (clime-option verbose ("-v") :count t)
+             (clime-option json ("--json") :nargs 0)
+             (clime-option tag ("--tag" "-t") :multiple t)
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (assoc "test" (clime-group-children clime-test--dsl-opt-types))))
+         (opts (clime-command-options cmd)))
+    (should (= (length opts) 3))
+    (let ((v (cl-find-if (lambda (o) (eq (clime-option-name o) 'verbose)) opts))
+          (j (cl-find-if (lambda (o) (eq (clime-option-name o) 'json)) opts))
+          (tg (cl-find-if (lambda (o) (eq (clime-option-name o) 'tag)) opts)))
+      (should (clime-option-boolean-p v))
+      (should (clime-option-count v))
+      (should (clime-option-boolean-p j))
+      (should (clime-option-multiple tg)))))
+
+;;; ─── Arg With Rest ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/arg-rest ()
+  "Arg with :nargs :rest works in DSL."
+  (eval '(clime-app clime-test--dsl-rest
+           :version "1"
+           (clime-command show
+             :help "Show"
+             (clime-arg ids :nargs :rest :required nil :help "IDs")
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--dsl-rest))))
+         (arg (car (clime-command-args cmd))))
+    (should (eq (clime-arg-nargs arg) :rest))
+    (should-not (clime-arg-required arg))))
+
+;;; ─── Integration: DSL + Parser ──────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/parse-integration ()
+  "App built with DSL macros works with clime-parse."
+  (eval '(clime-app clime-test--dsl-integration
+           :version "2.0"
+           (clime-option verbose ("-v" "--verbose") :count t)
+           (clime-command show
+             :aliases ("get")
+             :help "Show resource"
+             (clime-option format ("-f" "--format") :default "text")
+             (clime-arg id :help "ID")
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((result (clime-parse clime-test--dsl-integration
+                             '("-v" "show" "--format" "json" "abc"))))
+    (should (clime-parse-result-p result))
+    (should (equal (clime-command-name (clime-parse-result-command result)) "show"))
+    (should (= (plist-get (clime-parse-result-params result) 'verbose) 1))
+    (should (equal (plist-get (clime-parse-result-params result) 'format) "json"))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "abc"))))
+
+(ert-deftest clime-test-dsl/parse-integration-alias ()
+  "Command alias works through DSL + parser."
+  (eval '(clime-app clime-test--dsl-alias-int
+           :version "1"
+           (clime-command show
+             :aliases ("get")
+             :help "Show"
+             (clime-arg id)
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((result (clime-parse clime-test--dsl-alias-int '("get" "123"))))
+    (should (equal (clime-command-name (clime-parse-result-command result)) "show"))))
+
+(ert-deftest clime-test-dsl/parse-integration-group ()
+  "Group app built with DSL works with parser."
+  (eval '(clime-app clime-test--dsl-grp-int
+           :version "1"
+           (clime-option verbose ("-v") :count t)
+           (clime-group dep
+             :help "Deps"
+             (clime-command add
+               :help "Add"
+               (clime-arg id)
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((result (clime-parse clime-test--dsl-grp-int '("-v" "dep" "add" "X"))))
+    (should (equal (clime-command-name (clime-parse-result-command result)) "add"))
+    (should (= (plist-get (clime-parse-result-params result) 'verbose) 1))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "X"))))
+
+;;; ─── Mixed Order ────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/mixed-order ()
+  "Options, args, and commands can appear in any order in body."
+  (eval '(clime-app clime-test--dsl-mixed
+           :version "1"
+           (clime-command first
+             :help "First"
+             (clime-arg name)
+             (clime-option flag ("--flag") :nargs 0)
+             (clime-handler (ctx) nil))
+           (clime-option global ("--global") :nargs 0)
+           (clime-command second
+             :help "Second"
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((app clime-test--dsl-mixed))
+    (should (= (length (clime-group-options app)) 1))
+    (should (= (length (clime-group-children app)) 2))))
+
+;;; ─── Error Cases ─────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/missing-handler-error ()
+  "Command without clime-handler signals error."
+  (should-error
+   (eval '(clime-app clime-test--dsl-no-handler
+            :version "1"
+            (clime-command broken
+              :help "No handler"
+              (clime-arg id)))
+         t)
+   :type 'error))
+
+(ert-deftest clime-test-dsl/unknown-form-error ()
+  "Unknown DSL form signals error."
+  (should-error
+   (eval '(clime-app clime-test--dsl-unknown
+            :version "1"
+            (clime-bogus foo))
+         t)
+   :type 'error))
+
+;;; ─── Group With Invoke Handler ──────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/group-invoke ()
+  "Group with clime-handler sets handler slot."
+  (eval '(clime-app clime-test--dsl-grp-invoke
+           :version "1"
+           (clime-group status
+             :help "Show status"
+             (clime-handler (ctx) "status overview")
+             (clime-command detail
+               :help "Detailed status"
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((grp (cdr (assoc "status" (clime-group-children clime-test--dsl-grp-invoke)))))
+    (should (functionp (clime-group-handler grp)))))
+
+;;; ─── Group With Options and Args ────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/group-options-args ()
+  "Group-level options and args created correctly."
+  (eval '(clime-app clime-test--dsl-grp-opts
+           :version "1"
+           (clime-group config
+             :help "Config"
+             (clime-option scope ("--scope") :default "local")
+             (clime-arg profile :help "Profile name")
+             (clime-command list
+               :help "List"
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((grp (cdr (assoc "config" (clime-group-children clime-test--dsl-grp-opts)))))
+    (should (= (length (clime-group-options grp)) 1))
+    (should (= (length (clime-group-args grp)) 1))
+    (should (eq (clime-option-name (car (clime-group-options grp))) 'scope))
+    (should (eq (clime-arg-name (car (clime-group-args grp))) 'profile))))
+
+;;; ─── App Keyword Args ───────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/app-keywords ()
+  "App keyword args :env-prefix, :json-mode set correctly."
+  (eval '(clime-app clime-test--dsl-keywords
+           :version "3.0"
+           :env-prefix "MYAPP"
+           :json-mode t
+           :help "A helpful app"
+           (clime-command ping
+             :help "Ping"
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((app clime-test--dsl-keywords))
+    (should (equal (clime-app-env-prefix app) "MYAPP"))
+    (should (clime-app-json-mode app))
+    (should (equal (clime-group-help app) "A helpful app"))))
+
+;;; ─── Hidden ─────────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/hidden-command ()
+  "Hidden keyword on command and option."
+  (eval '(clime-app clime-test--dsl-hidden
+           :version "1"
+           (clime-command secret
+             :help "Secret cmd"
+             :hidden t
+             (clime-option debug ("--debug") :nargs 0 :hidden t)
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (assoc "secret" (clime-group-children clime-test--dsl-hidden)))))
+    (should (clime-command-hidden cmd))
+    (should (clime-option-hidden (car (clime-command-options cmd))))))
+
+;;; ─── Context Struct ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-context/struct ()
+  "clime-context struct works with accessors."
+  (let ((ctx (clime-context--create
+              :app nil
+              :command nil
+              :path '("myapp" "show")
+              :params '(id "123" format "json"))))
+    (should (clime-context-p ctx))
+    (should (equal (clime-ctx-get ctx 'id) "123"))
+    (should (equal (clime-ctx-get ctx 'format) "json"))
+    (should-not (clime-ctx-get ctx 'missing))
+    (should (equal (clime-context-path ctx) '("myapp" "show")))))
+
+;;; ─── :flag Shorthand ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/flag-shorthand ()
+  ":flag t in DSL produces a boolean option (nargs=0)."
+  (eval '(clime-app clime-test--dsl-flag
+           :version "1"
+           (clime-command test
+             :help "Test"
+             (clime-option force ("--force") :flag t)
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (assoc "test" (clime-group-children clime-test--dsl-flag))))
+         (opt (car (clime-command-options cmd))))
+    (should (clime-option-boolean-p opt))
+    (should (eql (clime-option-nargs opt) 0))))
+
+;;; ─── Symbol Aliases ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/symbol-aliases ()
+  "Symbol aliases in DSL are converted to strings."
+  (eval '(clime-app clime-test--dsl-sym-alias
+           :version "1"
+           (clime-command install
+             :help "Install"
+             :aliases (i ins)
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (assoc "install" (clime-group-children clime-test--dsl-sym-alias)))))
+    (should (equal (clime-command-aliases cmd) '("i" "ins")))))
+
+(ert-deftest clime-test-dsl/mixed-aliases ()
+  "Mixed string and symbol aliases both work."
+  (eval '(clime-app clime-test--dsl-mix-alias
+           :version "1"
+           (clime-command list
+             :help "List"
+             :aliases ("ls" l)
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (assoc "list" (clime-group-children clime-test--dsl-mix-alias)))))
+    (should (equal (clime-command-aliases cmd) '("ls" "l")))))
+
+;;; ─── clime-let ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/clime-let-simple ()
+  "clime-let binds params by name."
+  (let ((ctx (clime-context--create
+              :params '(id "123" format "json"))))
+    (clime-let ctx (id format)
+      (should (equal id "123"))
+      (should (equal format "json")))))
+
+(ert-deftest clime-test-dsl/clime-let-rename ()
+  "clime-let (var param) binds param under a different name."
+  (let ((ctx (clime-context--create
+              :params '(tag ("a" "b") verbose 2))))
+    (clime-let ctx ((tags tag) (v verbose))
+      (should (equal tags '("a" "b")))
+      (should (= v 2)))))
+
+(ert-deftest clime-test-dsl/clime-let-missing ()
+  "clime-let with missing param binds nil."
+  (let ((ctx (clime-context--create :params '(id "123"))))
+    (clime-let ctx (id missing)
+      (should (equal id "123"))
+      (should-not missing))))
+
+(provide 'clime-dsl-tests)
+;;; clime-dsl-tests.el ends here

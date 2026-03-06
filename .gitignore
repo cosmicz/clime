@@ -1,0 +1,34 @@
+# -*- mode: gitignore; -*-
+
+.DS_Store
+.idea
+*.log
+tmp/
+
+# Byte-compiled Elisp
+*.elc
+*-autoloads.el
+
+# Project metadata
+.claude
+
+# Package cache
+.packages
+
+# Distribution build
+dist/
+
+# Generated from README.org via make readme
+README.md
+
+# Development tracking
+DEVELOPMENT.org
+
+# Drafts
+drafts/
+
+# Issue tracking (embead) — remove if not using embead
+.beads/
+.embead/
+
+.org~

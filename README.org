@@ -1,0 +1,214 @@
+#+title: clime
+#+options: toc:nil num:nil
+
+Build real CLI tools in pure Emacs Lisp.  Declare commands, options,
+and args in a single ~clime-app~ form --- clime handles parsing,
+~--help~ generation, error messages, and dispatch.
+
+* Getting Started
+
+Write an Elisp file using the clime DSL:
+
+#+begin_src emacs-lisp
+;;; greet.el --- A greeting CLI  -*- lexical-binding: t; -*-
+
+;;; Code:
+
+(require 'clime)
+
+(clime-app greet
+  :version "1.0.0"
+  :help "A friendly greeter."
+
+  (clime-option shout ("--shout" "-s") :flag t
+    :help "SHOUT THE GREETING")
+
+  (clime-command hello
+    :help "Say hello to someone"
+    (clime-arg name :help "Person to greet")
+    (clime-handler (ctx)
+      (clime-let ctx (name shout)
+        (let ((msg (format "Hello, %s!" name)))
+          (if shout (upcase msg) msg)))))
+
+  (clime-command goodbye
+    :help "Say goodbye"
+    (clime-arg name :help "Person to bid farewell")
+    (clime-handler (ctx)
+      (clime-let ctx (name)
+        (format "Goodbye, %s!" name)))))
+
+(clime-run-batch greet)
+
+(provide 'greet)
+;;; greet.el ends here
+#+end_src
+
+Initialize it with a shebang and run it:
+
+#+begin_src bash
+path/to/clime-app.el init greet.el
+
+./greet.el hello world        # => Hello, world!
+./greet.el --shout hello world # => HELLO, WORLD!
+./greet.el --help
+./greet.el hello --help
+#+end_src
+
+** How the shebang works
+
+~clime-app.el init~ prepends a polyglot header that's valid as both
+shell script and Elisp:
+
+#+begin_src bash
+#!/bin/sh
+":"; exec emacs --batch -Q -L "/path/to/clime" -l "$0" -- "$@"
+#+end_src
+
+So ~./myapp.el hello world~ just works from any shell.
+
+* Features
+
+- Declarative DSL --- one form defines your entire CLI
+- Subcommands and nested groups (~myapp repo add~)
+- Auto-generated ~--help~ and ~--version~ at every level
+- Boolean flags, count flags (~-vvv~), repeatable options (~--tag a --tag b~)
+- Environment variables with auto-derived names via ~:env-prefix~
+- Stdin via ~-~ sentinel
+- JSON output mode
+- Type coercion (string, integer, number)
+- Single-file distribution via ~bundle~ command
+
+** Environment variables
+
+Set ~:env-prefix~ on the app to auto-derive env var names from options:
+
+#+begin_src emacs-lisp
+(clime-app greet
+  :version "1.0.0"
+  :help "A friendly greeter."
+  :env-prefix "GREET"
+  ...)
+#+end_src
+
+Now ~--shout~ can also be set via ~GREET_SHOUT=1~.
+
+** Nested groups
+
+Organize related commands under a group:
+
+#+begin_src emacs-lisp
+(clime-group templates
+  :help "Manage greeting templates"
+
+  (clime-command list
+    :help "List available templates"
+    (clime-handler (_ctx) "default, formal, casual"))
+
+  (clime-command add
+    :help "Add a template"
+    (clime-arg name :help "Template name")
+    (clime-arg body :help "Template body")
+    (clime-handler (ctx)
+      (clime-let ctx (name body)
+        (format "Added template %s: %s" name body)))))
+#+end_src
+
+** Stdin
+
+Use ~-~ as an argument value to read from stdin:
+
+#+begin_src bash
+echo "World" | ./greet.el hello -
+#+end_src
+
+* DSL Reference
+
+| Macro            | Purpose                            | Key arguments                                          |
+|------------------+------------------------------------+--------------------------------------------------------|
+| ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~                     |
+| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~                         |
+| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~                         |
+| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:required~, ~:type~   |
+| ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:default~, ~:help~                 |
+| ~clime-handler~  | Attach a handler to a command      | ~(ctx)~ — receives the parse context                   |
+| ~clime-let~      | Destructure context in a handler   | ~ctx (var1 var2 ...)~ — binds option/arg values        |
+
+See =examples/pkm.el= for a comprehensive demo covering all major features.
+
+* Bundling & Distribution
+
+~clime-app.el~ provides two commands for distribution:
+
+*~bundle~* --- concatenate source files into a single =.el=:
+
+#+begin_src bash
+./clime-app.el bundle -o dist/myapp.el \
+    --provide myapp --main myapp \
+    src/myapp-core.el src/myapp-commands.el src/myapp.el
+#+end_src
+
+With ~--main~, the bundle works as both a library (~require 'myapp~)
+and a standalone CLI.
+
+*~init~* --- add a shebang to make any =.el= file executable:
+
+#+begin_src bash
+./clime-app.el init --env CLIME_MAIN_APP=myapp dist/myapp.el
+#+end_src
+
+For dual-use bundles, pass ~--env CLIME_MAIN_APP=<app>~ so the entry
+point only activates when run directly (not when loaded as a library).
+
+* Installation
+
+** Git clone / submodule
+
+#+begin_src bash
+# Clone directly
+git clone https://github.com/cosmicz/clime vendor/clime
+
+# Or as a submodule
+git submodule add https://github.com/cosmicz/clime vendor/clime
+#+end_src
+
+Then initialize your app file:
+
+#+begin_src bash
+vendor/clime/clime-app.el init myapp.el
+#+end_src
+
+This prepends a polyglot shebang and makes the file executable.
+
+** package-vc (Emacs 29+)
+
+#+begin_src emacs-lisp
+(package-vc-install "https://github.com/cosmicz/clime")
+#+end_src
+
+** Vendoring (single file)
+
+Build a single-file bundle and copy it into your project:
+
+#+begin_src bash
+cd clime/
+make dist
+cp dist/clime.el /path/to/myapp/
+#+end_src
+
+Your app just needs ~(require 'clime)~ and ~-L~ pointing to the
+directory containing the bundled file.
+
+* Development
+
+#+begin_src bash
+make test              # run tests (SELECT=pattern to filter)
+make lint              # byte-compile warnings + checkdoc
+make compile           # byte-compile
+make dist              # build single-file dist/clime.el
+make clean             # remove build artifacts
+#+end_src
+
+* License
+
+MIT
