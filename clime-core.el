@@ -135,6 +135,20 @@ ARGS is a plist of slot values."
     (error "clime-make-app: :name is required"))
   (apply #'clime-app--create args))
 
+;;; ─── Context ────────────────────────────────────────────────────────────
+
+(cl-defstruct (clime-context (:constructor clime-context--create)
+                             (:copier nil))
+  "Runtime context passed to command handlers."
+  (app nil :documentation "The root `clime-app'.")
+  (command nil :documentation "The resolved `clime-command'.")
+  (path nil :type list :documentation "List of node names from root to command.")
+  (params nil :type list :documentation "Plist of parsed param values."))
+
+(defun clime-ctx-get (ctx name)
+  "Get the value of param NAME from context CTX."
+  (plist-get (clime-context-params ctx) name))
+
 ;;; ─── Predicates ─────────────────────────────────────────────────────────
 
 (defun clime-node-p (obj)

@@ -31,6 +31,7 @@
 (require 'clime-settings)
 (require 'clime-core)
 (require 'clime-parse)
+(require 'clime-dsl)
 
 (provide 'clime)
 ;;; clime.el ends here

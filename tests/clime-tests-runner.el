@@ -28,6 +28,7 @@ Configure project-specific settings for clean test execution."
 (require 'clime-test-helpers)
 (require 'clime-core-tests)
 (require 'clime-parse-tests)
+(require 'clime-dsl-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────
 
