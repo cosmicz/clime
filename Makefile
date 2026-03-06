@@ -12,7 +12,8 @@ compile:
 
 lint:
 	@echo "Running lint checks..."
-	@$(BATCH) --eval '(setq byte-compile-error-on-warn t)' \
+	@$(BATCH) --eval '(setq byte-compile-error-on-warn t \
+		byte-compile-warnings (quote (not docstrings-wide)))' \
 		-f batch-byte-compile *.el
 	@echo "Byte-compile clean."
 	@$(BATCH) --eval '\

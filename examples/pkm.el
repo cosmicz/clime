@@ -45,7 +45,7 @@
 ;; The shebang uses a relative -L path since this file lives inside
 ;; the clime repo.  For external apps, use `bin/clime-init' which
 ;; generates an absolute path.  See DEVELOPMENT.org "Shebang and
-;; shell wrappers" for details and a production bash wrapper template.
+;; shell wrappers" for details.
 
 ;;; Code:
 

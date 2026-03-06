@@ -133,6 +133,56 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
                     (plist-member params (clime-arg-name arg))))
               args)))
 
+;;; ─── Stdin Sentinel ────────────────────────────────────────────────────
+
+(defvar clime--stdin-content nil
+  "Cached stdin content.  Read once on first `-' sentinel, shared across params.
+Reset to nil at the start of each `clime-run' invocation.")
+
+(defvar clime--stdin-app nil
+  "The app being parsed, used by `clime--read-stdin' for env-prefix lookup.")
+
+(defun clime--read-stdin ()
+  "Read all content from stdin and return it as a trimmed string.
+First checks for a pre-buffered stdin file via env var
+\({ENV_PREFIX}_STDIN_FILE or CLIME_STDIN_FILE), then falls back to
+reading stdin directly via `read-from-minibuffer' (works in batch mode).
+Signals `clime-usage-error' if no content is available."
+  (or clime--stdin-content
+      (setq clime--stdin-content
+            (let* ((prefix (and clime--stdin-app
+                                (clime-app-p clime--stdin-app)
+                                (clime-app-env-prefix clime--stdin-app)))
+                   (app-var (and prefix (getenv (concat prefix "_STDIN_FILE"))))
+                   (generic-var (getenv "CLIME_STDIN_FILE"))
+                   (stdin-file (or app-var generic-var)))
+              (let ((raw (cond
+                          ;; Read from pre-buffered temp file
+                          ((and stdin-file (file-exists-p stdin-file))
+                           (with-temp-buffer
+                             (insert-file-contents stdin-file)
+                             (buffer-string)))
+                          ;; Read directly from stdin (batch mode)
+                          (noninteractive
+                           (let ((lines '())
+                                 (line nil))
+                             (while (setq line (ignore-errors
+                                                 (read-from-minibuffer "")))
+                               (push line lines))
+                             (when lines
+                               (mapconcat #'identity (nreverse lines) "\n")))))))
+                (let ((trimmed (and raw (string-trim raw))))
+                  (if (or (null trimmed) (string-empty-p trimmed))
+                      (signal 'clime-usage-error
+                              (list "Stdin sentinel `-' used but no input available"))
+                    trimmed)))))))
+
+(defun clime--resolve-stdin-value (value)
+  "If VALUE is \"-\", return stdin content; otherwise return VALUE unchanged."
+  (if (equal value "-")
+      (clime--read-stdin)
+    value))
+
 ;;; ─── Env Var Provider ──────────────────────────────────────────────────
 
 (defun clime--env-var-for-option (opt app)
@@ -251,7 +301,8 @@ Signal `clime-help-requested' for --help/-h/--version."
         (arg-index 0)
         (visited-nodes (list app))
         (i 0)
-        (len (length argv)))
+        (len (length argv))
+        (clime--stdin-app app))
     ;; Set parent refs for direct children (if not already set)
     (clime--set-parent-refs app)
     (while (< i len)
@@ -284,7 +335,7 @@ Signal `clime-help-requested' for --help/-h/--version."
           (if-let ((split (clime--split-long-equals token)))
               ;; --name=value form
               (let* ((flag (car split))
-                     (value (cdr split))
+                     (value (clime--resolve-stdin-value (cdr split)))
                      (found (clime--find-option-in-scope flag current-node root)))
                   (unless found
                     (signal 'clime-usage-error
@@ -321,7 +372,8 @@ Signal `clime-help-requested' for --help/-h/--version."
                         (signal 'clime-usage-error
                                 (list (format "Option %s requires a value"
                                               token))))
-                      (setq params (clime--consume-option opt params (nth i argv)))
+                      (setq params (clime--consume-option opt params
+                                                          (clime--resolve-stdin-value (nth i argv))))
                       (cl-incf i)))))))
 
          ;; 4. Try group descent
@@ -346,13 +398,14 @@ Signal `clime-help-requested' for --help/-h/--version."
                                 (progn
                                   (setq option-parsing nil)
                                   (cl-incf i))
-                              (push tok rest-values)
+                              (push (clime--resolve-stdin-value tok) rest-values)
                               (cl-incf i))))
                         (setq params (plist-put params (clime-arg-name arg-spec)
                                                (nreverse rest-values))))
                     ;; Normal positional
                     (let ((coerced (clime--coerce-value
-                                    token (clime-arg-type arg-spec)
+                                    (clime--resolve-stdin-value token)
+                                    (clime-arg-type arg-spec)
                                     (format "<%s>" (clime-arg-name arg-spec)))))
                       (setq params (plist-put params (clime-arg-name arg-spec) coerced)))
                     (cl-incf arg-index)
