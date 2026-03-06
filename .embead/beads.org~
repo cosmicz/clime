@@ -1,0 +1,216 @@
+#+TITLE: CLIME Beads
+#+SEQ_TODO: TODO(t) DESIGN(g) SPEC(s) PLAN(p) REVIEW(r) IMPL(i) REFINE(f) ACCEPT(a) RESOLVE(v) | DONE(d) CNCL(k)
+#+SEQ_TODO: WAIT(w) |
+#+PRIORITIES: A E C
+#+EMBEAD_PREFIX: clime
+#+EMBEAD_LINK: ~/dev/embead
+* REFINE [#A] Command tree data model
+:PROPERTIES:
+:BEAD_ID:  clime-5g6
+:Created:  [2026-03-05 Thu 16:11]
+:BEAD_UPDATED_AT: [2026-03-05 Thu 16:30]
+:BEAD_BRANCH_ORIGIN: PLAN
+:BEAD_BRANCH_AGENT: claude-max
+:BEAD_BRANCH_PREV: PLAN
+:BEAD_BRANCH_NEXT: IMPL
+:BEAD_ASSIGNED: claude-max
+:END:
+Define core structs: app, group, command, option, arg. The command tree is the central data structure that everything else builds on. Options need: flags list, short aliases, type, boolean/count inference, :multiple, :required, :default, :env, :nargs, :help, :group (for help display). Args need: name, type, :required, :default, :nargs (:rest/+/N), :help. Groups and commands need: name, :aliases, handler, parent ref, children list. App needs: name, version, env-prefix.
+** Design
+*** File: clime-core.el (replace skeleton structs)
+
+Replace the placeholder `clime-thing` with the real command tree structs.
+All structs use `cl-defstruct` with `:constructor` prefix `clime-TYPE--create`
+and `:copier nil` (matching the skeleton convention).
+
+*** Structs
+
+**** clime-param (abstract base for option + arg)
+Not a real struct — shared slots documented here, duplicated in option/arg.
+- name (symbol) — canonical param name, used as plist key in parsed result
+- type (symbol or function) — type converter, default 'string
+- help (string) — one-line description for --help
+- required (boolean)
+- default — default value (or a function for lazy defaults)
+- nargs — nil (=1), integer N, or :rest
+
+**** clime-option
+- name (symbol) — canonical name
+- flags (list of strings) — e.g. ("--verbose" "-v")
+- type (symbol) — default 'string
+- help (string)
+- required (boolean)
+- default — default value
+- nargs — nil means 1 for value options, 0 for boolean/count
+- env (string) — env var name override
+- count (boolean) — if t, flag is a counter (-vvv → 3)
+- multiple (boolean) — if t, repeated flags collect into a list
+- group (string) — help display group label
+- hidden (boolean) — omit from help
+
+Derived properties (not stored, computed):
+- boolean-p: t when count=t or type=boolean or nargs=0
+- short-flags: flags matching "^-[^-]$"
+- long-flags: flags matching "^--"
+
+**** clime-arg
+- name (symbol) — canonical name
+- type (symbol) — default 'string
+- help (string)
+- required (boolean) — default t
+- default — default value (may be a function)
+- nargs — nil (=1), integer N, or :rest
+
+**** clime-node (abstract base for group + command)
+Not a real struct — shared slots:
+- name (string) — command/group name as typed by user
+- aliases (list of strings)
+- help (string) — one-line description
+- options (list of clime-option)
+- args (list of clime-arg)
+- parent — ref to parent node or nil (root)
+- hidden (boolean)
+
+**** clime-command (leaf node)
+Inherits node slots plus:
+- handler (function) — called with a clime-context
+
+**** clime-group (branch node)
+Inherits node slots plus:
+- children (list of clime-node) — subcommands and subgroups
+- invoke (function or nil) — optional handler when group is invoked without subcommand
+  (default: print help)
+
+**** clime-app (root, extends group)
+Inherits group slots plus:
+- version (string)
+- env-prefix (string) — for auto-deriving env var names
+- json-mode (boolean) — whether --json is a built-in root option
+
+*** Constructors
+Public constructors: `clime-make-option`, `clime-make-arg`,
+`clime-make-command`, `clime-make-group`, `clime-make-app`.
+Each validates required fields and normalizes (e.g. ensure flags
+are strings, name is a string).
+
+*** Key design choices
+- Flat structs, no inheritance via cl-defstruct :include — keeps it simple.
+  clime-command and clime-group share slots by convention, not by struct
+  hierarchy. A `clime-node-p` predicate checks both types.
+- Parent refs set during tree registration, not at construction time.
+- The `args` list is ordered — position matters for parsing.
+- `options` list is unordered — lookup is by flag string.
+- `children` in group is an alist (name . node) for O(1) lookup + ordering.
+
+*** Accessors / queries
+- `clime-node-p` — test if arg is command or group
+- `clime-option-boolean-p` — derived predicate
+- `clime-node-find-option` — lookup option by flag string in node
+- `clime-node-all-ancestor-flags` — collect flags from all ancestors (for collision checks)
+- `clime-group-find-child` — lookup child by name or alias
+** Acceptance Criteria
+- [ ] clime-option struct exists with all slots: name, flags, type, help, required, default, nargs, env, count, multiple, group, hidden
+- [ ] clime-arg struct exists with all slots: name, type, help, required, default, nargs
+- [ ] clime-command struct exists with: name, aliases, help, options, args, parent, hidden, handler
+- [ ] clime-group struct exists with: name, aliases, help, options, args, parent, hidden, children, invoke
+- [ ] clime-app struct exists extending group with: version, env-prefix, json-mode
+- [ ] Public constructors validate required fields (name for all, flags for option, handler for command)
+- [ ] clime-option-boolean-p returns t for count=t, type=boolean, nargs=0
+- [ ] clime-node-p returns t for both command and group structs
+- [ ] clime-node-find-option looks up an option by any of its flag strings
+- [ ] clime-group-find-child looks up child by name or alias
+- [ ] children stored as alist for O(1) lookup
+- [ ] args list is ordered (position-sensitive)
+- [ ] ERT tests cover all constructors, predicates, and lookups
+- [ ] Placeholder clime-thing removed
+** Plan
+1. Replace clime-core.el contents:
+   - Remove placeholder clime-thing struct and functions
+   - Add cl-defstruct for clime-option (all slots, :constructor clime-option--create)
+   - Add cl-defstruct for clime-arg (:constructor clime-arg--create)
+   - Add cl-defstruct for clime-command (:constructor clime-command--create)
+   - Add cl-defstruct for clime-group (:constructor clime-group--create)
+   - Add cl-defstruct for clime-app (:include clime-group, :constructor clime-app--create)
+     App extends group via :include since it truly is a group (has children, options, etc.)
+
+2. Add public constructors with validation:
+   - clime-make-option — requires :name and non-empty :flags, defaults type to 'string
+   - clime-make-arg — requires :name, defaults type to 'string and required to t
+   - clime-make-command — requires :name and :handler
+   - clime-make-group — requires :name
+   - clime-make-app — requires :name, defaults version to nil
+
+3. Add predicates and queries:
+   - clime-option-boolean-p — check count, type=boolean, nargs=0
+   - clime-node-p — check command-p or group-p (app-p covered by group include)
+   - clime-node-find-option — iterate node options, match flag in flags list
+   - clime-group-find-child — check alist by name, then scan aliases
+   - clime-node-all-ancestor-flags — walk parent chain collecting flags
+
+4. Run tests, fix any issues.
+
+
+
+* TODO [#A] DSL macros
+:PROPERTIES:
+:BEAD_ID:  clime-xfy
+:Created:  [2026-03-05 Thu 16:11]
+:BEAD_BLOCKED_BY: clime-5g6
+:END:
+Implement clime-app, clime-group, clime-command, clime-option, clime-arg macros that build the command tree declaratively. Macros expand into tree construction calls. clime-option FLAGS list declares both long and short aliases. Boolean flags inferred from :count t or :type boolean or nargs=0. :multiple t marks repeatable options. Groups with subcommands restrict positional args to fixed-count required only.
+* TODO [#A] Definition-time collision checks
+:PROPERTIES:
+:BEAD_ID:  clime-qx9
+:Created:  [2026-03-05 Thu 16:11]
+:BEAD_BLOCKED_BY: clime-xfy
+:END:
+Ancestor flag collision detection at macro expansion or tree registration time. For every node N: intersection of local-flags with all ancestor-flags must be empty. Error lists colliding flag(s), node path, and ancestor where first defined. Sibling collisions allowed.
+* TODO [#A] Single-pass arg parser
+:PROPERTIES:
+:BEAD_ID:  clime-456
+:Created:  [2026-03-05 Thu 16:11]
+:BEAD_BLOCKED_BY: clime-5g6
+:END:
+Deterministic single-pass parser implementing the scope parse loop from the design doc. Features: long options (--name value, --name=value), short options (-n value), short bundles (-abc for booleans), boolean flag inference (no value consumed), short-to-long alias resolution, :multiple option collection, positional arg validation with nargs enforcement, :rest/:nargs + for multi-value positionals, -- ends all option parsing, root global options resolved from any position before --. Group positional ambiguity policy enforced.
+* TODO [#A] Command dispatch and handler invocation
+:PROPERTIES:
+:BEAD_ID:  clime-rhz
+:Created:  [2026-03-05 Thu 16:11]
+:BEAD_BLOCKED_BY: clime-456,clime-xfy
+:END:
+Tree-walking dispatch: parse tokens, descend through groups into leaf commands, invoke handler with parsed params. Command aliases (:aliases list) resolved during dispatch. Automatic condition-case around handler invocation. Exit code mapping: 0=success/help/version, 2=usage error, 1=runtime error. Callback result protocol: non-nil return passed to output formatter, nil means handler managed own output.
+* TODO [#A] Help system
+:PROPERTIES:
+:BEAD_ID:  clime-8fr
+:Created:  [2026-03-05 Thu 16:12]
+:BEAD_BLOCKED_BY: clime-5g6
+:END:
+Auto-generated help at every node (root, group, command). --help and -h work everywhere. --version at root. Help shows: usage line, description, arguments with types/defaults, options clustered by :group label, subcommands list (for groups). Option groups for help display: :group attribute on options clusters them visually in --help output (e.g. 'Section flags').
+* TODO [#B] Output protocol with dual text/JSON mode
+:PROPERTIES:
+:BEAD_ID:  clime-og6
+:Created:  [2026-03-05 Thu 16:12]
+:BEAD_BLOCKED_BY: clime-rhz
+:END:
+Built-in --json root option (opt-in at app definition). Output protocol: clime-output dispatches to text formatter or json-encode based on context. Helpers: clime-output-success, clime-output-error, clime-output-list with consistent JSON envelope ({success: true, data: ...}). JSON encoding discipline: handle nil vs :json-false vs :null, empty lists as [] not null. Pre-parse --json flag so parse errors can emit JSON. clime-json-encode wrapper.
+* TODO [#B] Stdin sentinel support
+:PROPERTIES:
+:BEAD_ID:  clime-ld5
+:Created:  [2026-03-05 Thu 16:12]
+:BEAD_BLOCKED_BY: clime-456
+:END:
+Stdin buffering: read stdin once at startup into a variable, serve it to params that use the - sentinel. When parsing an option/arg that requires a value, if next token is exactly -, read value from buffered stdin. Handle macOS /dev/stdin bug (embead workaround: buffer to temp file in shell wrapper). nargs=1: stdin supplies single value. :rest: stdin appended as one string. Type conversion applied same as CLI string. Tests: heredoc simulation, -- stops sentinel, sentinel not swallowed into wrong param.
+* TODO [#B] Env var provider
+:PROPERTIES:
+:BEAD_ID:  clime-dxy
+:Created:  [2026-03-05 Thu 16:12]
+:BEAD_BLOCKED_BY: clime-456
+:END:
+Extension that supplies default values (as strings) for params when CLI did not specify them. Provider function: (clime-env-get ctx param) -> string | nil. Default implementation reads explicit param.env if set, else derives from app.env-prefix and param.key (e.g. APP_VERBOSE). Precedence: CLI > env-provider > declared default. Apply only if CLI did not provide a value.
+* TODO [#B] Entry point and shell wrapper
+:PROPERTIES:
+:BEAD_ID:  clime-6sq
+:Created:  [2026-03-05 Thu 16:12]
+:BEAD_BLOCKED_BY: clime-rhz,clime-og6
+:END:
+clime-run: standard entry-point function that strips -- separator from command-line-args-left, pre-scans for --json, invokes the app's command tree. Shell wrapper template or generator: bash script that invokes emacs --batch -Q -L DIR -l FILE -f FUNC -- with stdin buffering to temp file. kill-emacs with correct exit code.
