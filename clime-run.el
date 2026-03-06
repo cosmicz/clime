@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'clime-core)
 (require 'clime-parse)
+(require 'clime-help)
 
 ;;; ─── Error Formatter ───────────────────────────────────────────────────
 
@@ -37,19 +38,16 @@ Rebind for JSON error output (see clime-og6).")
    :path (clime-parse-result-path parse-result)
    :params (clime-parse-result-params parse-result)))
 
-;;; ─── Help Stub ─────────────────────────────────────────────────────────
+;;; ─── Help Printing ─────────────────────────────────────────────────────
 
-(defun clime--print-help-stub (data)
-  "Print a minimal help stub from help-requested signal DATA.
-Real help formatting is provided by the help system (clime-8fr)."
+(defun clime--print-help (data)
+  "Print help or version from help-requested signal DATA."
   (let ((node (plist-get data :node))
+        (path (plist-get data :path))
         (version-p (plist-get data :version)))
     (if version-p
-        (princ (format "%s %s\n"
-                       (clime--node-name node)
-                       (clime-app-version node)))
-      (princ (format "Usage: %s\n"
-                     (string-join (plist-get data :path) " "))))))
+        (princ (clime-format-version node))
+      (princ (clime-format-help node path)))))
 
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
@@ -68,7 +66,7 @@ Does NOT call `kill-emacs'; the caller decides what to do with the code."
               (princ retval))))
         0)
     (clime-help-requested
-     (clime--print-help-stub (cdr err))
+     (clime--print-help (cdr err))
      0)
     (clime-usage-error
      (funcall clime-format-error (cadr err))
