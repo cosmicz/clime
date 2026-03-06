@@ -32,6 +32,7 @@ Configure project-specific settings for clean test execution."
 (require 'clime-run-tests)
 (require 'clime-collision-tests)
 (require 'clime-help-tests)
+(require 'clime-output-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────
 

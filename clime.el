@@ -33,6 +33,7 @@
 (require 'clime-parse)
 (require 'clime-dsl)
 (require 'clime-help)
+(require 'clime-output)
 (require 'clime-run)
 
 (provide 'clime)

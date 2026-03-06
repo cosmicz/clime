@@ -15,6 +15,7 @@
 (require 'clime-core)
 (require 'clime-parse)
 (require 'clime-help)
+(require 'clime-output)
 
 ;;; ─── Error Formatter ───────────────────────────────────────────────────
 
@@ -22,7 +23,7 @@
   "Function called to format error messages before output.
 Signature: (FORMAT-FN MESSAGE) where MESSAGE is the error string.
 Default implementation prints plain text to stderr via `message'.
-Rebind for JSON error output (see clime-og6).")
+Rebound to `clime-output-error' in JSON mode.")
 
 (defun clime--format-error-default (msg)
   "Print MSG as a plain-text error to stderr."
@@ -54,29 +55,43 @@ Rebind for JSON error output (see clime-og6).")
 (defun clime-run (app argv)
   "Run APP with ARGV, returning an exit code.
 Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error.
-Does NOT call `kill-emacs'; the caller decides what to do with the code."
-  (condition-case err
-      (let* ((result (clime-parse app argv))
-             (cmd (clime-parse-result-command result))
-             (handler (when cmd (clime-command-handler cmd)))
-             (ctx (clime--build-context app result)))
-        (when handler
-          (let ((retval (funcall handler ctx)))
-            (when retval
-              (princ retval))))
-        0)
-    (clime-help-requested
-     (clime--print-help (cdr err))
-     0)
-    (clime-usage-error
-     (funcall clime-format-error (cadr err))
-     2)
-    (error
-     (if debug-on-error
-         ;; Re-signal so backtrace prints
-         (signal (car err) (cdr err))
-       (funcall clime-format-error (error-message-string err))
-       1))))
+Does NOT call `kill-emacs'; the caller decides what to do with the code.
+
+When APP has :json-mode t and ARGV contains \"--json\", output is
+JSON-encoded.  The --json option is auto-injected into the app."
+  ;; Pre-parse --json before full parse so even parse errors emit JSON
+  (let* ((json-p (and (clime-app-json-mode app)
+                      (clime--pre-parse-json-p argv)))
+         (clime--json-mode-p json-p)
+         (clime-format-error (if json-p
+                                 #'clime-output-error
+                               clime-format-error)))
+    ;; Auto-inject --json option if needed
+    (clime--ensure-json-option app)
+    (condition-case err
+        (let* ((result (clime-parse app argv))
+               (cmd (clime-parse-result-command result))
+               (handler (when cmd (clime-command-handler cmd)))
+               (ctx (clime--build-context app result)))
+          (when handler
+            (let ((retval (funcall handler ctx)))
+              (when retval
+                (if clime--json-mode-p
+                    (clime-output-success retval)
+                  (princ retval)))))
+          0)
+      (clime-help-requested
+       (clime--print-help (cdr err))
+       0)
+      (clime-usage-error
+       (funcall clime-format-error (cadr err))
+       2)
+      (error
+       (if debug-on-error
+           ;; Re-signal so backtrace prints
+           (signal (car err) (cdr err))
+         (funcall clime-format-error (error-message-string err))
+         1)))))
 
 (defun clime-run-batch (app)
   "Run APP in batch mode.
