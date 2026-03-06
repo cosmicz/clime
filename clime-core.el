@@ -136,9 +136,22 @@ True for groups and apps, false for commands."
 (defun clime-make-app (&rest args)
   "Create a `clime-app' with validation.
 Required keyword arg: :name (string).
+When :json-mode is non-nil, a --json boolean option is auto-injected.
 ARGS is a plist of slot values."
   (unless (plist-get args :name)
     (error "clime-make-app: :name is required"))
+  ;; Auto-inject --json option when :json-mode is enabled
+  (when (and (plist-get args :json-mode)
+             (not (cl-some (lambda (opt)
+                             (member "--json" (clime-option-flags opt)))
+                           (plist-get args :options))))
+    (let ((opt (clime-make-option :name 'json
+                                  :flags '("--json")
+                                  :nargs 0
+                                  :help "Output as JSON"
+                                  :group "Output")))
+      (setq args (plist-put args :options
+                            (append (plist-get args :options) (list opt))))))
   (apply #'clime-app--create args))
 
 ;;; ─── Context ────────────────────────────────────────────────────────────

@@ -25,8 +25,8 @@
 (cl-defstruct (clime-parse-result (:constructor clime-parse-result--create)
                                   (:copier nil))
   "Result of parsing an argv against a command tree."
-  (command nil :documentation "The resolved leaf `clime-command', or nil for groups.")
-  (node nil :documentation "The terminal node (command, group, or app) where parsing ended.")
+  (command nil :documentation "The resolved leaf `clime-command', or nil when parsing ends on a group.")
+  (node nil :documentation "The terminal node where parsing ended.  Always set.  Same as command when command is non-nil.")
   (path nil :type list :documentation "List of node names from root to command.")
   (params nil :type list :documentation "Plist of (param-name value) for all scopes."))
 
@@ -195,7 +195,10 @@ Signal `clime-help-requested' for --help/-h/--version."
     ;; Set parent refs for direct children (if not already set)
     (clime--set-parent-refs app)
     (while (< i len)
-      (let ((token (nth i argv)))
+      (let* ((token (nth i argv))
+             (child (and (clime-group-only-p current-node)
+                         (clime--required-args-satisfied-p current-node params)
+                         (clime-group-find-child current-node token))))
         (cond
          ;; 1. End of options
          ((string= token "--")
@@ -262,15 +265,12 @@ Signal `clime-help-requested' for --help/-h/--version."
                       (cl-incf i)))))))
 
          ;; 4. Try group descent
-         ((and (clime-group-only-p current-node)
-               (clime--required-args-satisfied-p current-node params)
-               (clime-group-find-child current-node token))
-          (let ((child (clime-group-find-child current-node token)))
-            (setq current-node child)
-            (setq path (append path (list (clime-node-name child))))
-            (push child visited-nodes)
-            (setq arg-index 0)
-            (cl-incf i)))
+         (child
+          (setq current-node child)
+          (setq path (append path (list (clime-node-name child))))
+          (push child visited-nodes)
+          (setq arg-index 0)
+          (cl-incf i))
 
          ;; 5. Positional arg
          (t

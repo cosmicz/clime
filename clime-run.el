@@ -66,8 +66,6 @@ JSON-encoded.  The --json option is auto-injected into the app."
          (clime-format-error (if json-p
                                  #'clime-output-error
                                clime-format-error)))
-    ;; Auto-inject --json option if needed
-    (clime--ensure-json-option app)
     (condition-case err
         (let* ((result (clime-parse app argv))
                (node (clime-parse-result-node result))

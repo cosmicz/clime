@@ -70,27 +70,25 @@
 
 ;;; ─── Auto-inject --json Option ──────────────────────────────────────
 
-(ert-deftest clime-test-output/ensure-json-option-adds ()
-  "Auto-inject adds --json option when :json-mode t."
+(ert-deftest clime-test-output/json-option-injected-at-construction ()
+  "Constructor auto-injects --json option when :json-mode t."
   (let ((app (clime-make-app :name "t" :version "1" :json-mode t)))
-    (clime--ensure-json-option app)
     (should (clime-node-find-option app "--json"))))
 
-(ert-deftest clime-test-output/ensure-json-option-idempotent ()
-  "Auto-inject is idempotent — does not duplicate."
-  (let ((app (clime-make-app :name "t" :version "1" :json-mode t)))
-    (clime--ensure-json-option app)
-    (clime--ensure-json-option app)
+(ert-deftest clime-test-output/json-option-not-duplicated ()
+  "Constructor does not duplicate --json when user already defined it."
+  (let* ((user-opt (clime-make-option :name 'json :flags '("--json") :nargs 0))
+         (app (clime-make-app :name "t" :version "1" :json-mode t
+                              :options (list user-opt))))
     (let ((count (cl-count-if
                   (lambda (opt)
                     (member "--json" (clime-option-flags opt)))
-                  (clime-group-options app))))
+                  (clime-node-options app))))
       (should (= count 1)))))
 
-(ert-deftest clime-test-output/ensure-json-option-skips-no-json-mode ()
-  "Auto-inject does nothing when :json-mode is nil."
+(ert-deftest clime-test-output/json-option-skipped-no-json-mode ()
+  "Constructor does not inject --json when :json-mode is nil."
   (let ((app (clime-make-app :name "t" :version "1")))
-    (clime--ensure-json-option app)
     (should-not (clime-node-find-option app "--json"))))
 
 ;;; ─── Output Helpers (Text Mode) ─────────────────────────────────────

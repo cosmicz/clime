@@ -43,19 +43,6 @@ conventions (nil→null, vectors→arrays, :json-false→false)."
   "Return non-nil if ARGV contains \"--json\"."
   (member "--json" argv))
 
-(defun clime--ensure-json-option (app)
-  "Add a --json boolean option to APP if :json-mode and not already present.
-Modifies APP in place.  Idempotent."
-  (when (and (clime-app-json-mode app)
-             (not (clime-node-find-option app "--json")))
-    (let ((opt (clime-make-option :name 'json
-                                  :flags '("--json")
-                                  :nargs 0
-                                  :help "Output as JSON"
-                                  :group "Output")))
-      (setf (clime-group-options app)
-            (append (clime-group-options app) (list opt))))))
-
 ;;; ─── Output Helpers ───────────────────────────────────────────────────
 
 (defun clime-output (data)
