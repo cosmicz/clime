@@ -240,6 +240,18 @@
                                   :options (list opt))))
     (should (eq (clime-node-find-option cmd "-v") opt))))
 
+(ert-deftest clime-test-node-find-option/on-group ()
+  "Find option on a group node."
+  (let* ((opt (clime-make-option :name 'json :flags '("--json") :nargs 0))
+         (grp (clime-make-group :name "dep" :options (list opt))))
+    (should (eq (clime-node-find-option grp "--json") opt))))
+
+(ert-deftest clime-test-node-find-option/on-app ()
+  "Find option on an app node."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")))
+         (app (clime-make-app :name "x" :version "1" :options (list opt))))
+    (should (eq (clime-node-find-option app "--verbose") opt))))
+
 (ert-deftest clime-test-node-find-option/not-found ()
   "Return nil for unknown flag."
   (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")))
@@ -263,6 +275,14 @@
          (grp (clime-make-group :name "x"
                                 :children (list (cons "show" cmd)))))
     (should (eq (clime-group-find-child grp "get") cmd))))
+
+(ert-deftest clime-test-group-find-child/nested-group ()
+  "Find a group child (not just command child)."
+  (let* ((inner (clime-make-group :name "profile" :aliases '("prof")))
+         (outer (clime-make-group :name "config"
+                                  :children (list (cons "profile" inner)))))
+    (should (eq (clime-group-find-child outer "profile") inner))
+    (should (eq (clime-group-find-child outer "prof") inner))))
 
 (ert-deftest clime-test-group-find-child/not-found ()
   "Return nil for unknown child."

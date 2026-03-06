@@ -158,13 +158,163 @@ Replaced skeleton with 5 cl-defstruct types (option, arg, command, group, app). 
 
 
 
-* TODO [#A] DSL macros
+* RESOLVE [#A] DSL macros
 :PROPERTIES:
 :BEAD_ID:  clime-xfy
 :Created:  [2026-03-05 Thu 16:11]
 :BEAD_BLOCKED_BY: clime-5g6
+:BEAD_UPDATED_AT: [2026-03-05 Thu 17:31]
+:BEAD_ASSIGNED: claude-max
 :END:
 Implement clime-app, clime-group, clime-command, clime-option, clime-arg macros that build the command tree declaratively. Macros expand into tree construction calls. clime-option FLAGS list declares both long and short aliases. Boolean flags inferred from :count t or :type boolean or nargs=0. :multiple t marks repeatable options. Groups with subcommands restrict positional args to fixed-count required only.
+** Design
+*** File: clime-dsl.el (new file)
+
+Declarative macros that expand into clime-core constructor calls,
+building a command tree. The DSL is the primary authoring interface.
+
+*** Target usage example
+
+,#+begin_src elisp
+(clime-app myapp
+  :version "1.0.0"
+  :env-prefix "MYAPP"
+
+  (clime-option verbose ("-v" "--verbose") :count t :help "Increase verbosity")
+  (clime-option json ("--json") :nargs 0 :help "Output JSON")
+
+  (clime-command show
+    :aliases ("get")
+    :help "Show a resource"
+    (clime-arg id :help "Resource ID")
+    (clime-option format ("-f" "--format") :default "text" :help "Output format")
+    (clime-handler (ctx)
+      (let ((id (clime-ctx-get ctx 'id)))
+        (message "Showing %s" id))))
+
+  (clime-group dep
+    :help "Dependency management"
+
+    (clime-command add
+      :help "Add a dependency"
+      (clime-arg id :help "Dependency ID")
+      (clime-option blocking ("--blocking") :nargs 0 :help "Mark as blocking")
+      (clime-handler (ctx)
+        (message "Adding dep %s" (clime-ctx-get ctx 'id))))
+
+    (clime-command remove
+      :aliases ("rm")
+      :help "Remove a dependency"
+      (clime-arg id :help "Dependency ID")
+      (clime-handler (ctx)
+        (message "Removing dep %s" (clime-ctx-get ctx 'id))))))
+,#+end_src
+
+Result: `myapp` is bound to a `clime-app` struct ready for `clime-parse`.
+
+*** Macro design
+
+**** clime-app (name &rest body)
+- NAME is an unquoted symbol, becomes the variable name AND the app name string
+- BODY is a mix of keyword args and child forms
+- Keyword args: :version, :env-prefix, :help, :json-mode
+- Child forms: clime-option, clime-arg, clime-command, clime-group
+- Expands to: (defvar NAME (clime-make-app ...)) with children wired up
+
+**** clime-command (name &rest body)
+- NAME: unquoted symbol → string name
+- Keyword args: :help, :aliases, :hidden
+- Child forms: clime-option, clime-arg, clime-handler
+- clime-handler is (clime-handler (ctx) BODY...) → lambda
+
+**** clime-group (name &rest body)
+- Like clime-command but with child clime-command/clime-group forms
+- Keyword args: :help, :aliases, :hidden
+- Optional clime-handler for group invocation without subcommand
+
+**** clime-option (name flags &rest plist)
+- NAME: unquoted symbol
+- FLAGS: literal list of strings (NOT quoted — macro quotes it)
+- Rest is a plist: :type, :help, :required, :default, :nargs, :env,
+  :count, :multiple, :group, :hidden
+
+**** clime-arg (name &rest plist)
+- NAME: unquoted symbol
+- Rest is a plist: :type, :help, :required, :default, :nargs
+
+**** clime-handler (args &rest body)
+- Only valid inside clime-command or clime-group
+- ARGS is a lambda-list (typically (ctx))
+- Expands to a lambda
+
+*** Implementation approach
+- Each macro is a defmacro that returns a quoted form (constructor call)
+- clime-app is the top-level; it walks its body, separating keywords from
+  child forms, and generates the full tree in one expansion
+- Actually simpler: make clime-option/clime-arg/clime-handler just return
+  quoted data (not real macros), and have clime-app/clime-command/clime-group
+  process them as DSL forms. This avoids evaluation order issues.
+- So clime-option etc. are NOT standalone macros — they're recognized
+  syntax inside clime-app/clime-command/clime-group body parsing.
+- Implementation: a single recursive body-parser function that walks forms.
+
+*** Key design choices
+- clime-handler wraps body in a lambda at compile time — no runtime cost
+- Names are symbols in source, converted to strings for the tree
+- The variable binding (defvar) means the app is available at load time
+- Parent refs are set by clime--set-parent-refs (already exists in parse.el)
+** Acceptance Criteria
+- [ ] clime-app macro defines a variable bound to a clime-app struct
+- [ ] clime-command macro creates clime-command structs with handler
+- [ ] clime-group macro creates clime-group structs with children
+- [ ] clime-option syntax creates clime-option structs with all keyword args
+- [ ] clime-arg syntax creates clime-arg structs with all keyword args
+- [ ] clime-handler syntax wraps body in a lambda
+- [ ] Names are unquoted symbols, converted to strings
+- [ ] Flags are unquoted lists of strings
+- [ ] Nested groups work (group inside group)
+- [ ] Keyword args (:help, :aliases, :version, etc.) extracted correctly
+- [ ] Mixed options, args, commands, groups in any order within a body
+- [ ] App produced by macro works with clime-parse (integration test)
+- [ ] New file clime-dsl.el, required by clime.el
+- [ ] ERT tests cover macro expansion and integration with parser
+** Plan
+1. Create clime-dsl.el with:
+   - (require 'clime-core)
+   - Internal body parser: clime--parse-body
+     - Takes a list of forms, returns (options args children handler keywords)
+     - Recognizes (clime-option ...), (clime-arg ...), (clime-command ...),
+       (clime-group ...), (clime-handler ...) forms
+     - Collects keyword args (:help, :aliases, :hidden, etc.)
+   - clime--build-option: expand (clime-option name flags &rest plist) → constructor call
+   - clime--build-arg: expand (clime-arg name &rest plist) → constructor call
+   - clime--build-command: expand (clime-command name &rest body) → constructor call
+   - clime--build-group: expand (clime-group name &rest body) → constructor call
+   - clime-app macro: top-level, expands to (defvar name (clime-make-app ...))
+
+2. Update clime.el to (require 'clime-dsl)
+
+3. Run tests, fix issues
+** Notes
+*** [2026-03-05 Thu 17:31]
+:PROPERTIES:
+:BEAD_ACTOR: claude-42
+:END:
+Reassigned from claude-42 to claude-max (post-review)
+*** [2026-03-05 Thu 17:24]
+:PROPERTIES:
+:BEAD_ACTOR: claude-max
+:END:
+Design update: handler receives a clime-context struct (not raw plist). Struct wraps params plist + metadata (app, command, path). clime-ctx-get is the param accessor. Need to add struct to clime-core.el.
+*** [2026-03-05 Thu 17:22]
+:PROPERTIES:
+:BEAD_ACTOR: claude-42
+:END:
+Reassigned from claude-42 to claude-max (post-review)
+
+
+
+
 * TODO [#A] Definition-time collision checks
 :PROPERTIES:
 :BEAD_ID:  clime-qx9
@@ -172,16 +322,13 @@ Implement clime-app, clime-group, clime-command, clime-option, clime-arg macros 
 :BEAD_BLOCKED_BY: clime-xfy
 :END:
 Ancestor flag collision detection at macro expansion or tree registration time. For every node N: intersection of local-flags with all ancestor-flags must be empty. Error lists colliding flag(s), node path, and ancestor where first defined. Sibling collisions allowed.
-* REFINE [#A] Single-pass arg parser
+* DONE [#A] Single-pass arg parser
+CLOSED: [2026-03-05 Thu 17:04]
 :PROPERTIES:
 :BEAD_ID:  clime-456
 :Created:  [2026-03-05 Thu 16:11]
 :BEAD_BLOCKED_BY: clime-5g6
-:BEAD_UPDATED_AT: [2026-03-05 Thu 16:50]
-:BEAD_BRANCH_ORIGIN: PLAN
-:BEAD_BRANCH_AGENT: claude-max
-:BEAD_BRANCH_PREV: PLAN
-:BEAD_BRANCH_NEXT: IMPL
+:BEAD_UPDATED_AT: [2026-03-05 Thu 17:04]
 :BEAD_ASSIGNED: claude-max
 :END:
 Deterministic single-pass parser implementing the scope parse loop from the design doc. Features: long options (--name value, --name=value), short options (-n value), short bundles (-abc for booleans), boolean flag inference (no value consumed), short-to-long alias resolution, :multiple option collection, positional arg validation with nargs enforcement, :rest/:nargs + for multi-value positionals, -- ends all option parsing, root global options resolved from any position before --. Group positional ambiguity policy enforced.
@@ -308,6 +455,16 @@ usage errors (exit 2) from runtime errors (exit 1).
 2. Update clime.el to (require 'clime-parse)
 
 3. Run tests, fix issues
+** Notes
+*** [2026-03-05 Thu 17:03]
+:PROPERTIES:
+:BEAD_ACTOR: claude-42
+:END:
+Reassigned from claude-42 to claude-max (post-review)
+** Resolution
+New clime-parse.el with single-pass parser: long/short options, short bundles, boolean/count flags, :multiple collection, positional args with :rest, -- end-of-options, root globals, group descent by name/alias, defaults, required validation, --help/--version interception. 33 parse tests. Unblocks DSL macros, stdin sentinel, env var provider, and (with DSL) dispatch.
+
+
 
 
 

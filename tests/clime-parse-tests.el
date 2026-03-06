@@ -341,5 +341,73 @@
     (should-error (clime-parse app '("--version"))
                   :type 'clime-help-requested)))
 
+;;; ─── Additional Error Cases ──────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/missing-required-option ()
+  "Missing required option signals usage error."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                 :required t))
+         (cmd (clime-make-command :name "deploy" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "deploy" cmd)))))
+    (should-error (clime-parse app '("deploy"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/short-bundle-non-boolean-error ()
+  "Short bundle with non-boolean flag signals usage error."
+  (let* ((opt-v (clime-make-option :name 'verbose :flags '("-v") :count t))
+         (opt-f (clime-make-option :name 'format :flags '("-f")))  ;; value option
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :args (list (clime-make-arg :name 'id))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :options (list opt-v opt-f)
+                              :children (list (cons "show" cmd)))))
+    ;; -vf is not a valid bundle since -f is not boolean
+    (should-error (clime-parse app '("-vf" "show" "123"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/equals-on-boolean-error ()
+  "--flag=value on boolean option signals usage error."
+  (let* ((opt (clime-make-option :name 'json :flags '("--json") :nargs 0))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :args (list (clime-make-arg :name 'id))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :options (list opt)
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("--json=true" "show" "123"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/group-missing-subcommand ()
+  "Group without subcommand signals usage error."
+  (let ((app (clime-test--group-app)))
+    (should-error (clime-parse app '("dep"))
+                  :type 'clime-usage-error)))
+
+;;; ─── Multiple Fixed Positional Args ─────────────────────────────────────
+
+(ert-deftest clime-test-parse/two-positional-args ()
+  "Command with two fixed positional args."
+  (let* ((arg1 (clime-make-arg :name 'src))
+         (arg2 (clime-make-arg :name 'dst))
+         (cmd (clime-make-command :name "copy" :handler #'ignore
+                                  :args (list arg1 arg2)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "copy" cmd))))
+         (result (clime-parse app '("copy" "a.txt" "b.txt"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'src) "a.txt"))
+    (should (equal (plist-get (clime-parse-result-params result) 'dst) "b.txt"))))
+
+(ert-deftest clime-test-parse/two-args-missing-second ()
+  "Missing second required positional arg signals error."
+  (let* ((arg1 (clime-make-arg :name 'src))
+         (arg2 (clime-make-arg :name 'dst))
+         (cmd (clime-make-command :name "copy" :handler #'ignore
+                                  :args (list arg1 arg2)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "copy" cmd)))))
+    (should-error (clime-parse app '("copy" "a.txt"))
+                  :type 'clime-usage-error)))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here
