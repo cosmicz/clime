@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; exec emacs --batch -Q -L "$(dirname "$0")/.." -l "$0" -- "$@" # -*-emacs-lisp-*-
+":"; exec emacs --batch -Q -L "$(dirname "$0")/.." -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; pkm.el --- Example clime app: a mock package manager  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
@@ -43,9 +43,8 @@
 ;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- --help
 ;;
 ;; The shebang uses a relative -L path since this file lives inside
-;; the clime repo.  For external apps, use `bin/clime-init' which
-;; generates an absolute path.  See DEVELOPMENT.org "Shebang and
-;; shell wrappers" for details.
+;; the clime repo.  For external apps, use `clime-app.el init' which
+;; generates an absolute path.  See DEVELOPMENT.org for details.
 
 ;;; Code:
 

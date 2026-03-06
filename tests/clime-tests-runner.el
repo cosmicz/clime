@@ -35,6 +35,7 @@ Configure project-specific settings for clean test execution."
 (require 'clime-output-tests)
 (require 'clime-env-tests)
 (require 'clime-stdin-tests)
+(require 'clime-integration-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────
 

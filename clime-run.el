@@ -95,17 +95,31 @@ JSON-encoded.  The --json option is auto-injected into the app."
          (funcall clime-format-error (error-message-string err))
          1)))))
 
+(defun clime-main-script-p (app-name)
+  "Return non-nil if APP-NAME is the main entry point.
+This is the Emacs equivalent of Python's `if __name__ == \"__main__\"'.
+The polyglot shebang sets CLIME_MAIN_APP=<name> before invoking
+Emacs; this function checks that environment variable against
+APP-NAME (a symbol).  When a file is loaded transitively via
+`require', the env var is absent or names a different app."
+  (and noninteractive
+       (string= (or (getenv "CLIME_MAIN_APP") "")
+                (symbol-name app-name))))
+
 (defun clime-run-batch (app)
   "Run APP in batch mode.
 Read argv from `command-line-args-left', strip leading \"--\",
 call `clime-run', then `kill-emacs' with the exit code."
-  (let ((argv command-line-args-left))
+  ;; Copy args before clearing.  Use `args' not `argv' — the latter
+  ;; is a defvaralias for `command-line-args-left' and would be
+  ;; clobbered by the setq below under dynamic binding.
+  (let ((args command-line-args-left))
     ;; Strip leading "--" inserted by the shell wrapper
-    (when (and argv (string= (car argv) "--"))
-      (setq argv (cdr argv)))
+    (when (and args (string= (car args) "--"))
+      (setq args (cdr args)))
     ;; Prevent Emacs from processing these args itself
     (setq command-line-args-left nil)
-    (kill-emacs (clime-run app argv))))
+    (kill-emacs (clime-run app args))))
 
 (provide 'clime-run)
 ;;; clime-run.el ends here

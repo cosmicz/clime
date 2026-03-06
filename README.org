@@ -32,7 +32,7 @@ git submodule add https://github.com/cosmicz/clime vendor/clime
 Then initialize your app file:
 
 #+begin_src bash
-vendor/clime/bin/clime-init myapp.el
+vendor/clime/clime-app.el init myapp.el
 #+end_src
 
 This adds a polyglot shebang header so your =.el= file is directly
@@ -72,7 +72,7 @@ cask install
 
 #+begin_src emacs-lisp
 #!/bin/sh
-":"; exec emacs --batch -Q -L /path/to/clime -l "$0" -- "$@" # -*-emacs-lisp-*-
+":"; exec emacs --batch -Q -L /path/to/clime -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; greet.el --- A greeting CLI  -*- lexical-binding: t; -*-
 
 (require 'clime)
@@ -105,10 +105,10 @@ cask install
 ;;; greet.el ends here
 #+end_src
 
-Or use ~clime-init~ to set up the shebang automatically:
+Or use ~clime-app.el~ to set up the shebang automatically:
 
 #+begin_src bash
-path/to/clime/bin/clime-init greet.el
+path/to/clime/clime-app.el init greet.el
 #+end_src
 
 ** 2. Make it executable and run
