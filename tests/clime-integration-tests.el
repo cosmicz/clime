@@ -62,7 +62,8 @@ process environment."
          (result (clime-test--run-script dist '("--help"))))
     (should (= 0 (car result)))
     (should (string-match-p "clime COMMAND" (cdr result)))
-    (should (string-match-p "init" (cdr result)))))
+    (should (string-match-p "init" (cdr result)))
+    (should (string-match-p "bundle" (cdr result)))))
 
 ;;; ─── Dist as Library ────────────────────────────────────────────────────
 
@@ -158,7 +159,19 @@ process environment."
     (should (= 2 (car result)))
     (should (string-match-p "does not exist" (cdr result)))))
 
-;;; ─── Dist Command ───────────────────────────────────────────────────────
+(ert-deftest clime-test-integration/init-rejects-unsafe-env ()
+  "clime-app.el init rejects env values with shell metacharacters."
+  (clime-test-with-temp-dir
+    (let* ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      (let ((result (clime-test--run-script
+                     clime-app
+                     (list "init" "--env" "FOO=$(rm -rf /)" app-file))))
+        (should (= 2 (car result)))
+        (should (string-match-p "invalid --env" (cdr result)))))))
+
+;;; ─── Bundle Command ─────────────────────────────────────────────────────
 
 (defun clime-test--write-module (file-path feature code)
   "Write a minimal Elisp module to FILE-PATH.
@@ -172,8 +185,8 @@ FEATURE is the provide symbol, CODE is the body between markers."
             (format ";;; %s ends here\n"
                     (file-name-nondirectory file-path)))))
 
-(ert-deftest clime-test-integration/dist-basic-bundle ()
-  "clime dist bundles multiple source files into one."
+(ert-deftest clime-test-integration/bundle-basic ()
+  "clime bundle concatenates multiple source files into one."
   (clime-test-with-temp-dir
     (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
@@ -185,8 +198,7 @@ FEATURE is the provide symbol, CODE is the body between markers."
       ;; Bundle them
       (let ((result (clime-test--run-script
                      clime-app
-                     (list "dist" "-o" out "--provide" "mybundle"
-                           "--no-shebang"
+                     (list "bundle" "-o" out "--provide" "mybundle"
                            (expand-file-name "core.el")
                            (expand-file-name "main.el")))))
         (should (= 0 (car result))))
@@ -199,16 +211,15 @@ FEATURE is the provide symbol, CODE is the body between markers."
           ;; Contains extracted code from both files
           (should (string-match-p "mycore-greet" content))
           (should (string-match-p "mymain-run" content))
-          ;; Has provide
+          ;; Has bundle-level provide
           (should (string-match-p "(provide 'mybundle)" content))
-          ;; Does NOT contain original provide lines
-          (should-not (string-match-p "(provide 'mycore)" content))
-          (should-not (string-match-p "(provide 'mymain)" content))
-          ;; No shebang
+          ;; Module provides are kept (required for require chains)
+          (should (string-match-p "(provide 'mycore)" content))
+          ;; No shebang (bundle never adds shebang)
           (should-not (string-prefix-p "#!" content)))))))
 
-(ert-deftest clime-test-integration/dist-strips-run-batch ()
-  "clime dist strips (clime-run-batch ...) from extracted code."
+(ert-deftest clime-test-integration/bundle-strips-run-batch ()
+  "clime bundle strips (clime-run-batch ...) from extracted code."
   (clime-test-with-temp-dir
     (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
@@ -216,7 +227,7 @@ FEATURE is the provide symbol, CODE is the body between markers."
                                 "(defvar myapp nil)\n(clime-run-batch myapp)")
       (let ((result (clime-test--run-script
                      clime-app
-                     (list "dist" "-o" out "--no-shebang"
+                     (list "bundle" "-o" out
                            (expand-file-name "app.el")))))
         (should (= 0 (car result))))
       (with-temp-buffer
@@ -224,67 +235,50 @@ FEATURE is the provide symbol, CODE is the body between markers."
         (should (string-match-p "defvar myapp" (buffer-string)))
         (should-not (string-match-p "clime-run-batch" (buffer-string)))))))
 
-(ert-deftest clime-test-integration/dist-main-guard ()
-  "clime dist --main adds guarded entry point and CLIME_MAIN_APP env."
+(ert-deftest clime-test-integration/bundle-main-guard ()
+  "clime bundle --main adds guarded entry point."
   (clime-test-with-temp-dir
     (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
       (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
       (let ((result (clime-test--run-script
                      clime-app
-                     (list "dist" "-o" out "--main" "myapp"
+                     (list "bundle" "-o" out "--main" "myapp"
                            (expand-file-name "app.el")))))
         (should (= 0 (car result))))
       (with-temp-buffer
         (insert-file-contents out)
         (let ((content (buffer-string)))
-          ;; Has shebang with CLIME_MAIN_APP
-          (should (string-match-p "CLIME_MAIN_APP=myapp" content))
           ;; Has guarded entry point
           (should (string-match-p "clime-main-script-p 'myapp" content))
-          (should (string-match-p "clime-run-batch myapp" content)))))))
+          (should (string-match-p "clime-run-batch myapp" content))
+          ;; No shebang (that's init's job)
+          (should-not (string-prefix-p "#!" content)))))))
 
-(ert-deftest clime-test-integration/dist-with-shebang ()
-  "clime dist adds a shebang and makes the file executable by default."
-  (clime-test-with-temp-dir
-    (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
-          (out (expand-file-name "bundle.el")))
-      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
-      (let ((result (clime-test--run-script
-                     clime-app
-                     (list "dist" "-o" out
-                           (expand-file-name "app.el")))))
-        (should (= 0 (car result))))
-      (with-temp-buffer
-        (insert-file-contents out)
-        (should (string-prefix-p "#!/bin/sh" (buffer-string))))
-      ;; File should be executable
-      (should (file-executable-p out)))))
-
-(ert-deftest clime-test-integration/dist-provide-defaults-to-filename ()
-  "clime dist defaults --provide to the output filename sans extension."
+(ert-deftest clime-test-integration/bundle-provide-defaults-to-filename ()
+  "clime bundle defaults --provide to the output filename sans extension."
   (clime-test-with-temp-dir
     (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
           (out (expand-file-name "mything.el")))
       (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
       (let ((result (clime-test--run-script
                      clime-app
-                     (list "dist" "-o" out "--no-shebang"
+                     (list "bundle" "-o" out
                            (expand-file-name "app.el")))))
         (should (= 0 (car result))))
       (with-temp-buffer
         (insert-file-contents out)
         (should (string-match-p "(provide 'mything)" (buffer-string)))))))
 
-(ert-deftest clime-test-integration/dist-description ()
-  "clime dist --description sets the file header line."
+(ert-deftest clime-test-integration/bundle-description ()
+  "clime bundle --description sets the file header line."
   (clime-test-with-temp-dir
     (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
       (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
       (let ((result (clime-test--run-script
                      clime-app
-                     (list "dist" "-o" out "--no-shebang"
+                     (list "bundle" "-o" out
                            "--description" "My awesome tool"
                            (expand-file-name "app.el")))))
         (should (= 0 (car result))))
@@ -292,15 +286,55 @@ FEATURE is the provide symbol, CODE is the body between markers."
         (insert-file-contents out)
         (should (string-match-p "My awesome tool" (buffer-string)))))))
 
-(ert-deftest clime-test-integration/dist-rejects-missing-source ()
-  "clime dist errors when a source file doesn't exist."
+(ert-deftest clime-test-integration/bundle-rejects-unsafe-main ()
+  "clime bundle --main rejects values that aren't valid symbol names."
+  (clime-test-with-temp-dir
+    (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+          (out (expand-file-name "bundle.el")))
+      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
+      (let ((result (clime-test--run-script
+                     clime-app
+                     (list "bundle" "-o" out "--main" "foo bar"
+                           (expand-file-name "app.el")))))
+        (should (= 2 (car result)))
+        (should (string-match-p "invalid --main" (cdr result)))))))
+
+(ert-deftest clime-test-integration/bundle-rejects-missing-source ()
+  "clime bundle errors when a source file doesn't exist."
   (let* ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
          (result (clime-test--run-script
                   clime-app
-                  (list "dist" "-o" "/tmp/out.el"
+                  (list "bundle" "-o" "/tmp/out.el"
                         "/tmp/nonexistent.el"))))
     (should (= 2 (car result)))
     (should (string-match-p "does not exist" (cdr result)))))
+
+(ert-deftest clime-test-integration/bundle-rejects-missing-markers ()
+  "clime bundle errors when a source file lacks ;;; Code: markers."
+  (clime-test-with-temp-dir
+    (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+          (out (expand-file-name "bundle.el"))
+          (bad-file (expand-file-name "bad.el")))
+      (with-temp-file bad-file
+        (insert "(defvar bad nil)\n"))
+      (let ((result (clime-test--run-script
+                     clime-app
+                     (list "bundle" "-o" out bad-file))))
+        (should (= 2 (car result)))
+        (should (string-match-p "missing.*Code:" (cdr result)))))))
+
+(ert-deftest clime-test-integration/bundle-creates-output-dir ()
+  "clime bundle creates the output directory if it doesn't exist."
+  (clime-test-with-temp-dir
+    (let ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+          (out (expand-file-name "sub/dir/bundle.el")))
+      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
+      (let ((result (clime-test--run-script
+                     clime-app
+                     (list "bundle" "-o" out
+                           (expand-file-name "app.el")))))
+        (should (= 0 (car result))))
+      (should (file-exists-p out)))))
 
 ;;; ─── Example App ────────────────────────────────────────────────────────
 
