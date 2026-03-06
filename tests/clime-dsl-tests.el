@@ -359,5 +359,72 @@
     (should-not (clime-ctx-get ctx 'missing))
     (should (equal (clime-context-path ctx) '("myapp" "show")))))
 
+;;; ─── :flag Shorthand ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/flag-shorthand ()
+  ":flag t in DSL produces a boolean option (nargs=0)."
+  (eval '(clime-app clime-test--dsl-flag
+           :version "1"
+           (clime-command test
+             :help "Test"
+             (clime-option force ("--force") :flag t)
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (assoc "test" (clime-group-children clime-test--dsl-flag))))
+         (opt (car (clime-command-options cmd))))
+    (should (clime-option-boolean-p opt))
+    (should (eql (clime-option-nargs opt) 0))))
+
+;;; ─── Symbol Aliases ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/symbol-aliases ()
+  "Symbol aliases in DSL are converted to strings."
+  (eval '(clime-app clime-test--dsl-sym-alias
+           :version "1"
+           (clime-command install
+             :help "Install"
+             :aliases (i ins)
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (assoc "install" (clime-group-children clime-test--dsl-sym-alias)))))
+    (should (equal (clime-command-aliases cmd) '("i" "ins")))))
+
+(ert-deftest clime-test-dsl/mixed-aliases ()
+  "Mixed string and symbol aliases both work."
+  (eval '(clime-app clime-test--dsl-mix-alias
+           :version "1"
+           (clime-command list
+             :help "List"
+             :aliases ("ls" l)
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (assoc "list" (clime-group-children clime-test--dsl-mix-alias)))))
+    (should (equal (clime-command-aliases cmd) '("ls" "l")))))
+
+;;; ─── clime-let ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/clime-let-simple ()
+  "clime-let binds params by name."
+  (let ((ctx (clime-context--create
+              :params '(id "123" format "json"))))
+    (clime-let ctx (id format)
+      (should (equal id "123"))
+      (should (equal format "json")))))
+
+(ert-deftest clime-test-dsl/clime-let-rename ()
+  "clime-let (var param) binds param under a different name."
+  (let ((ctx (clime-context--create
+              :params '(tag ("a" "b") verbose 2))))
+    (clime-let ctx ((tags tag) (v verbose))
+      (should (equal tags '("a" "b")))
+      (should (= v 2)))))
+
+(ert-deftest clime-test-dsl/clime-let-missing ()
+  "clime-let with missing param binds nil."
+  (let ((ctx (clime-context--create :params '(id "123"))))
+    (clime-let ctx (id missing)
+      (should (equal id "123"))
+      (should-not missing))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

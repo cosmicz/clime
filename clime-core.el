@@ -149,6 +149,24 @@ ARGS is a plist of slot values."
   "Get the value of param NAME from context CTX."
   (plist-get (clime-context-params ctx) name))
 
+(defmacro clime-let (ctx bindings &rest body)
+  "Destructure context CTX into BINDINGS and evaluate BODY.
+Each element of BINDINGS is either:
+  SYMBOL          — binds SYMBOL to (clime-ctx-get CTX \\='SYMBOL)
+  (VAR PARAM)     — binds VAR to (clime-ctx-get CTX \\='PARAM)
+
+Example:
+  (clime-let ctx (package force (tags tag))
+    (message \"%s %s %s\" package force tags))"
+  (declare (indent 2))
+  (let ((ctx-sym (if (symbolp ctx) ctx (gensym "ctx"))))
+    `(let ,(mapcar (lambda (binding)
+                     (if (consp binding)
+                         `(,(car binding) (clime-ctx-get ,ctx-sym ',(cadr binding)))
+                       `(,binding (clime-ctx-get ,ctx-sym ',binding))))
+                   bindings)
+       ,@body)))
+
 ;;; ─── Predicates ─────────────────────────────────────────────────────────
 
 (defun clime-node-p (obj)

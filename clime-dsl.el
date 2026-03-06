@@ -65,10 +65,15 @@ Returns a plist (:options :args :children :handler)."
 
 (defun clime--build-option (args)
   "Build a `clime-option' constructor form from DSL ARGS.
-ARGS is (NAME FLAGS &rest PLIST)."
+ARGS is (NAME FLAGS &rest PLIST).
+Supports :flag t as shorthand for :nargs 0 (boolean flag)."
   (let* ((name (car args))
          (flags (cadr args))
          (plist (cddr args)))
+    ;; :flag t → :nargs 0 (DSL-only shorthand, not a real slot)
+    (when (plist-get plist :flag)
+      (setq plist (plist-put (cl-copy-list plist) :nargs 0))
+      (cl-remf plist :flag))
     `(clime-make-option :name ',name :flags ',flags ,@plist)))
 
 (defun clime--build-arg (args)
@@ -84,6 +89,10 @@ ARGS is (ARGLIST &rest BODY)."
   (let ((arglist (car args))
         (body (cdr args)))
     `(lambda ,arglist ,@body)))
+
+(defun clime--normalize-aliases (aliases)
+  "Convert ALIASES list to strings.  Symbols become their name."
+  (mapcar (lambda (a) (if (stringp a) a (symbol-name a))) aliases))
 
 (defun clime--build-command (args)
   "Build a `clime-command' constructor form from DSL ARGS.
@@ -106,7 +115,7 @@ ARGS is (NAME &rest BODY)."
             ,@(when (plist-get keywords :help)
                 `(:help ,(plist-get keywords :help)))
             ,@(when (plist-get keywords :aliases)
-                `(:aliases ',(plist-get keywords :aliases)))
+                `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
             ,@(when (plist-get keywords :hidden)
                 `(:hidden ,(plist-get keywords :hidden)))
             ,@(when (plist-get classified :options)
@@ -131,7 +140,7 @@ ARGS is (NAME &rest BODY)."
             ,@(when (plist-get keywords :help)
                 `(:help ,(plist-get keywords :help)))
             ,@(when (plist-get keywords :aliases)
-                `(:aliases ',(plist-get keywords :aliases)))
+                `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
             ,@(when (plist-get keywords :hidden)
                 `(:hidden ,(plist-get keywords :hidden)))
             ,@(when (plist-get classified :options)
