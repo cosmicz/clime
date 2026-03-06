@@ -11,7 +11,6 @@
 ;;
 ;; JSON encoding conventions:
 ;;   nil     → JSON null
-;;   :null   → JSON null
 ;;   :json-false → JSON false
 ;;   vectors → JSON arrays (use [] for empty array, NOT nil)
 ;;   plists/alists → JSON objects

@@ -511,5 +511,116 @@
     (should (= (plist-get (clime-parse-result-params result) 'verbose) 1))
     (should (equal (plist-get (clime-parse-result-params result) 'id) "ID1"))))
 
+;;; ─── Type Conversion ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/type-integer-option ()
+  "Option with :type 'integer converts string to integer."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count" "-c")
+                                 :type 'integer))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--count" "42"))))
+    (should (= (plist-get (clime-parse-result-params result) 'count) 42))))
+
+(ert-deftest clime-test-parse/type-integer-negative ()
+  "Negative integer is parsed correctly."
+  (let* ((opt (clime-make-option :name 'offset :flags '("--offset")
+                                 :type 'integer))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--offset" "-5"))))
+    (should (= (plist-get (clime-parse-result-params result) 'offset) -5))))
+
+(ert-deftest clime-test-parse/type-integer-invalid ()
+  "Non-integer value for :type 'integer signals usage error."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count")
+                                 :type 'integer))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--count" "abc"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/type-integer-float-rejected ()
+  "Float value for :type 'integer signals usage error."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count")
+                                 :type 'integer))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--count" "3.14"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/type-number-float ()
+  "Option with :type 'number accepts float values."
+  (let* ((opt (clime-make-option :name 'rate :flags '("--rate")
+                                 :type 'number))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--rate" "3.14"))))
+    (should (= (plist-get (clime-parse-result-params result) 'rate) 3.14))))
+
+(ert-deftest clime-test-parse/type-number-invalid ()
+  "Non-numeric value for :type 'number signals usage error."
+  (let* ((opt (clime-make-option :name 'rate :flags '("--rate")
+                                 :type 'number))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--rate" "abc"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/type-integer-arg ()
+  "Positional arg with :type 'integer converts string to integer."
+  (let* ((arg (clime-make-arg :name 'port :type 'integer))
+         (cmd (clime-make-command :name "serve" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "serve" cmd))))
+         (result (clime-parse app '("serve" "8080"))))
+    (should (= (plist-get (clime-parse-result-params result) 'port) 8080))))
+
+(ert-deftest clime-test-parse/type-multiple-integer ()
+  "Multiple option with :type 'integer coerces each value."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port" "-p")
+                                 :type 'integer :multiple t))
+         (cmd (clime-make-command :name "serve" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "serve" cmd))))
+         (result (clime-parse app '("serve" "-p" "80" "-p" "443"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'port)
+                   '(80 443)))))
+
+(ert-deftest clime-test-parse/type-string-default ()
+  "Default :type 'string leaves values as strings."
+  (let* ((opt (clime-make-option :name 'name :flags '("--name")))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--name" "42"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name) "42"))))
+
+(ert-deftest clime-test-parse/type-integer-equals ()
+  "Integer type works with --flag=value syntax."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count")
+                                 :type 'integer))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--count=10"))))
+    (should (= (plist-get (clime-parse-result-params result) 'count) 10))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

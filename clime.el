@@ -1,4 +1,4 @@
-;;; clime.el --- TODO: describe your package  -*- lexical-binding: t; -*-
+;;; clime.el --- Declarative CLI framework for Emacs Lisp  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 

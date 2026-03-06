@@ -28,8 +28,7 @@
   (command nil :documentation "The resolved leaf `clime-command', or nil for groups.")
   (node nil :documentation "The terminal node (command, group, or app) where parsing ended.")
   (path nil :type list :documentation "List of node names from root to command.")
-  (params nil :type list :documentation "Plist of (param-name value) for all scopes.")
-  (rest nil :type list :documentation "Leftover tokens consumed by a :rest arg."))
+  (params nil :type list :documentation "Plist of (param-name value) for all scopes."))
 
 ;;; ─── Internal Helpers ───────────────────────────────────────────────────
 
@@ -80,10 +79,34 @@ or nil if TOKEN is not a valid bundle."
       (when all-boolean
         (nreverse flags)))))
 
+(defun clime--coerce-value (value type flag-or-name)
+  "Coerce string VALUE to TYPE, signaling `clime-usage-error' on failure.
+FLAG-OR-NAME is used in error messages."
+  (pcase type
+    ((or 'string 'nil) value)
+    ('integer
+     (let ((n (string-to-number value)))
+       (unless (and (integerp n)
+                    (string-match-p "\\`-?[0-9]+\\'" value))
+         (signal 'clime-usage-error
+                 (list (format "Expected integer for %s, got \"%s\""
+                               flag-or-name value))))
+       n))
+    ('number
+     (let ((n (string-to-number value)))
+       (when (and (= n 0) (not (string-match-p "\\`-?0+\\.?0*\\'" value)))
+         (signal 'clime-usage-error
+                 (list (format "Expected number for %s, got \"%s\""
+                               flag-or-name value))))
+       n))
+    (_ (signal 'clime-usage-error
+               (list (format "Unknown type %s for %s" type flag-or-name))))))
+
 (defun clime--consume-option (opt params token-value)
   "Consume option OPT into PARAMS plist, returning updated plist.
 TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
-  (let ((name (clime-option-name opt)))
+  (let ((name (clime-option-name opt))
+        (type (clime-option-type opt)))
     (cond
      ;; Count option: increment
      ((clime-option-count opt)
@@ -94,11 +117,13 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
       (plist-put params name t))
      ;; Multiple: append to list
      ((clime-option-multiple opt)
-      (let ((current (plist-get params name)))
-        (plist-put params name (append current (list token-value)))))
+      (let* ((coerced (clime--coerce-value token-value type (car (clime-option-flags opt))))
+             (current (plist-get params name)))
+        (plist-put params name (append current (list coerced)))))
      ;; Normal value option
      (t
-      (plist-put params name token-value)))))
+      (plist-put params name
+                 (clime--coerce-value token-value type (car (clime-option-flags opt))))))))
 
 (defun clime--required-args-satisfied-p (node params)
   "Return non-nil if all required positional args of NODE have values in PARAMS."
@@ -266,7 +291,10 @@ Signal `clime-help-requested' for --help/-h/--version."
                         (setq params (plist-put params (clime-arg-name arg-spec)
                                                (nreverse rest-values))))
                     ;; Normal positional
-                    (setq params (plist-put params (clime-arg-name arg-spec) token))
+                    (let ((coerced (clime--coerce-value
+                                    token (clime-arg-type arg-spec)
+                                    (format "<%s>" (clime-arg-name arg-spec)))))
+                      (setq params (plist-put params (clime-arg-name arg-spec) coerced)))
                     (cl-incf arg-index)
                     (cl-incf i)))
               ;; No more arg specs
