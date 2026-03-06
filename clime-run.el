@@ -70,8 +70,10 @@ JSON-encoded.  The --json option is auto-injected into the app."
     (clime--ensure-json-option app)
     (condition-case err
         (let* ((result (clime-parse app argv))
-               (cmd (clime-parse-result-command result))
-               (handler (when cmd (clime-command-handler cmd)))
+               (node (clime-parse-result-node result))
+               (handler (cond
+                         ((clime-command-p node) (clime-command-handler node))
+                         ((clime-group-p node) (clime-group-handler node))))
                (ctx (clime--build-context app result)))
           (when handler
             (let ((retval (funcall handler ctx)))

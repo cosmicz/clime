@@ -25,7 +25,8 @@
 (cl-defstruct (clime-parse-result (:constructor clime-parse-result--create)
                                   (:copier nil))
   "Result of parsing an argv against a command tree."
-  (command nil :documentation "The resolved leaf `clime-command'.")
+  (command nil :documentation "The resolved leaf `clime-command', or nil for groups.")
+  (node nil :documentation "The terminal node (command, group, or app) where parsing ended.")
   (path nil :type list :documentation "List of node names from root to command.")
   (params nil :type list :documentation "Plist of (param-name value) for all scopes.")
   (rest nil :type list :documentation "Leftover tokens consumed by a :rest arg."))
@@ -298,7 +299,7 @@ Signal `clime-help-requested' for --help/-h/--version."
                (not (clime-command-p current-node))
                (not (clime-app-p current-node))
                (clime-group-children current-node)
-               (not (clime-group-invoke current-node)))
+               (not (clime-group-handler current-node)))
       (signal 'clime-usage-error
               (list (format "Missing subcommand for %s"
                             (string-join path " ")))))
@@ -306,7 +307,7 @@ Signal `clime-help-requested' for --help/-h/--version."
     ;; If we're still at root with children and no subcommand was given
     (when (and (clime-app-p current-node)
                (clime-group-children current-node)
-               (not (clime-group-invoke current-node))
+               (not (clime-group-handler current-node))
                (= (length path) 1))
       (signal 'clime-help-requested
               (list :node current-node :path path)))
@@ -318,6 +319,7 @@ Signal `clime-help-requested' for --help/-h/--version."
     ;; Build result
     (clime-parse-result--create
      :command (if (clime-command-p current-node) current-node nil)
+     :node current-node
      :path path
      :params params)))
 

@@ -277,7 +277,7 @@
 ;;; ─── Group With Invoke Handler ──────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/group-invoke ()
-  "Group with clime-handler sets invoke slot."
+  "Group with clime-handler sets handler slot."
   (eval '(clime-app clime-test--dsl-grp-invoke
            :version "1"
            (clime-group status
@@ -288,7 +288,7 @@
                (clime-handler (ctx) nil))))
         t)
   (let ((grp (cdr (assoc "status" (clime-group-children clime-test--dsl-grp-invoke)))))
-    (should (functionp (clime-group-invoke grp)))))
+    (should (functionp (clime-group-handler grp)))))
 
 ;;; ─── Group With Options and Args ────────────────────────────────────────
 

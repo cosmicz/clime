@@ -107,7 +107,7 @@ ARGS is a plist of slot values."
   (parent nil :documentation "Parent node ref, or nil for root.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
   (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups.")
-  (invoke nil :type (or function null) :documentation "Optional handler when group invoked without subcommand."))
+  (handler nil :type (or function null) :documentation "Optional handler when group is invoked without a subcommand."))
 
 (defun clime-make-group (&rest args)
   "Create a `clime-group' with validation.

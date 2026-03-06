@@ -409,5 +409,107 @@
     (should-error (clime-parse app '("copy" "a.txt"))
                   :type 'clime-usage-error)))
 
+;;; ─── Optional Positional Args ───────────────────────────────────────
+
+(ert-deftest clime-test-parse/optional-arg-omitted ()
+  "Optional arg not provided results in nil param, no error."
+  (let* ((arg (clime-make-arg :name 'note :required nil))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :args (list (clime-make-arg :name 'id)
+                                              arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "123"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "123"))
+    (should-not (plist-member (clime-parse-result-params result) 'note))))
+
+(ert-deftest clime-test-parse/optional-arg-with-default ()
+  "Optional arg with default gets default applied when omitted."
+  (let* ((arg (clime-make-arg :name 'format :required nil :default "text"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :args (list (clime-make-arg :name 'id)
+                                              arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "123"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'format) "text"))))
+
+;;; ─── Version Scope ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/version-at-command-not-triggered ()
+  "--version at command level does NOT trigger version display."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :args (list (clime-make-arg :name 'id))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    ;; --version after command should be treated as unknown option
+    (should-error (clime-parse app '("show" "--version"))
+                  :type 'clime-usage-error)))
+
+;;; ─── Group Invoke ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/group-invoke-no-subcommand ()
+  "Group with :handler handler and no subcommand succeeds."
+  (let* ((cmd (clime-make-command :name "detail" :handler #'ignore))
+         (grp (clime-make-group :name "status"
+                                :handler (lambda (_ctx) "overview")
+                                :children (list (cons "detail" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "status" grp))))
+         (result (clime-parse app '("status"))))
+    ;; Should not error — group has invoke handler
+    (should (clime-parse-result-p result))
+    ;; Command should be nil (we ended on a group, not a leaf command)
+    (should-not (clime-parse-result-command result))))
+
+;;; ─── Rest Args + Double Dash ───────────────────────────────────────
+
+(ert-deftest clime-test-parse/rest-args-with-double-dash ()
+  "-- inside :rest arg collection stops option parsing for remaining tokens."
+  (let* ((arg (clime-make-arg :name 'args :nargs :rest :required nil))
+         (opt (clime-make-option :name 'verbose :flags '("-v") :count t))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :args (list arg)
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "run" cmd))))
+         (result (clime-parse app '("run" "a" "--" "-v" "b"))))
+    ;; -- is consumed (disables option parsing), -v after it is positional
+    (should (equal (plist-get (clime-parse-result-params result) 'args)
+                   '("a" "-v" "b")))
+    ;; verbose should NOT be incremented since -v came after --
+    (should-not (plist-get (clime-parse-result-params result) 'verbose))))
+
+;;; ─── Group Scope Closure ───────────────────────────────────────────
+
+(ert-deftest clime-test-parse/group-option-rejected-after-descent ()
+  "Group-scoped option is rejected after descending into child command."
+  (let* ((grp-opt (clime-make-option :name 'scope :flags '("--scope")))
+         (cmd (clime-make-command :name "list" :handler #'ignore))
+         (grp (clime-make-group :name "config"
+                                :options (list grp-opt)
+                                :children (list (cons "list" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "config" grp)))))
+    ;; --scope after descending into "list" should be unknown
+    (should-error (clime-parse app '("config" "list" "--scope" "local"))
+                  :type 'clime-usage-error)))
+
+;;; ─── Root Global After Deep Descent ────────────────────────────────
+
+(ert-deftest clime-test-parse/root-global-after-group-command ()
+  "Root global option works after group + command + positional."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("-v") :count t))
+         (cmd (clime-make-command :name "add" :handler #'ignore
+                                  :args (list (clime-make-arg :name 'id))))
+         (grp (clime-make-group :name "dep"
+                                :children (list (cons "add" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list root-opt)
+                              :children (list (cons "dep" grp))))
+         (result (clime-parse app '("dep" "add" "ID1" "-v"))))
+    (should (= (plist-get (clime-parse-result-params result) 'verbose) 1))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "ID1"))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

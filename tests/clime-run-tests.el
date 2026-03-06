@@ -219,5 +219,55 @@
     (let ((code (clime-run clime-test--run-app '("echo"))))
       (should (= code 2)))))
 
+;;; ─── Group Invoke Dispatch ───────────────────────────────────────────
+
+(ert-deftest clime-test-run/group-invoke-dispatch ()
+  "Group with :handler handler dispatches through clime-run."
+  (let* ((cmd (clime-make-command :name "detail" :handler
+                                  (lambda (_ctx) "detailed")))
+         (grp (clime-make-group :name "status"
+                                :handler (lambda (_ctx) "overview")
+                                :children (list (cons "detail" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "status" grp)))))
+    (clime-test-with-run-output
+      (let ((code (clime-run app '("status"))))
+        (should (= code 0))
+        (should (equal clime-test--run-output "overview"))))))
+
+(ert-deftest clime-test-run/group-invoke-subcommand-still-works ()
+  "Group with :handler still dispatches to subcommand when given."
+  (let* ((cmd (clime-make-command :name "detail" :handler
+                                  (lambda (_ctx) "detailed")))
+         (grp (clime-make-group :name "status"
+                                :handler (lambda (_ctx) "overview")
+                                :children (list (cons "detail" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "status" grp)))))
+    (clime-test-with-run-output
+      (let ((code (clime-run app '("status" "detail"))))
+        (should (= code 0))
+        (should (equal clime-test--run-output "detailed"))))))
+
+;;; ─── Run Batch ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-run/run-batch-strips-leading-dash-dash ()
+  "clime-run-batch strips leading \"--\" from command-line-args-left."
+  (let* ((exit-code nil)
+         (cmd (clime-make-command :name "echo"
+                                  :handler (lambda (ctx) (clime-ctx-get ctx 'msg))
+                                  :args (list (clime-make-arg :name 'msg))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "echo" cmd))))
+         (command-line-args-left '("--" "echo" "hi")))
+    (cl-letf (((symbol-function 'kill-emacs)
+               (lambda (code) (setq exit-code code))))
+      (clime-test-with-run-output
+        (clime-run-batch app)
+        (should (= exit-code 0))
+        (should (equal clime-test--run-output "hi"))
+        ;; command-line-args-left should be cleared
+        (should (null command-line-args-left))))))
+
 (provide 'clime-run-tests)
 ;;; clime-run-tests.el ends here

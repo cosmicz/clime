@@ -41,6 +41,10 @@
   "Empty vector encodes as empty JSON array."
   (should (equal (clime-json-encode []) "[]")))
 
+(ert-deftest clime-test-output/json-encode-null-keyword ()
+  ":null encodes as JSON string \"null\" (not JSON null — use nil for that)."
+  (should (equal (clime-json-encode :null) "\"null\"")))
+
 (ert-deftest clime-test-output/json-encode-json-false ()
   ":json-false encodes as JSON false."
   (should (equal (clime-json-encode :json-false) "false")))

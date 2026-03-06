@@ -221,5 +221,39 @@
     (should (string-match-p "Usage: t show" output))
     (should (string-match-p "Show things" output))))
 
+;;; ─── Group With Invoke + Children ────────────────────────────────────
+
+(ert-deftest clime-test-help/group-with-invoke-shows-commands ()
+  "Group with both :handler and children shows Commands section in help."
+  (let* ((cmd (clime-make-command :name "detail" :handler #'ignore
+                                  :help "Show details"))
+         (grp (clime-make-group :name "status"
+                                :help "Status overview"
+                                :handler (lambda (_ctx) nil)
+                                :children (list (cons "detail" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "status" grp))))
+         (help (clime-format-help grp '("t" "status"))))
+    (should (string-match-p "Commands:" help))
+    (should (string-match-p "detail" help))
+    (should (string-match-p "Show details" help))))
+
+;;; ─── Multiple Arguments ─────────────────────────────────────────────
+
+(ert-deftest clime-test-help/multiple-args ()
+  "Command with multiple args shows all in Arguments section."
+  (let* ((cmd (clime-make-command :name "copy" :handler #'ignore
+                                  :help "Copy files"
+                                  :args (list (clime-make-arg :name 'src
+                                                              :help "Source file")
+                                              (clime-make-arg :name 'dst
+                                                              :help "Destination"))))
+         (help (clime-format-help cmd '("app" "copy"))))
+    (should (string-match-p "Arguments:" help))
+    (should (string-match-p "<src>" help))
+    (should (string-match-p "Source file" help))
+    (should (string-match-p "<dst>" help))
+    (should (string-match-p "Destination" help))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

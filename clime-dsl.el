@@ -141,7 +141,7 @@ ARGS is (NAME &rest BODY)."
             ,@(when (plist-get classified :children)
                 `(:children (list ,@(plist-get classified :children))))
             ,@(when (plist-get classified :handler)
-                `(:invoke ,(plist-get classified :handler)))))))
+                `(:handler ,(plist-get classified :handler)))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
 
@@ -188,7 +188,7 @@ Child forms:
         ,@(when (plist-get classified :children)
             `(:children (list ,@(plist-get classified :children))))
         ,@(when (plist-get classified :handler)
-            `(:invoke ,(plist-get classified :handler)))))))
+            `(:handler ,(plist-get classified :handler)))))))
 
 (provide 'clime-dsl)
 ;;; clime-dsl.el ends here
