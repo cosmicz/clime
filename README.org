@@ -15,7 +15,7 @@ subcommands, options, flags, and help generation --- all from a single
 - Stdin reading via ~-~ sentinel
 - JSON output mode
 - Type coercion (string, integer, number)
-- Single-file vendorable distribution
+- Single-file vendorable distribution via ~bundle~ command
 
 * Installation
 
@@ -35,8 +35,7 @@ Then initialize your app file:
 vendor/clime/clime-app.el init myapp.el
 #+end_src
 
-This adds a polyglot shebang header so your =.el= file is directly
-executable.
+This adds a polyglot shebang header and makes the file executable.
 
 ** Vendoring (single file)
 
@@ -51,29 +50,16 @@ cp dist/clime.el /path/to/myapp/
 Your app just needs ~(require 'clime)~ and ~-L~ pointing to the
 directory containing the bundled file.
 
-** Cask
-
-Add to your =Cask= file:
-
-#+begin_src emacs-lisp
-(depends-on "clime")
-#+end_src
-
-For local development before clime is on MELPA:
-
-#+begin_src bash
-cask link clime /path/to/clime
-cask install
-#+end_src
-
 * Getting Started
 
-** 1. Create your app file
+** Create your app file
+
+Write a standard Emacs Lisp file with the clime DSL:
 
 #+begin_src emacs-lisp
-#!/bin/sh
-":"; exec emacs --batch -Q -L /path/to/clime -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; greet.el --- A greeting CLI  -*- lexical-binding: t; -*-
+
+;;; Code:
 
 (require 'clime)
 
@@ -105,23 +91,22 @@ cask install
 ;;; greet.el ends here
 #+end_src
 
-Or use ~clime-app.el~ to set up the shebang automatically:
+Then initialize it with a shebang:
 
 #+begin_src bash
-path/to/clime/clime-app.el init greet.el
+path/to/clime-app.el init greet.el
 #+end_src
 
-** 2. Make it executable and run
+** Run it
 
 #+begin_src bash
-chmod +x greet.el
 ./greet.el hello world        # => Hello, world!
 ./greet.el --shout hello world # => HELLO, WORLD!
 ./greet.el --help
 ./greet.el hello --help
 #+end_src
 
-** 3. Add more features
+** Add more features
 
 *Environment variables* --- set ~:env-prefix~ on the app to auto-derive
 env var names from options:
@@ -161,6 +146,30 @@ Now ~--shout~ can also be set via ~GREET_SHOUT=1~.
 echo "World" | ./greet.el hello -
 #+end_src
 
+* Bundling & Distribution
+
+The ~clime-app.el~ tool provides two commands for distribution:
+
+*~bundle~* --- concatenate multiple source files into a single =.el=:
+
+#+begin_src bash
+./clime-app.el bundle -o dist/myapp.el \
+    --provide myapp --main myapp \
+    src/myapp-core.el src/myapp-commands.el src/myapp.el
+#+end_src
+
+The ~--main APP~ flag adds a guarded entry point so the bundle works
+as both a library (~require 'myapp~) and a CLI.
+
+*~init~* --- add a shebang to make any =.el= file executable:
+
+#+begin_src bash
+./clime-app.el init --env CLIME_MAIN_APP=myapp dist/myapp.el
+#+end_src
+
+For dual-use bundles, pass ~--env CLIME_MAIN_APP=<app>~ so the
+guarded entry point activates only when executed directly.
+
 * Project Structure
 
 A recommended layout for clime-based apps:
@@ -169,9 +178,7 @@ A recommended layout for clime-based apps:
 myapp/
   myapp.el              # main app with shebang
   myapp-commands.el     # optional: split commands into modules
-  Cask                  # optional: (depends-on "clime")
-  bin/
-    myapp               # optional: bash wrapper for PATH/symlinks
+  Makefile              # optional: bundle + init targets
   tests/
     myapp-tests.el
 #+end_example
