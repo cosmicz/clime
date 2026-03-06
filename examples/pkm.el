@@ -2,8 +2,9 @@
 ":"; exec emacs --batch -Q -L "$(dirname "$0")/.." -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; pkm.el --- Example clime app: a mock package manager  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2026 Cosmin Octavian
 
+;; SPDX-License-Identifier: MIT
 ;; This file is not part of GNU Emacs.
 
 ;;; Commentary:

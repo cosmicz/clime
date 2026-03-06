@@ -1,9 +1,10 @@
 ;;; clime-dsl.el --- Declarative DSL for building CLI apps  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2026 Cosmin Octavian
 
-;; Author: Octavian <cosmicz@protonmail.com>
+;; Author: Cosmin Octavian <cosmicz@protonmail.com>
 
+;; SPDX-License-Identifier: MIT
 ;; This file is not part of GNU Emacs.
 
 ;;; Commentary:

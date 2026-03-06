@@ -2,10 +2,11 @@
 ":"; exec emacs --batch -Q -L "$(dirname "$0")" -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-app.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2026 Cosmin Octavian
 
-;; Author: Octavian <cosmicz@protonmail.com>
+;; Author: Cosmin Octavian <cosmicz@protonmail.com>
 
+;; SPDX-License-Identifier: MIT
 ;; This file is not part of GNU Emacs.
 
 ;;; Commentary:

@@ -1,8 +1,8 @@
 ;;; clime.el --- Declarative CLI framework for Emacs Lisp  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2026 Cosmin Octavian
 
-;; Author: Octavian <cosmicz@protonmail.com>
+;; Author: Cosmin Octavian <cosmicz@protonmail.com>
 ;; URL: https://github.com/cosmicz/clime
 ;; Keywords: tools, processes
 ;; Package-Requires: ((emacs "29.1"))

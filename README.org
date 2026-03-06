@@ -37,6 +37,12 @@ vendor/clime/clime-app.el init myapp.el
 
 This adds a polyglot shebang header and makes the file executable.
 
+** package-vc (Emacs 29+)
+
+#+begin_src emacs-lisp
+(package-vc-install "https://github.com/cosmicz/clime")
+#+end_src
+
 ** Vendoring (single file)
 
 Build a single-file bundle and copy it into your project:
@@ -182,6 +188,20 @@ myapp/
   tests/
     myapp-tests.el
 #+end_example
+
+* DSL Reference
+
+| Macro            | Purpose                            | Key arguments                                          |
+|------------------+------------------------------------+--------------------------------------------------------|
+| ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~                     |
+| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~                         |
+| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~                         |
+| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:required~, ~:type~   |
+| ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:default~, ~:help~                 |
+| ~clime-handler~  | Attach a handler to a command      | ~(ctx)~ — receives the parse context                   |
+| ~clime-let~      | Destructure context in a handler   | ~ctx (var1 var2 ...)~ — binds option/arg values        |
+
+See =examples/pkm.el= for a comprehensive demo covering all major features.
 
 * Development
 
