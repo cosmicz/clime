@@ -324,14 +324,20 @@ Signal `clime-help-requested' for --help/-h/--version."
 ;;; ─── Parent Ref Setup ───────────────────────────────────────────────────
 
 (defun clime--set-parent-refs (node)
-  "Recursively set parent refs for children of NODE."
+  "Recursively set parent refs for children of NODE.
+Also runs ancestor collision checks after parent refs are established."
+  (clime--set-parent-refs-1 node)
+  (clime-check-ancestor-collisions node))
+
+(defun clime--set-parent-refs-1 (node)
+  "Set parent refs for children of NODE (internal recursive helper)."
   (when (clime-group-p node)
     (dolist (entry (clime-group-children node))
       (let ((child (cdr entry)))
         (if (clime-command-p child)
             (setf (clime-command-parent child) node)
           (setf (clime-group-parent child) node))
-        (clime--set-parent-refs child)))))
+        (clime--set-parent-refs-1 child)))))
 
 (provide 'clime-parse)
 ;;; clime-parse.el ends here

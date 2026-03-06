@@ -201,5 +201,34 @@ Walk the parent chain, collecting each ancestor's option flags into a flat list.
                      (clime-group-parent parent))))
     flags))
 
+;;; ─── Collision Checks ──────────────────────────────────────────────────
+
+(defun clime-check-ancestor-collisions (node &optional ancestor-flag-owners path)
+  "Check NODE's option flags for collisions with ancestor flags.
+ANCESTOR-FLAG-OWNERS is an alist of (flag . ancestor-name) accumulated
+from parent scopes.  PATH is a list of node name strings for error messages.
+Signals `error' if a local flag collides with an ancestor flag.
+Sibling collisions are allowed."
+  (let* ((name (clime--node-name node))
+         (path (append (or path '()) (list name)))
+         (local-options (clime--node-options node))
+         (local-flags (cl-mapcan (lambda (opt)
+                                   (copy-sequence (clime-option-flags opt)))
+                                 local-options)))
+    ;; Check each local flag against ancestors
+    (dolist (flag local-flags)
+      (let ((collision (assoc flag ancestor-flag-owners)))
+        (when collision
+          (error "Flag collision: %s in %s collides with ancestor %s"
+                 flag (string-join path " ") (cdr collision)))))
+    ;; Build merged flag owners for children
+    (let ((merged (append (mapcar (lambda (f) (cons f name)) local-flags)
+                          ancestor-flag-owners)))
+      ;; Recurse into children if group
+      (when (and (clime-group-p node)
+                 (not (clime-command-p node)))
+        (dolist (entry (clime-group-children node))
+          (clime-check-ancestor-collisions (cdr entry) merged path))))))
+
 (provide 'clime-core)
 ;;; clime-core.el ends here
