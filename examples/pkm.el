@@ -1,3 +1,5 @@
+#!/bin/sh
+":"; exec emacs --batch -Q -L "$(dirname "$0")/.." -l "$0" -- "$@" # -*-emacs-lisp-*-
 ;;; pkm.el --- Example clime app: a mock package manager  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
@@ -29,12 +31,21 @@
 ;;  15.  Hidden command          debug
 ;;  16.  Context destructuring   clime-let macro in handlers
 ;;
-;; Run it:
+;; Run it (this file is directly executable via the shebang header):
+;;   chmod +x examples/pkm.el
+;;   ./examples/pkm.el --help
+;;   ./examples/pkm.el install foo --tag dev
+;;   ./examples/pkm.el -vv search
+;;   ./examples/pkm.el config
+;;   ./examples/pkm.el repo add myrepo https://example.com
+;;
+;; Or without the shebang:
 ;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- --help
-;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- install foo --tag dev
-;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- -vv search
-;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- config
-;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- repo add myrepo https://example.com
+;;
+;; The shebang uses a relative -L path since this file lives inside
+;; the clime repo.  For external apps, use `bin/clime-init' which
+;; generates an absolute path.  See DEVELOPMENT.org "Shebang and
+;; shell wrappers" for details and a production bash wrapper template.
 
 ;;; Code:
 
