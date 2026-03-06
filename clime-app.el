@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; exec emacs --batch -Q -L "$(dirname "$0")" -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-app.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -110,7 +110,7 @@ bundled modules continue to work."
 
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
-(clime-app clime
+(clime-app clime-app
            :version "0.1.0"
            :help "clime — declarative CLI framework for Emacs Lisp."
 
@@ -213,7 +213,7 @@ bundled modules continue to work."
                                                         (write-region nil nil out))
                                                       (format "Wrote %s" out))))))
 
-(clime-run-batch clime)
+(clime-run-batch clime-app)
 
 (provide 'clime-app)
 ;;; clime-app.el ends here
