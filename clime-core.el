@@ -70,19 +70,26 @@ ARGS is a plist of slot values."
     (error "clime-make-arg: :name is required"))
   (apply #'clime-arg--create args))
 
-;;; ─── Command ────────────────────────────────────────────────────────────
+;;; ─── Node (base) ────────────────────────────────────────────────────────
 
-(cl-defstruct (clime-command (:constructor clime-command--create)
-                             (:copier nil))
-  "A leaf command in the CLI tree."
-  (name nil :type string :documentation "Command name as typed by user.")
-  (aliases nil :type list :documentation "Alternative names for this command.")
+(cl-defstruct (clime-node (:constructor nil)
+                          (:copier nil))
+  "Abstract base for CLI tree nodes (commands, groups, apps)."
+  (name nil :type string :documentation "Node name as typed by user.")
+  (aliases nil :type list :documentation "Alternative names for this node.")
   (help nil :type (or string null) :documentation "One-line description.")
   (options nil :type list :documentation "List of `clime-option' structs.")
   (args nil :type list :documentation "Ordered list of `clime-arg' structs.")
   (parent nil :documentation "Parent node ref, or nil for root.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
   (handler nil :type (or function null) :documentation "Handler function, called with context."))
+
+;;; ─── Command ────────────────────────────────────────────────────────────
+
+(cl-defstruct (clime-command (:include clime-node)
+                             (:constructor clime-command--create)
+                             (:copier nil))
+  "A leaf command in the CLI tree.")
 
 (defun clime-make-command (&rest args)
   "Create a `clime-command' with validation.
@@ -96,18 +103,11 @@ ARGS is a plist of slot values."
 
 ;;; ─── Group ──────────────────────────────────────────────────────────────
 
-(cl-defstruct (clime-group (:constructor clime-group--create)
+(cl-defstruct (clime-group (:include clime-node)
+                           (:constructor clime-group--create)
                            (:copier nil))
   "A branch node (subcommand group) in the CLI tree."
-  (name nil :type string :documentation "Group name as typed by user.")
-  (aliases nil :type list :documentation "Alternative names for this group.")
-  (help nil :type (or string null) :documentation "One-line description.")
-  (options nil :type list :documentation "List of `clime-option' structs.")
-  (args nil :type list :documentation "Ordered list of `clime-arg' structs.")
-  (parent nil :documentation "Parent node ref, or nil for root.")
-  (hidden nil :type boolean :documentation "If non-nil, omit from help.")
-  (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups.")
-  (handler nil :type (or function null) :documentation "Optional handler when group is invoked without a subcommand."))
+  (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups."))
 
 (defun clime-make-group (&rest args)
   "Create a `clime-group' with validation.
@@ -116,6 +116,12 @@ ARGS is a plist of slot values."
   (unless (plist-get args :name)
     (error "clime-make-group: :name is required"))
   (apply #'clime-group--create args))
+
+(defun clime-group-only-p (node)
+  "Return non-nil if NODE is a group but not a command.
+True for groups and apps, false for commands."
+  (and (clime-group-p node)
+       (not (clime-command-p node))))
 
 ;;; ─── App ────────────────────────────────────────────────────────────────
 
@@ -167,56 +173,35 @@ Example:
                    bindings)
        ,@body)))
 
-;;; ─── Predicates ─────────────────────────────────────────────────────────
-
-(defun clime-node-p (obj)
-  "Return non-nil if OBJ is a command, group, or app node."
-  (or (clime-command-p obj)
-      (clime-group-p obj)))
-
 ;;; ─── Tree Queries ───────────────────────────────────────────────────────
 
 (defun clime-node-find-option (node flag)
   "Find the `clime-option' in NODE whose flags contain FLAG string.
 Return the option struct, or nil if not found."
-  (let ((options (if (clime-command-p node)
-                     (clime-command-options node)
-                   (clime-group-options node))))
-    (cl-find-if (lambda (opt)
-                  (member flag (clime-option-flags opt)))
-                options)))
+  (cl-find-if (lambda (opt)
+                (member flag (clime-option-flags opt)))
+              (clime-node-options node)))
 
 (defun clime-group-find-child (group name)
   "Find a child node in GROUP by NAME or alias.
 Return the child node, or nil if not found."
   (let ((children (clime-group-children group)))
     (or (cdr (assoc name children))
-        ;; Scan aliases
         (cl-some (lambda (entry)
                    (let ((child (cdr entry)))
-                     (when (member name
-                                   (if (clime-command-p child)
-                                       (clime-command-aliases child)
-                                     (clime-group-aliases child)))
+                     (when (member name (clime-node-aliases child))
                        child)))
                  children))))
 
 (defun clime-node-all-ancestor-flags (node)
   "Collect all option flags from ancestors of NODE.
 Walk the parent chain, collecting each ancestor's option flags into a flat list."
-  (let ((parent (if (clime-command-p node)
-                    (clime-command-parent node)
-                  (clime-group-parent node)))
+  (let ((parent (clime-node-parent node))
         (flags '()))
     (while parent
-      (let ((options (if (clime-command-p parent)
-                         (clime-command-options parent)
-                       (clime-group-options parent))))
-        (dolist (opt options)
-          (setq flags (append (clime-option-flags opt) flags))))
-      (setq parent (if (clime-command-p parent)
-                       (clime-command-parent parent)
-                     (clime-group-parent parent))))
+      (dolist (opt (clime-node-options parent))
+        (setq flags (append (clime-option-flags opt) flags)))
+      (setq parent (clime-node-parent parent)))
     flags))
 
 ;;; ─── Collision Checks ──────────────────────────────────────────────────
@@ -227,12 +212,11 @@ ANCESTOR-FLAG-OWNERS is an alist of (flag . ancestor-name) accumulated
 from parent scopes.  PATH is a list of node name strings for error messages.
 Signals `error' if a local flag collides with an ancestor flag.
 Sibling collisions are allowed."
-  (let* ((name (clime--node-name node))
+  (let* ((name (clime-node-name node))
          (path (append (or path '()) (list name)))
-         (local-options (clime--node-options node))
          (local-flags (cl-mapcan (lambda (opt)
                                    (copy-sequence (clime-option-flags opt)))
-                                 local-options)))
+                                 (clime-node-options node))))
     ;; Check each local flag against ancestors
     (dolist (flag local-flags)
       (let ((collision (assoc flag ancestor-flag-owners)))
@@ -242,9 +226,7 @@ Sibling collisions are allowed."
     ;; Build merged flag owners for children
     (let ((merged (append (mapcar (lambda (f) (cons f name)) local-flags)
                           ancestor-flag-owners)))
-      ;; Recurse into children if group
-      (when (and (clime-group-p node)
-                 (not (clime-command-p node)))
+      (when (clime-group-only-p node)
         (dolist (entry (clime-group-children node))
           (clime-check-ancestor-collisions (cdr entry) merged path))))))
 

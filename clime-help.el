@@ -47,11 +47,10 @@ to the widest entry plus `clime-help--min-gap'."
 (defun clime-help--format-usage (node path)
   "Build the usage line for NODE at PATH."
   (let* ((path-str (string-join path " "))
-         (has-options (not (null (clime--node-options node))))
-         (has-children (and (clime-group-p node)
-                            (not (clime-command-p node))
+         (has-options (not (null (clime-node-options node))))
+         (has-children (and (clime-group-only-p node)
                             (clime-group-children node)))
-         (args (clime--node-args node))
+         (args (clime-node-args node))
          (parts (list (format "Usage: %s" path-str))))
     (when has-options
       (push "[OPTIONS]" parts))
@@ -132,21 +131,13 @@ Respects :group labels and :hidden flags."
   "Format the Commands section for CHILDREN alist."
   (let* ((visible (cl-remove-if
                    (lambda (entry)
-                     (let ((child (cdr entry)))
-                       (if (clime-command-p child)
-                           (clime-command-hidden child)
-                         (clime-group-hidden child))))
+                     (clime-node-hidden (cdr entry)))
                    children)))
     (when visible
       (let ((rows (mapcar
                    (lambda (entry)
-                     (let* ((child (cdr entry))
-                            (name (car entry))
-                            (help (or (if (clime-command-p child)
-                                          (clime-command-help child)
-                                        (clime-group-help child))
-                                      "")))
-                       (cons name help)))
+                     (cons (car entry)
+                           (or (clime-node-help (cdr entry)) "")))
                    visible)))
         (concat "Commands:\n" (clime-help--format-table rows))))))
 
@@ -155,22 +146,20 @@ Respects :group labels and :hidden flags."
 (defun clime-format-help (node path)
   "Return formatted help string for NODE at PATH."
   (let ((sections (list (clime-help--format-usage node path)))
-        (help-text (if (clime-command-p node)
-                       (clime-command-help node)
-                     (clime-group-help node))))
+        (help-text (clime-node-help node)))
     ;; Description
     (when (and help-text (not (string-empty-p help-text)))
       (push help-text sections))
     ;; Arguments
-    (let ((args-section (clime-help--format-arguments (clime--node-args node))))
+    (let ((args-section (clime-help--format-arguments (clime-node-args node))))
       (when args-section
         (push args-section sections)))
     ;; Options
-    (let ((opts-section (clime-help--format-options (clime--node-options node))))
+    (let ((opts-section (clime-help--format-options (clime-node-options node))))
       (when opts-section
         (push opts-section sections)))
     ;; Commands (for groups)
-    (when (and (clime-group-p node) (not (clime-command-p node)))
+    (when (clime-group-only-p node)
       (let ((cmds-section (clime-help--format-commands (clime-group-children node))))
         (when cmds-section
           (push cmds-section sections))))

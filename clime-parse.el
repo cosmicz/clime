@@ -50,24 +50,6 @@ Matches anything starting with \"-\" that isn't just \"-\" alone."
         (cons (substring token 0 pos)
               (substring token (1+ pos)))))))
 
-(defun clime--node-options (node)
-  "Get options list from NODE (command or group)."
-  (if (clime-command-p node)
-      (clime-command-options node)
-    (clime-group-options node)))
-
-(defun clime--node-args (node)
-  "Get args list from NODE (command or group)."
-  (if (clime-command-p node)
-      (clime-command-args node)
-    (clime-group-args node)))
-
-(defun clime--node-name (node)
-  "Get name from NODE (command or group)."
-  (if (clime-command-p node)
-      (clime-command-name node)
-    (clime-group-name node)))
-
 (defun clime--find-option-in-scope (flag current-node root)
   "Find option matching FLAG, first in CURRENT-NODE then in ROOT.
 Return (OPTION . SCOPE) where SCOPE is \\='current or \\='root, or nil."
@@ -120,7 +102,7 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
 
 (defun clime--required-args-satisfied-p (node params)
   "Return non-nil if all required positional args of NODE have values in PARAMS."
-  (let ((args (clime--node-args node)))
+  (let ((args (clime-node-args node)))
     (cl-every (lambda (arg)
                 (or (not (clime-arg-required arg))
                     (plist-member params (clime-arg-name arg))))
@@ -130,7 +112,7 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
   "Apply default values for all options and args in NODES not already in PARAMS.
 NODES is a list of nodes whose params to process.  Returns updated PARAMS."
   (dolist (node nodes)
-    (dolist (opt (clime--node-options node))
+    (dolist (opt (clime-node-options node))
       (let ((name (clime-option-name opt)))
         (unless (plist-member params name)
           (let ((default (clime-option-default opt)))
@@ -139,7 +121,7 @@ NODES is a list of nodes whose params to process.  Returns updated PARAMS."
                                       (if (functionp default)
                                           (funcall default)
                                         default))))))))
-    (dolist (arg (clime--node-args node))
+    (dolist (arg (clime-node-args node))
       (let ((name (clime-arg-name arg)))
         (unless (plist-member params name)
           (let ((default (clime-arg-default arg)))
@@ -154,14 +136,14 @@ NODES is a list of nodes whose params to process.  Returns updated PARAMS."
   "Check that all required params in NODES have values in PARAMS.
 PATH is the command path for error messages.  Signals `clime-usage-error'."
   (dolist (node nodes)
-    (dolist (opt (clime--node-options node))
+    (dolist (opt (clime-node-options node))
       (when (and (clime-option-required opt)
                  (not (plist-member params (clime-option-name opt))))
         (signal 'clime-usage-error
                 (list (format "Missing required option %s for %s"
                               (car (clime-option-flags opt))
                               (string-join path " "))))))
-    (dolist (arg (clime--node-args node))
+    (dolist (arg (clime-node-args node))
       (when (and (clime-arg-required arg)
                  (not (plist-member params (clime-arg-name arg))))
         (signal 'clime-usage-error
@@ -255,20 +237,19 @@ Signal `clime-help-requested' for --help/-h/--version."
                       (cl-incf i)))))))
 
          ;; 4. Try group descent
-         ((and (clime-group-p current-node)
-               (not (clime-command-p current-node))  ;; app is both group-p and not command-p
+         ((and (clime-group-only-p current-node)
                (clime--required-args-satisfied-p current-node params)
                (clime-group-find-child current-node token))
           (let ((child (clime-group-find-child current-node token)))
             (setq current-node child)
-            (setq path (append path (list (clime--node-name child))))
+            (setq path (append path (list (clime-node-name child))))
             (push child visited-nodes)
             (setq arg-index 0)
             (cl-incf i)))
 
          ;; 5. Positional arg
          (t
-          (let ((args (clime--node-args current-node)))
+          (let ((args (clime-node-args current-node)))
             (if (< arg-index (length args))
                 (let ((arg-spec (nth arg-index args)))
                   (if (eq (clime-arg-nargs arg-spec) :rest)
@@ -295,11 +276,10 @@ Signal `clime-help-requested' for --help/-h/--version."
 
     ;; Post-parse: if we ended on a group (not a leaf command), check
     ;; if it has an invoke handler, otherwise it's missing a subcommand
-    (when (and (clime-group-p current-node)
-               (not (clime-command-p current-node))
+    (when (and (clime-group-only-p current-node)
                (not (clime-app-p current-node))
                (clime-group-children current-node)
-               (not (clime-group-handler current-node)))
+               (not (clime-node-handler current-node)))
       (signal 'clime-usage-error
               (list (format "Missing subcommand for %s"
                             (string-join path " ")))))
@@ -307,7 +287,7 @@ Signal `clime-help-requested' for --help/-h/--version."
     ;; If we're still at root with children and no subcommand was given
     (when (and (clime-app-p current-node)
                (clime-group-children current-node)
-               (not (clime-group-handler current-node))
+               (not (clime-node-handler current-node))
                (= (length path) 1))
       (signal 'clime-help-requested
               (list :node current-node :path path)))
@@ -336,9 +316,7 @@ Also runs ancestor collision checks after parent refs are established."
   (when (clime-group-p node)
     (dolist (entry (clime-group-children node))
       (let ((child (cdr entry)))
-        (if (clime-command-p child)
-            (setf (clime-command-parent child) node)
-          (setf (clime-group-parent child) node))
+        (setf (clime-node-parent child) node)
         (clime--set-parent-refs-1 child)))))
 
 (provide 'clime-parse)
