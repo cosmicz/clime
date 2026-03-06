@@ -133,6 +133,66 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
                     (plist-member params (clime-arg-name arg))))
               args)))
 
+;;; ─── Env Var Provider ──────────────────────────────────────────────────
+
+(defun clime--env-var-for-option (opt app)
+  "Return the env var name for OPT, or nil if none applies.
+Uses explicit :env on the option, or auto-derives from APP's :env-prefix."
+  (or (clime-option-env opt)
+      (when (and (clime-app-p app) (clime-app-env-prefix app))
+        (concat (clime-app-env-prefix app) "_"
+                (upcase (replace-regexp-in-string
+                         "-" "_" (symbol-name (clime-option-name opt))))))))
+
+(defun clime--parse-boolean-env (value flag-or-name)
+  "Parse VALUE as a boolean env var string.
+Return t for truthy values, nil for falsy.
+Signal `clime-usage-error' for unrecognized values.
+FLAG-OR-NAME is used in error messages."
+  (let ((v (downcase value)))
+    (cond
+     ((member v '("1" "true" "yes")) t)
+     ((member v '("0" "false" "no")) nil)
+     (t (signal 'clime-usage-error
+                (list (format "Invalid boolean value \"%s\" for env var %s (expected 1/true/yes or 0/false/no)"
+                              value flag-or-name)))))))
+
+(defun clime--apply-env (nodes params app)
+  "Apply env var values for options in NODES not already in PARAMS.
+APP is the root app node (for :env-prefix).  Returns updated PARAMS."
+  (dolist (node nodes)
+    (dolist (opt (clime-node-options node))
+      (let* ((name (clime-option-name opt))
+             (env-var (and (not (plist-member params name))
+                           (clime--env-var-for-option opt app)))
+             (value (and env-var (getenv env-var))))
+        (when (and value (not (string-empty-p value)))
+          (cond
+           ;; Count option: parse as integer
+           ((clime-option-count opt)
+            (setq params (plist-put params name
+                                   (clime--coerce-value value 'integer env-var))))
+           ;; Boolean flag: parse truthy/falsy, falsy means unset
+           ((clime-option-boolean-p opt)
+            (when (clime--parse-boolean-env value env-var)
+              (setq params (plist-put params name t))))
+           ;; Multiple option: split on comma, coerce each
+           ((clime-option-multiple opt)
+            (let ((type (clime-option-type opt)))
+              (setq params
+                    (plist-put params name
+                               (mapcar (lambda (v)
+                                         (clime--coerce-value
+                                          (string-trim v) type env-var))
+                                       (split-string value "," t))))))
+           ;; Normal value option
+           (t
+            (setq params
+                  (plist-put params name
+                             (clime--coerce-value
+                              value (clime-option-type opt) env-var)))))))))
+  params)
+
 (defun clime--apply-defaults (nodes params)
   "Apply default values for all options and args in NODES not already in PARAMS.
 NODES is a list of nodes whose params to process.  Returns updated PARAMS."
@@ -320,7 +380,8 @@ Signal `clime-help-requested' for --help/-h/--version."
       (signal 'clime-help-requested
               (list :node current-node :path path)))
 
-    ;; Apply defaults and check required
+    ;; Apply env vars, then defaults, then check required
+    (setq params (clime--apply-env visited-nodes params root))
     (setq params (clime--apply-defaults visited-nodes params))
     (clime--check-required visited-nodes params path)
 
