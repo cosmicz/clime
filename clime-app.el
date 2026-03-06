@@ -40,7 +40,7 @@
       :help "Additional load paths to include in the shebang")
 
     (clime-option standalone ("--standalone") :flag t
-      :help "Use self-relative load path (for single-file distributions)")
+      :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
     (clime-option env ("--env" "-e") :multiple t
       :help "Set environment variable in shebang (NAME=VALUE)")
@@ -51,7 +51,11 @@
                (target (expand-file-name file))
                (load-paths
                 (if standalone
-                    " -L \"$(dirname \"$0\")\""
+                    (if extras
+                        (mapconcat (lambda (p)
+                                     (format " -L %S" (expand-file-name p)))
+                                   extras "")
+                      "")
                   (mapconcat (lambda (p)
                                (format " -L %S" (expand-file-name p)))
                              (cons clime-dir (or extras '()))
