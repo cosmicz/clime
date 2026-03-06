@@ -61,7 +61,7 @@ process environment."
   (let* ((dist (expand-file-name "dist/clime.el" clime-test--project-root))
          (result (clime-test--run-script dist '("--help"))))
     (should (= 0 (car result)))
-    (should (string-match-p "clime COMMAND" (cdr result)))
+    (should (string-match-p "clime\\.el COMMAND" (cdr result)))
     (should (string-match-p "init" (cdr result)))
     (should (string-match-p "bundle" (cdr result)))))
 
@@ -158,6 +158,20 @@ process environment."
                   clime-app (list "init" "/tmp/does-not-exist.el"))))
     (should (= 2 (car result)))
     (should (string-match-p "does not exist" (cdr result)))))
+
+(ert-deftest clime-test-integration/init-usage-shows-exe-name ()
+  "Usage output shows the executable filename, not the DSL symbol."
+  (clime-test-with-temp-dir
+    (let* ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+           ;; Name the file differently from the DSL symbol (test-app)
+           (app-file (expand-file-name "my-tool.el")))
+      (clime-test--write-app-source app-file)
+      (clime-test--run-script clime-app (list "init" app-file))
+      ;; --help should show "my-tool.el" (executable name) not "test-app" (DSL symbol)
+      (let ((result (clime-test--run-script app-file '("--help"))))
+        (should (= 0 (car result)))
+        (should (string-match-p "my-tool\\.el" (cdr result)))
+        (should-not (string-match-p "test-app" (cdr result)))))))
 
 (ert-deftest clime-test-integration/init-rejects-unsafe-env ()
   "clime-app.el init rejects env values with shell metacharacters."

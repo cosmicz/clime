@@ -299,7 +299,7 @@ Signal `clime-help-requested' for --help/-h/--version."
         (root app)
         (option-parsing t)
         (params '())
-        (path (list (clime-app-name app)))
+        (path (list (or (clime-app-argv0 app) (clime-app-name app))))
         (arg-index 0)
         (visited-nodes (list app))
         (i 0)

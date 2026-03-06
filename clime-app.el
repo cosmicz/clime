@@ -57,10 +57,11 @@ Signals `clime-usage-error' if invalid."
 (defun clime-app--make-shebang (env-vars load-paths)
   "Build a two-line polyglot shebang string.
 ENV-VARS is a list of \"NAME=VALUE\" strings.
-LOAD-PATHS is a string of formatted -L flags (may be empty)."
-  (let ((env-prefix (if env-vars
-                        (concat (mapconcat #'identity env-vars " ") " ")
-                      "")))
+LOAD-PATHS is a string of formatted -L flags (may be empty).
+Always includes CLIME_ARGV0=\"$0\" so usage output shows the
+executable name rather than the DSL symbol."
+  (let* ((all-vars (cons "CLIME_ARGV0=\"$0\"" (or env-vars '())))
+         (env-prefix (concat (mapconcat #'identity all-vars " ") " ")))
     (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s -l \"$0\" -- \"$@\" # -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
             env-prefix load-paths)))
 
