@@ -15,16 +15,17 @@ tmp/
 # Package cache
 .packages
 
+# Distribution build
+dist/
+
+# Generated from README.org via make readme
+README.md
+
 # Development tracking
 DEVELOPMENT.org
 
 # Issue tracking (embead) — remove if not using embead
-.beads
-.embead/.current*
-.embead/.worktrees/
-.embead/beads.org
-.embead/beads_archive.org
-.embead/archive-*.org
-
+.beads/
 .embead/
+
 .org~

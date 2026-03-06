@@ -2,6 +2,8 @@
 
 ;; Copyright (C) 2026
 
+;; Author: Octavian <cosmicz@protonmail.com>
+
 ;; This file is not part of GNU Emacs.
 
 ;;; Commentary:

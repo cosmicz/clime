@@ -2,8 +2,9 @@
 
 ;; Copyright (C) 2026
 
-;; Author:
-;; Keywords:
+;; Author: Octavian <cosmicz@protonmail.com>
+;; URL: https://github.com/cosmicz/clime
+;; Keywords: tools, processes
 ;; Package-Requires: ((emacs "29.1"))
 ;; Version: 0.1.0
 

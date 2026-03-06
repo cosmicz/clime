@@ -1,93 +1,190 @@
 #+title: clime
-#+author:
-#+language: en
+#+options: toc:nil num:nil
 
-* Overview
+Declarative CLI framework for Emacs Lisp.  Build command-line tools with
+subcommands, options, flags, and help generation --- all from a single
+~clime-app~ declaration.
 
-A template for bootstrapping new Emacs Lisp projects with sensible
-defaults: tests, Makefile, documentation, and standard file structure.
+* Features
 
-Clone it, run ~init.sh~, and start building.
+- Declarative DSL: define commands, options, and args in one form
+- Subcommands and nested groups (e.g. ~myapp repo add~)
+- Auto-generated ~--help~ and ~--version~
+- Boolean flags, count flags (~-vvv~), multiple values (~--tag a --tag b~)
+- Environment variable support with auto-derived names
+- Stdin reading via ~-~ sentinel
+- JSON output mode
+- Type coercion (string, integer, number)
+- Single-file vendorable distribution
 
-* Quick Start
+* Installation
 
-#+begin_src sh
-git clone https://github.com/YOU/emacs-clime my-project
-cd my-project
-./init.sh my-project "Your Name"
-make test
-git rm init.sh
-git commit -am "Instantiate my-project from clime"
+** Git clone / submodule
+
+#+begin_src bash
+# Clone directly
+git clone https://github.com/cosmicz/clime vendor/clime
+
+# Or as a submodule
+git submodule add https://github.com/cosmicz/clime vendor/clime
 #+end_src
 
-* What You Get
+Then initialize your app file:
+
+#+begin_src bash
+vendor/clime/bin/clime-init myapp.el
+#+end_src
+
+This adds a polyglot shebang header so your =.el= file is directly
+executable.
+
+** Vendoring (single file)
+
+Build a single-file bundle and copy it into your project:
+
+#+begin_src bash
+cd clime/
+make dist
+cp dist/clime.el /path/to/myapp/
+#+end_src
+
+Your app just needs ~(require 'clime)~ and ~-L~ pointing to the
+directory containing the bundled file.
+
+** Cask
+
+Add to your =Cask= file:
+
+#+begin_src emacs-lisp
+(depends-on "clime")
+#+end_src
+
+For local development before clime is on MELPA:
+
+#+begin_src bash
+cask link clime /path/to/clime
+cask install
+#+end_src
+
+* Getting Started
+
+** 1. Create your app file
+
+#+begin_src emacs-lisp
+#!/bin/sh
+":"; exec emacs --batch -Q -L /path/to/clime -l "$0" -- "$@" # -*-emacs-lisp-*-
+;;; greet.el --- A greeting CLI  -*- lexical-binding: t; -*-
+
+(require 'clime)
+
+(clime-app greet
+  :version "1.0.0"
+  :help "A friendly greeter."
+
+  (clime-option shout ("--shout" "-s") :flag t
+    :help "SHOUT THE GREETING")
+
+  (clime-command hello
+    :help "Say hello to someone"
+    (clime-arg name :help "Person to greet")
+    (clime-handler (ctx)
+      (clime-let ctx (name shout)
+        (let ((msg (format "Hello, %s!" name)))
+          (if shout (upcase msg) msg)))))
+
+  (clime-command goodbye
+    :help "Say goodbye"
+    (clime-arg name :help "Person to bid farewell")
+    (clime-handler (ctx)
+      (clime-let ctx (name)
+        (format "Goodbye, %s!" name)))))
+
+(clime-run-batch greet)
+
+(provide 'greet)
+;;; greet.el ends here
+#+end_src
+
+Or use ~clime-init~ to set up the shebang automatically:
+
+#+begin_src bash
+path/to/clime/bin/clime-init greet.el
+#+end_src
+
+** 2. Make it executable and run
+
+#+begin_src bash
+chmod +x greet.el
+./greet.el hello world        # => Hello, world!
+./greet.el --shout hello world # => HELLO, WORLD!
+./greet.el --help
+./greet.el hello --help
+#+end_src
+
+** 3. Add more features
+
+*Environment variables* --- set ~:env-prefix~ on the app to auto-derive
+env var names from options:
+
+#+begin_src emacs-lisp
+(clime-app greet
+  :version "1.0.0"
+  :help "A friendly greeter."
+  :env-prefix "GREET"
+  ...)
+#+end_src
+
+Now ~--shout~ can also be set via ~GREET_SHOUT=1~.
+
+*Nested groups* --- organize related commands:
+
+#+begin_src emacs-lisp
+(clime-group templates
+  :help "Manage greeting templates"
+
+  (clime-command list
+    :help "List available templates"
+    (clime-handler (_ctx) "default, formal, casual"))
+
+  (clime-command add
+    :help "Add a template"
+    (clime-arg name :help "Template name")
+    (clime-arg body :help "Template body")
+    (clime-handler (ctx)
+      (clime-let ctx (name body)
+        (format "Added template %s: %s" name body)))))
+#+end_src
+
+*Stdin* --- use ~-~ as an argument value to read from stdin:
+
+#+begin_src bash
+echo "World" | ./greet.el hello -
+#+end_src
+
+* Project Structure
+
+A recommended layout for clime-based apps:
 
 #+begin_example
-.dir-locals.el                 Editor settings (indent, fill-column)
-.gitignore                     Elisp, macOS, embead ignores
-.github/workflows/ci.yml       GitHub Actions CI (multi-version)
-LICENSE                        MIT license
-Makefile                       compile, lint, test, clean
-README.org                     This file (updated by init.sh)
-CONTRIBUTING.org               Dev setup, code style, PR workflow
-init.sh                        One-shot rename script
-
-clime.el                    Entry point
-clime-core.el               Core domain logic and data structures
-clime-settings.el           defgroup + defcustom configuration
-
-tests/
-  clime-tests-runner.el     Batch + interactive test runner
-  clime-test-helpers.el     Temp dirs, message capture macros
-  clime-core-tests.el       Example tests
+myapp/
+  myapp.el              # main app with shebang
+  myapp-commands.el     # optional: split commands into modules
+  Cask                  # optional: (depends-on "clime")
+  bin/
+    myapp               # optional: bash wrapper for PATH/symlinks
+  tests/
+    myapp-tests.el
 #+end_example
 
-All files, symbols, and references are renamed by ~init.sh~.
+* Development
 
-* init.sh
-
-#+begin_src sh
-./init.sh <project-name> [author]
+#+begin_src bash
+make test              # run tests (SELECT=pattern to filter)
+make lint              # byte-compile warnings + checkdoc
+make compile           # byte-compile
+make dist              # build single-file dist/clime.el
+make clean             # remove build artifacts
 #+end_src
-
-- Renames files: ~clime*.el~ → ~<project-name>*.el~
-- Replaces all ~clime~ prefixes in code, Makefile, and docs
-- Capitalizes the buffer name (~*My-Project Log*~)
-- Sets author in file headers and README if provided
-- Uses ~git mv~ so history stays clean
-
-After running, delete the script and commit.
-
-* Makefile Targets
-
-| Target    | Description                              |
-|-----------+------------------------------------------|
-| ~compile~ | Byte-compile all ~.el~ files             |
-| ~lint~    | Byte-compile with warnings + checkdoc    |
-| ~test~    | Run tests (~SELECT=~ to filter)          |
-| ~clean~   | Remove ~.elc~ files and build output     |
-| ~help~    | Show available targets                   |
-
-#+begin_src sh
-make test                              # all tests
-make test SELECT="^clime-test-core" # filter by pattern
-#+end_src
-
-* Conventions
-
-- ~lexical-binding: t~ in every file
-- Public symbols: ~prefix-name~, internal: ~prefix--name~
-- Immutable structs (~:read-only t~, private constructors)
-- Tests named ~prefix-test-*~, one test file per module
-- Section dividers: ~;;; ─── Section Name ──────~
-
-* Adding a Module
-
-1. Create ~clime-foo.el~ with standard header
-2. Add ~(require 'clime-foo)~ to ~clime.el~
-3. Create ~tests/clime-foo-tests.el~
-4. Add ~(require 'clime-foo-tests)~ to ~tests/clime-tests-runner.el~
-5. Run ~make test~
 
 * License
 
