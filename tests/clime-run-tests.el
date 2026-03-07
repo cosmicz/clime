@@ -104,15 +104,17 @@
 
 (ert-deftest clime-test-run/runtime-error-returns-1 ()
   "Runtime error in handler returns exit code 1."
-  (clime-test-with-run-output
-    (let ((code (clime-run clime-test--run-app '("fail"))))
-      (should (= code 1)))))
+  (let ((debug-on-error nil))
+    (clime-test-with-run-output
+      (let ((code (clime-run clime-test--run-app '("fail"))))
+        (should (= code 1))))))
 
 (ert-deftest clime-test-run/runtime-error-prints-message ()
   "Runtime error prints error message to stderr (message)."
-  (let ((msgs (clime-test-with-messages
-                (clime-run clime-test--run-app '("fail")))))
-    (should (cl-some (lambda (m) (string-match-p "Error:" m)) msgs))))
+  (let ((debug-on-error nil))
+    (let ((msgs (clime-test-with-messages
+                  (clime-run clime-test--run-app '("fail")))))
+      (should (cl-some (lambda (m) (string-match-p "Error:" m)) msgs)))))
 
 ;;; ─── Help / Version ─────────────────────────────────────────────────────
 
@@ -207,7 +209,8 @@
 
 (ert-deftest clime-test-run/error-formatter-runtime ()
   "Error formatter slot works for runtime errors too."
-  (let* ((captured nil)
+  (let* ((debug-on-error nil)
+         (captured nil)
          (clime-format-error (lambda (msg) (setq captured msg))))
     (clime-run clime-test--run-app '("fail"))
     (should (stringp captured))

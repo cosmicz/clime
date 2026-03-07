@@ -27,5 +27,8 @@ jobs:
       - name: Lint
         run: make lint
 
+      - name: Dist
+        run: make dist
+
       - name: Test
         run: make test

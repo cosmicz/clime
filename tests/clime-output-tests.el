@@ -218,7 +218,8 @@
 
 (ert-deftest clime-test-output/run-json-mode-runtime-error ()
   "clime-run with --json emits JSON error for runtime errors."
-  (let* ((cmd (clime-make-command :name "boom"
+  (let* ((debug-on-error nil)
+         (cmd (clime-make-command :name "boom"
                                    :handler (lambda (_ctx) (error "kaboom"))))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "boom" cmd))))
