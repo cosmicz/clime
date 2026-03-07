@@ -28,8 +28,8 @@
 (cl-defstruct (clime-parse-result (:constructor clime-parse-result--create)
                                   (:copier nil))
   "Result of parsing an argv against a command tree."
-  (command nil :documentation "The resolved leaf `clime-command', or nil when parsing ends on a group.")
-  (node nil :documentation "The terminal node where parsing ended.  Always set.  Same as command when command is non-nil.")
+  (command nil :documentation "Resolved leaf command, or nil for group.")
+  (node nil :documentation "Terminal node where parsing ended.")
   (path nil :type list :documentation "List of node names from root to command.")
   (params nil :type list :documentation "Plist of (param-name value) for all scopes."))
 
@@ -335,7 +335,7 @@ Signal `clime-help-requested' for --help/-h/--version."
          ;; 3. Option-like token
          ((and option-parsing (clime--option-like-p token))
           ;; Try --name=value split
-          (if-let ((split (clime--split-long-equals token)))
+          (if-let* ((split (clime--split-long-equals token)))
               ;; --name=value form
               (let* ((flag (car split))
                      (value (clime--resolve-stdin-value (cdr split)))
@@ -350,7 +350,7 @@ Signal `clime-help-requested' for --help/-h/--version."
                   (setq params (clime--consume-option (car found) params value))
                   (cl-incf i))
               ;; Try short bundle expansion
-              (if-let ((bundle (clime--expand-short-bundle token current-node root)))
+              (if-let* ((bundle (clime--expand-short-bundle token current-node root)))
                   ;; Expanded bundle: process each flag
                   (progn
                     (dolist (flag bundle)
