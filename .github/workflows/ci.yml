@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        emacs-version: ['29.1', '29.4', 'snapshot']
+        emacs-version: ['29.1', '29.4', '30.1']
       fail-fast: false
 
     steps:
