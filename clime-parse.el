@@ -370,7 +370,68 @@ Signal `clime-help-requested' for --help/-h/--version."
           (signal 'clime-help-requested
                   (list :node root :path path :version t)))
 
-         ;; 3. Option-like token
+         ;; 3. Rest arg pending — delegate to rest collector
+         ;; (which handles known options internally)
+         ((let ((args (clime-node-args current-node)))
+            (and (< arg-index (length args))
+                 (eq (clime-arg-nargs (nth arg-index args)) :rest)))
+          ;; Fall through to positional handler which enters rest loop
+          (let ((arg-spec (nth arg-index (clime-node-args current-node))))
+            (let ((rest-values '()))
+              (while (< i len)
+                (let ((tok (nth i argv)))
+                  (cond
+                   ;; -- disables option parsing
+                   ((and option-parsing (string= tok "--"))
+                    (setq option-parsing nil)
+                    (cl-incf i))
+                   ;; --help / -h triggers help
+                   ((and option-parsing
+                         (or (string= tok "--help") (string= tok "-h")))
+                    (signal 'clime-help-requested
+                            (list :node current-node :path path)))
+                   ;; --flag=value syntax
+                   ((and option-parsing
+                         (clime--option-like-p tok)
+                         (clime--split-long-equals tok))
+                    (let* ((split (clime--split-long-equals tok))
+                           (flag (car split))
+                           (value (clime--resolve-stdin-value (cdr split)))
+                           (found (clime--find-option-in-scope flag current-node root)))
+                      (if found
+                          (progn
+                            (setq params (clime--consume-option (car found) params value))
+                            (cl-incf i))
+                        ;; Unknown --x=y: collect as rest value
+                        (push (clime--resolve-stdin-value tok) rest-values)
+                        (cl-incf i))))
+                   ;; Known option
+                   ((and option-parsing
+                         (clime--option-like-p tok)
+                         (clime--find-option-in-scope tok current-node root))
+                    (let* ((found (clime--find-option-in-scope tok current-node root))
+                           (opt (car found)))
+                      (if (clime-option-boolean-p opt)
+                          (progn
+                            (setq params (clime--consume-option opt params nil))
+                            (cl-incf i))
+                        ;; Value option: consume next token
+                        (cl-incf i)
+                        (when (>= i len)
+                          (signal 'clime-usage-error
+                                  (list (format "Option %s requires a value" tok))))
+                        (setq params (clime--consume-option
+                                      opt params
+                                      (clime--resolve-stdin-value (nth i argv))))
+                        (cl-incf i))))
+                   ;; Anything else: collect as rest value
+                   (t
+                    (push (clime--resolve-stdin-value tok) rest-values)
+                    (cl-incf i)))))
+              (setq params (plist-put params (clime-arg-name arg-spec)
+                                     (nreverse rest-values))))))
+
+         ;; 4. Option-like token
          ((and option-parsing (clime--option-like-p token))
           ;; Try --name=value split
           (if-let* ((split (clime--split-long-equals token)))
@@ -425,34 +486,20 @@ Signal `clime-help-requested' for --help/-h/--version."
           (setq arg-index 0)
           (cl-incf i))
 
-         ;; 5. Positional arg
+         ;; 5. Positional arg (non-rest)
          (t
           (let ((args (clime-node-args current-node)))
             (if (< arg-index (length args))
                 (let ((arg-spec (nth arg-index args)))
-                  (if (eq (clime-arg-nargs arg-spec) :rest)
-                      ;; Rest arg: collect remaining non-option tokens
-                      (let ((rest-values '()))
-                        (while (< i len)
-                          (let ((tok (nth i argv)))
-                            (if (and option-parsing (string= tok "--"))
-                                (progn
-                                  (setq option-parsing nil)
-                                  (cl-incf i))
-                              (push (clime--resolve-stdin-value tok) rest-values)
-                              (cl-incf i))))
-                        (setq params (plist-put params (clime-arg-name arg-spec)
-                                               (nreverse rest-values))))
-                    ;; Normal positional
-                    (let ((coerced (clime--transform-value
-                                    (clime--resolve-stdin-value token)
-                                    (clime-arg-type arg-spec)
-                                    (clime-arg-choices arg-spec)
-                                    (clime-arg-coerce arg-spec)
-                                    (format "<%s>" (clime-arg-name arg-spec)))))
-                      (setq params (plist-put params (clime-arg-name arg-spec) coerced)))
-                    (cl-incf arg-index)
-                    (cl-incf i)))
+                  (let ((coerced (clime--transform-value
+                                  (clime--resolve-stdin-value token)
+                                  (clime-arg-type arg-spec)
+                                  (clime-arg-choices arg-spec)
+                                  (clime-arg-coerce arg-spec)
+                                  (format "<%s>" (clime-arg-name arg-spec)))))
+                    (setq params (plist-put params (clime-arg-name arg-spec) coerced)))
+                  (cl-incf arg-index)
+                  (cl-incf i))
               ;; No more arg specs
               (signal 'clime-usage-error
                       (list (format "Unexpected argument \"%s\" for %s"

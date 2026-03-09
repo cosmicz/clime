@@ -811,5 +811,79 @@
          (should (string-match-p "csv" msg))
          (should (string-match-p "xml" msg)))))))
 
+;;; ─── Rest Args + Known Options ──────────────────────────────────────
+
+(defun clime-test--rest-with-opts-app ()
+  "Build an app with rest args plus options in scope."
+  (let* ((script-arg (clime-make-arg :name 'script))
+         (rest-arg (clime-make-arg :name 'args :nargs :rest :required nil))
+         (cmd-opt (clime-make-option :name 'force :flags '("--force" "-f")
+                                      :nargs 0))
+         (root-opt (clime-make-option :name 'json :flags '("--json")
+                                       :nargs 0))
+         (fmt-opt (clime-make-option :name 'format :flags '("--format")
+                                      :help "Output format"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :args (list script-arg rest-arg)
+                                  :options (list cmd-opt fmt-opt))))
+    (clime-make-app :name "t" :version "1"
+                    :options (list root-opt)
+                    :children (list (cons "run" cmd)))))
+
+(ert-deftest clime-test-parse/rest-known-bool-option ()
+  "Known boolean option during rest collection is parsed as option."
+  (let* ((app (clime-test--rest-with-opts-app))
+         (result (clime-parse app '("run" "myscript" "arg1" "--json"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'args)
+                   '("arg1")))
+    (should (eq (plist-get (clime-parse-result-params result) 'json) t))))
+
+(ert-deftest clime-test-parse/rest-known-value-option ()
+  "Known value option during rest collection is parsed with its value."
+  (let* ((app (clime-test--rest-with-opts-app))
+         (result (clime-parse app '("run" "myscript" "arg1" "--format" "csv"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'args)
+                   '("arg1")))
+    (should (equal (plist-get (clime-parse-result-params result) 'format)
+                   "csv"))))
+
+(ert-deftest clime-test-parse/rest-unknown-option-collected ()
+  "Unknown option-like tokens are collected as rest values."
+  (let* ((app (clime-test--rest-with-opts-app))
+         (result (clime-parse app '("run" "myscript" "--unknown-flag"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'args)
+                   '("--unknown-flag")))))
+
+(ert-deftest clime-test-parse/rest-double-dash-disables ()
+  "-- during rest collection makes subsequent known options become rest values."
+  (let* ((app (clime-test--rest-with-opts-app))
+         (result (clime-parse app '("run" "myscript" "--" "--json"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'args)
+                   '("--json")))
+    (should-not (plist-get (clime-parse-result-params result) 'json))))
+
+(ert-deftest clime-test-parse/rest-help-triggers ()
+  "--help during rest collection triggers help."
+  (let* ((app (clime-test--rest-with-opts-app)))
+    (should-error (clime-parse app '("run" "myscript" "arg1" "--help"))
+                  :type 'clime-help-requested)))
+
+(ert-deftest clime-test-parse/rest-equals-syntax ()
+  "--flag=value during rest collection is parsed correctly."
+  (let* ((app (clime-test--rest-with-opts-app))
+         (result (clime-parse app '("run" "myscript" "arg1" "--format=csv"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'args)
+                   '("arg1")))
+    (should (equal (plist-get (clime-parse-result-params result) 'format)
+                   "csv"))))
+
+(ert-deftest clime-test-parse/rest-cmd-option-during-rest ()
+  "Command-level option during rest collection is parsed."
+  (let* ((app (clime-test--rest-with-opts-app))
+         (result (clime-parse app '("run" "myscript" "arg1" "--force"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'args)
+                   '("arg1")))
+    (should (eq (plist-get (clime-parse-result-params result) 'force) t))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here
