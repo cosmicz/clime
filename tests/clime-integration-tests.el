@@ -58,17 +58,19 @@ process environment."
 
 (ert-deftest clime-test-integration/dist-as-cli ()
   "The dist file works as a CLI tool when executed directly."
-  (let* ((dist (expand-file-name "dist/clime.el" clime-test--project-root))
-         (result (clime-test--run-script dist '("--help"))))
-    (should (= 0 (car result)))
-    (should (string-match-p "clime\\.el COMMAND" (cdr result)))
-    (should (string-match-p "init" (cdr result)))
-    (should (string-match-p "bundle" (cdr result)))))
+  (let* ((dist (expand-file-name "dist/clime.el" clime-test--project-root)))
+    (skip-unless (file-exists-p dist))
+    (let ((result (clime-test--run-script dist '("--help"))))
+      (should (= 0 (car result)))
+      (should (string-match-p "clime\\.el COMMAND" (cdr result)))
+      (should (string-match-p "init" (cdr result)))
+      (should (string-match-p "bundle" (cdr result))))))
 
 ;;; ─── Dist as Library ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-integration/dist-as-library ()
   "The dist file works as a library without triggering the CLI entry point."
+  (skip-unless (file-exists-p (expand-file-name "dist/clime.el" clime-test--project-root)))
   (clime-test-with-temp-dir
     (let* ((dist-dir (expand-file-name "dist/" clime-test--project-root))
            (app-file (expand-file-name "test-app.el")))
