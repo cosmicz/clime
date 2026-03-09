@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; exec emacs --batch -Q -L "$(dirname "$0")/.." --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@"
+":"; exec emacs --batch -Q -L "$(dirname "$0")/.." --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; pkm.el --- Example clime app: a mock package manager  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian

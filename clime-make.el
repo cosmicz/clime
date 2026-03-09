@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime:0.1.1
+":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -93,7 +93,7 @@ the lexical flag."
                      "(condition-case nil"
                      "(while t(eval(read(current-buffer))t))"
                      "(end-of-file nil)))\"")))
-    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s %s -- \"$@\" # clime:%s\n"
+    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s %s -- \"$@\" # clime:%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
             env-prefix load-paths eval-form clime-version)))
 
 (defun clime-make--write-shebang (target env-vars load-paths force)
