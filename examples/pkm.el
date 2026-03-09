@@ -44,7 +44,7 @@
 ;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- --help
 ;;
 ;; The shebang uses a relative -L path since this file lives inside
-;; the clime repo.  For external apps, use `clime-app.el init' which
+;; the clime repo.  For external apps, use `clime-make.el init' which
 ;; generates an absolute path.  See DEVELOPMENT.org for details.
 
 ;;; Code:

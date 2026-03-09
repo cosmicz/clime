@@ -47,7 +47,7 @@ Write an Elisp file using the clime DSL:
 Initialize it with a shebang and run it:
 
 #+begin_src bash
-path/to/clime-app.el init greet.el
+path/to/clime-make.el init greet.el
 
 ./greet.el hello world        # => Hello, world!
 ./greet.el --shout hello world # => HELLO, WORLD!
@@ -57,7 +57,7 @@ path/to/clime-app.el init greet.el
 
 ** How the shebang works
 
-~clime-app.el init~ prepends a polyglot header that's valid as both
+~clime-make.el init~ prepends a polyglot header that's valid as both
 shell script and Elisp:
 
 #+begin_src bash
@@ -423,12 +423,12 @@ See =examples/pkm.el= for a comprehensive demo covering all major features.
 
 * Bundling & Distribution
 
-~clime-app.el~ provides two commands for distribution:
+~clime-make.el~ provides two commands for distribution:
 
 *~bundle~* --- concatenate source files into a single =.el=:
 
 #+begin_src bash
-./clime-app.el bundle -o dist/myapp.el \
+./clime-make.el bundle -o dist/myapp.el \
     --provide myapp --main myapp \
     src/myapp-core.el src/myapp-commands.el src/myapp.el
 #+end_src
@@ -439,7 +439,7 @@ and a standalone CLI.
 *~init~* --- add a shebang to make any =.el= file executable:
 
 #+begin_src bash
-./clime-app.el init --env CLIME_MAIN_APP=myapp dist/myapp.el
+./clime-make.el init --env CLIME_MAIN_APP=myapp dist/myapp.el
 #+end_src
 
 For dual-use bundles, pass ~--env CLIME_MAIN_APP=<app>~ so the entry
@@ -460,7 +460,7 @@ git submodule add https://github.com/cosmicz/clime vendor/clime
 Then initialize your app file:
 
 #+begin_src bash
-vendor/clime/clime-app.el init myapp.el
+vendor/clime/clime-make.el init myapp.el
 #+end_src
 
 This prepends a polyglot shebang and makes the file executable.

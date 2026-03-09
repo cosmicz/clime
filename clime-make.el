@@ -1,6 +1,6 @@
 #!/bin/sh
 ":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" -l "$0" -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
-;;; clime-app.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
+;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
 
@@ -16,50 +16,50 @@
 ;; source files into a single distributable).
 ;;
 ;; Usage:
-;;   ./clime-app.el init myapp.el
-;;   ./clime-app.el init myapp.el -L ./lib
-;;   ./clime-app.el bundle -o bundle.el --provide mylib src/*.el
-;;   ./clime-app.el --help
+;;   ./clime-make.el init myapp.el
+;;   ./clime-make.el init myapp.el -L ./lib
+;;   ./clime-make.el bundle -o bundle.el --provide mylib src/*.el
+;;   ./clime-make.el --help
 
 ;;; Code:
 
 (require 'clime)
 
-(defvar clime-app--self-path
+(defvar clime-make--self-path
   (and load-file-name (file-truename load-file-name))
   "Absolute path to this file, resolved through symlinks.")
 
 ;;; ─── Helpers ────────────────────────────────────────────────────────────
 
-(defconst clime-app--env-var-re
+(defconst clime-make--env-var-re
   "\\`[A-Za-z_][A-Za-z0-9_]*=[-./:@A-Za-z0-9_]*\\'"
   "Regexp matching safe NAME=VALUE env var assignments for shebang.")
 
-(defconst clime-app--symbol-re
+(defconst clime-make--symbol-re
   "\\`[[:alpha:]_][[:alnum:]_:+*/<>=!?-]*\\'"
   "Regexp matching safe Elisp symbol names.")
 
-(defun clime-app--validate-env-vars (env-vars)
+(defun clime-make--validate-env-vars (env-vars)
   "Validate each entry in ENV-VARS matches safe NAME=VALUE format.
 Signals `clime-usage-error' on the first invalid entry."
   (dolist (e env-vars)
-    (unless (string-match-p clime-app--env-var-re e)
+    (unless (string-match-p clime-make--env-var-re e)
       (signal 'clime-usage-error
               (list (format "invalid --env value %S (expected NAME=VALUE with safe characters)" e))))))
 
-(defun clime-app--validate-symbol (name flag)
+(defun clime-make--validate-symbol (name flag)
   "Validate NAME is a safe Elisp symbol name.
 FLAG is the option name for error messages.
 Signals `clime-usage-error' if invalid."
-  (unless (string-match-p clime-app--symbol-re name)
+  (unless (string-match-p clime-make--symbol-re name)
     (signal 'clime-usage-error
             (list (format "invalid %s value %S (must be a valid symbol name)" flag name)))))
 
-(defconst clime-app--shebang-tag-re
+(defconst clime-make--shebang-tag-re
   "# clime:[0-9]+\\.[0-9]+\\.[0-9]+"
   "Regexp matching the clime version tag in a shebang line 2.")
 
-(defun clime-app--clime-shebang-p (file)
+(defun clime-make--clime-shebang-p (file)
   "Return non-nil if FILE starts with a clime-tagged shebang."
   (with-temp-buffer
     (insert-file-contents file nil 0 512)
@@ -67,9 +67,9 @@ Signals `clime-usage-error' if invalid."
     (and (looking-at "#!")
          (forward-line 1)
          (let ((line2 (buffer-substring (point) (line-end-position))))
-           (string-match-p clime-app--shebang-tag-re line2)))))
+           (string-match-p clime-make--shebang-tag-re line2)))))
 
-(defun clime-app--make-shebang (env-vars load-paths)
+(defun clime-make--make-shebang (env-vars load-paths)
   "Build a two-line polyglot shebang string.
 ENV-VARS is a list of \"NAME=VALUE\" strings.
 LOAD-PATHS is a string of formatted -L flags (may be empty).
@@ -81,14 +81,14 @@ Embeds a clime:VERSION tag for detection and update support."
     (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s -l \"$0\" -- \"$@\" # clime:%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
             env-prefix load-paths clime-version)))
 
-(defun clime-app--write-shebang (target env-vars load-paths force)
+(defun clime-make--write-shebang (target env-vars load-paths force)
   "Write a shebang to TARGET file, handling existing headers.
-ENV-VARS and LOAD-PATHS are passed to `clime-app--make-shebang'.
+ENV-VARS and LOAD-PATHS are passed to `clime-make--make-shebang'.
 If TARGET has a clime-tagged shebang, replace it (return \"updated\").
 If TARGET has a non-clime shebang and FORCE is non-nil, replace it.
 If TARGET has a non-clime shebang and FORCE is nil, signal an error.
 If TARGET has no shebang, prepend one (return \"done\")."
-  (let ((shebang (clime-app--make-shebang env-vars load-paths))
+  (let ((shebang (clime-make--make-shebang env-vars load-paths))
         (action nil))
     (with-temp-buffer
       (insert-file-contents target)
@@ -96,7 +96,7 @@ If TARGET has no shebang, prepend one (return \"done\")."
       (cond
        ;; Existing shebang
        ((looking-at "#!")
-        (if (or (clime-app--clime-shebang-p target) force)
+        (if (or (clime-make--clime-shebang-p target) force)
             (progn
               ;; Delete the two shebang lines
               (forward-line 2)
@@ -115,7 +115,7 @@ If TARGET has no shebang, prepend one (return \"done\")."
     (set-file-modes target #o755)
     action))
 
-(defun clime-app--extract-code (file)
+(defun clime-make--extract-code (file)
   "Extract code from FILE using GNU-style library section markers.
 FILE must contain a top-level `;;; Code:' section and a terminating
 `;;; ... ends here' line.  Strips top-level `(clime-run-batch ...)'
@@ -144,7 +144,7 @@ bundled modules continue to work."
 
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
-(clime-app clime-app
+(clime-app clime-make
            :version clime-version
            :help "clime — declarative CLI framework for Emacs Lisp."
 
@@ -169,7 +169,7 @@ bundled modules continue to work."
 
             (clime-handler (ctx)
                            (clime-let ctx (file (extras extra-load-path) standalone force env)
-                                      (let* ((clime-dir (file-name-directory clime-app--self-path))
+                                      (let* ((clime-dir (file-name-directory clime-make--self-path))
                                              (target (expand-file-name file))
                                              (load-paths
                                               (if standalone
@@ -186,8 +186,8 @@ bundled modules continue to work."
                                           (signal 'clime-usage-error
                                                   (list (format "%s does not exist" file))))
                                         (when env
-                                          (clime-app--validate-env-vars env))
-                                        (let ((action (clime-app--write-shebang
+                                          (clime-make--validate-env-vars env))
+                                        (let ((action (clime-make--write-shebang
                                                        target env load-paths force)))
                                           (format "%s: %s is now executable"
                                                   action target))))))
@@ -220,7 +220,7 @@ bundled modules continue to work."
                                                            (out-name (file-name-nondirectory out)))
                                                       ;; Validate inputs
                                                       (when main
-                                                        (clime-app--validate-symbol main "--main"))
+                                                        (clime-make--validate-symbol main "--main"))
                                                       (dolist (f files)
                                                         (unless (file-exists-p f)
                                                           (signal 'clime-usage-error
@@ -235,7 +235,7 @@ bundled modules continue to work."
                                                         (dolist (f files)
                                                           (insert (format ";; --- %s ---\n"
                                                                           (file-name-nondirectory f)))
-                                                          (insert (clime-app--extract-code (expand-file-name f)))
+                                                          (insert (clime-make--extract-code (expand-file-name f)))
                                                           (insert "\n"))
                                                         ;; Provide
                                                         (insert (format "(provide '%s)\n" feature))
@@ -252,7 +252,7 @@ bundled modules continue to work."
                                                         (write-region nil nil out))
                                                       (format "Wrote %s" out))))))
 
-(clime-run-batch clime-app)
+(clime-run-batch clime-make)
 
-(provide 'clime-app)
-;;; clime-app.el ends here
+(provide 'clime-make)
+;;; clime-make.el ends here

@@ -41,14 +41,14 @@ tests: test
 DIST_DIR ?= dist
 DIST_SRCS = clime-settings.el clime-core.el clime-parse.el \
 	clime-dsl.el clime-help.el clime-output.el clime-run.el clime.el \
-	clime-app.el
+	clime-make.el
 
 dist:
-	@./clime-app.el bundle -o $(DIST_DIR)/clime.el \
-		--provide clime --main clime-app \
+	@./clime-make.el bundle -o $(DIST_DIR)/clime.el \
+		--provide clime --main clime-make \
 		--description "Declarative CLI framework for Emacs Lisp" \
 		$(DIST_SRCS)
-	@./clime-app.el init --standalone --env CLIME_MAIN_APP=clime-app \
+	@./clime-make.el init --standalone --env CLIME_MAIN_APP=clime-make \
 		$(DIST_DIR)/clime.el
 
 readme:
