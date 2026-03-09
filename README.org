@@ -58,11 +58,16 @@ path/to/clime-make.el init greet.el
 ** How the shebang works
 
 ~clime-make.el init~ prepends a polyglot header that's valid as both
-shell script and Elisp:
+shell script and Elisp.  It uses a read/eval loop with explicit
+~lexical-binding~ to work around Emacs not recognizing the cookie on
+polyglot lines:
 
 #+begin_src bash
 #!/bin/sh
-":"; exec emacs --batch -Q -L "/path/to/clime" -l "$0" -- "$@"
+":"; exec emacs --batch -Q -L "/path/to/clime" \
+  --eval "(setq load-file-name \"$0\")" \
+  --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" \
+  -- "$@"
 #+end_src
 
 So ~./myapp.el hello world~ just works from your shell.

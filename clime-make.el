@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" -l "$0" -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime:0.1.1
 ;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -75,11 +75,26 @@ ENV-VARS is a list of \"NAME=VALUE\" strings.
 LOAD-PATHS is a string of formatted -L flags (may be empty).
 Always includes CLIME_ARGV0=\"$0\" so usage output shows the
 executable name rather than the DSL symbol.
-Embeds a clime:VERSION tag for detection and update support."
+Embeds a clime:VERSION tag for detection and update support.
+
+Uses --eval with a read/eval loop instead of -l to force
+`lexical-binding' to t.  The standard polyglot (\":\" on line 2)
+prevents Emacs from recognizing the -*-cookie, so we read forms
+from a temp buffer with lexical-binding set and eval each with
+the lexical flag."
   (let* ((all-vars (cons "CLIME_ARGV0=\"$0\"" (or env-vars '())))
-         (env-prefix (concat (mapconcat #'identity all-vars " ") " ")))
-    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s -l \"$0\" -- \"$@\" # clime:%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
-            env-prefix load-paths clime-version)))
+         (env-prefix (concat (mapconcat #'identity all-vars " ") " "))
+         (eval-form (concat
+                     "--eval \"(setq load-file-name \\\"$0\\\")\""
+                     " --eval \"(with-temp-buffer"
+                     "(insert-file-contents load-file-name)"
+                     "(setq lexical-binding t)"
+                     "(goto-char(point-min))"
+                     "(condition-case nil"
+                     "(while t(eval(read(current-buffer))t))"
+                     "(end-of-file nil)))\"")))
+    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s %s -- \"$@\" # clime:%s\n"
+            env-prefix load-paths eval-form clime-version)))
 
 (defun clime-make--write-shebang (target env-vars load-paths force)
   "Write a shebang to TARGET file, handling existing headers.
