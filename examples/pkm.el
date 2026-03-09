@@ -139,7 +139,8 @@
       :group "Filter")
 
     (clime-option sort ("--sort" "-s")
-      :help "Sort field (name, date, size)"
+      :help "Sort field"
+      :choices '("name" "date" "size")
       :default "name")
 
     (clime-handler (ctx)

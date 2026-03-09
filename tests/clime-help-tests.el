@@ -308,5 +308,27 @@
          (help (clime-format-help app '("t"))))
     (should (string-match-p "https://example.com" help))))
 
+;;; ─── Choices in Help ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/choices-shown-in-help ()
+  "Option with :choices shows allowed values in help text."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices '("json" "table" "csv")
+                                  :help "Output format"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "choices: json, table, csv" help))))
+
+(ert-deftest clime-test-help/choices-arg-shown-in-help ()
+  "Positional arg with :choices shows allowed values in help text."
+  (let* ((arg (clime-make-arg :name 'action
+                               :choices '("start" "stop")
+                               :help "Service action"))
+         (cmd (clime-make-command :name "svc" :handler #'ignore
+                                  :args (list arg)))
+         (help (clime-format-help cmd '("app" "svc"))))
+    (should (string-match-p "choices: start, stop" help))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

@@ -32,6 +32,8 @@
   (env nil :type (or string null) :documentation "Env var name override.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
+  (choices nil :type list :documentation "Allowed values (compared post-coercion).")
+  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
   (group nil :type (or string null) :documentation "Help display group label.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help."))
 
@@ -63,7 +65,9 @@ ARGS is a plist of slot values."
   (help nil :type (or string null) :documentation "One-line help text.")
   (required t :type boolean)
   (default nil :documentation "Default value, or a function for lazy defaults.")
-  (nargs nil :documentation "Arg count: nil=1, integer N, or :rest."))
+  (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
+  (choices nil :type list :documentation "Allowed values (compared post-coercion).")
+  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion."))
 
 (defun clime-make-arg (&rest args)
   "Create a `clime-arg' with validation.

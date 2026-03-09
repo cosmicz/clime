@@ -622,5 +622,194 @@
          (result (clime-parse app '("show" "--count=10"))))
     (should (= (plist-get (clime-parse-result-params result) 'count) 10))))
 
+;;; ─── Choices Validation ──────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/choices-option-valid ()
+  "Option with :choices accepts a valid value."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices '("json" "table" "csv")))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--format" "json"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'format)
+                   "json"))))
+
+(ert-deftest clime-test-parse/choices-option-invalid ()
+  "Option with :choices rejects an invalid value."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices '("json" "table" "csv")))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--format" "xml"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/choices-with-integer-type ()
+  "Choices validation works post-coercion with integer type."
+  (let* ((opt (clime-make-option :name 'level :flags '("--level")
+                                  :type 'integer :choices '(1 2 3)))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--level" "2"))))
+    (should (= (plist-get (clime-parse-result-params result) 'level) 2))))
+
+(ert-deftest clime-test-parse/choices-integer-invalid ()
+  "Choices with integer type rejects values not in set."
+  (let* ((opt (clime-make-option :name 'level :flags '("--level")
+                                  :type 'integer :choices '(1 2 3)))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--level" "5"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/choices-positional-arg ()
+  "Positional arg with :choices validates value."
+  (let* ((arg (clime-make-arg :name 'action :choices '("start" "stop")))
+         (cmd (clime-make-command :name "svc" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "svc" cmd))))
+         (result (clime-parse app '("svc" "start"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'action)
+                   "start"))))
+
+(ert-deftest clime-test-parse/choices-positional-arg-invalid ()
+  "Positional arg with :choices rejects invalid value."
+  (let* ((arg (clime-make-arg :name 'action :choices '("start" "stop")))
+         (cmd (clime-make-command :name "svc" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "svc" cmd)))))
+    (should-error (clime-parse app '("svc" "restart"))
+                  :type 'clime-usage-error)))
+
+;;; ─── Coerce Function ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/coerce-option ()
+  "Option with :coerce applies custom transform."
+  (let* ((opt (clime-make-option :name 'path :flags '("--path")
+                                  :coerce #'expand-file-name))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--path" "~/foo"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'path)
+                   (expand-file-name "~/foo")))))
+
+(ert-deftest clime-test-parse/coerce-positional-arg ()
+  "Positional arg with :coerce applies custom transform."
+  (let* ((arg (clime-make-arg :name 'name :coerce #'upcase))
+         (cmd (clime-make-command :name "greet" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "greet" cmd))))
+         (result (clime-parse app '("greet" "hello"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name)
+                   "HELLO"))))
+
+(ert-deftest clime-test-parse/coerce-with-integer-type ()
+  "Coerce runs after type conversion."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port")
+                                  :type 'integer
+                                  :coerce (lambda (n) (* n 10))))
+         (cmd (clime-make-command :name "serve" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "serve" cmd))))
+         (result (clime-parse app '("serve" "--port" "8"))))
+    (should (= (plist-get (clime-parse-result-params result) 'port) 80))))
+
+(ert-deftest clime-test-parse/choices-and-coerce-combined ()
+  "Choices validates before coerce runs."
+  (let* ((opt (clime-make-option :name 'env :flags '("--env")
+                                  :choices '("dev" "prod")
+                                  :coerce #'upcase))
+         (cmd (clime-make-command :name "deploy" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" cmd))))
+         (result (clime-parse app '("deploy" "--env" "dev"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'env)
+                   "DEV"))))
+
+(ert-deftest clime-test-parse/choices-and-coerce-rejects-invalid ()
+  "Choices rejects before coerce would run."
+  (let* ((opt (clime-make-option :name 'env :flags '("--env")
+                                  :choices '("dev" "prod")
+                                  :coerce #'upcase))
+         (cmd (clime-make-command :name "deploy" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" cmd)))))
+    (should-error (clime-parse app '("deploy" "--env" "staging"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/coerce-multiple-option ()
+  "Coerce applies to each value in a :multiple option."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                  :multiple t :coerce #'upcase))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "dev" "--tag" "ci"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("DEV" "CI")))))
+
+(ert-deftest clime-test-parse/choices-multiple-option ()
+  "Choices validates each value in a :multiple option."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                  :multiple t
+                                  :choices '("dev" "ci" "prod")))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "create" cmd)))))
+    ;; Valid values
+    (let ((result (clime-parse app '("create" "--tag" "dev" "--tag" "ci"))))
+      (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                     '("dev" "ci"))))
+    ;; Invalid value
+    (should-error (clime-parse app '("create" "--tag" "dev" "--tag" "nope"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/choices-equals-syntax ()
+  "Choices works with --flag=value syntax."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices '("json" "csv")))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (let ((result (clime-parse app '("show" "--format=json"))))
+      (should (equal (plist-get (clime-parse-result-params result) 'format)
+                     "json")))
+    (should-error (clime-parse app '("show" "--format=xml"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/choices-error-message-lists-values ()
+  "Choices error message includes allowed values."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices '("json" "csv")))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (condition-case err
+        (progn (clime-parse app '("show" "--format" "xml")) (should nil))
+      (clime-usage-error
+       (let ((msg (cadr err)))
+         (should (string-match-p "json" msg))
+         (should (string-match-p "csv" msg))
+         (should (string-match-p "xml" msg)))))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

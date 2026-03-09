@@ -78,6 +78,21 @@ to the widest entry plus `clime-help--min-gap'."
               parts)))
     (string-join (nreverse parts) " ")))
 
+(defun clime-help--choices-suffix (choices)
+  "Return a choices annotation string, or nil if CHOICES is empty."
+  (when choices
+    (format "(choices: %s)"
+            (mapconcat (lambda (c) (format "%s" c)) choices ", "))))
+
+(defun clime-help--append-choices (help-text choices)
+  "Append choices annotation to HELP-TEXT if CHOICES is non-nil."
+  (let ((suffix (clime-help--choices-suffix choices)))
+    (if suffix
+        (if (and help-text (not (string-empty-p help-text)))
+            (concat help-text " " suffix)
+          suffix)
+      (or help-text ""))))
+
 (defun clime-help--format-arguments (args)
   "Format the Arguments section for ARGS list."
   (let ((visible (cl-remove-if #'null args)))
@@ -85,7 +100,9 @@ to the widest entry plus `clime-help--min-gap'."
       (let ((rows (mapcar
                    (lambda (arg)
                      (let ((name (format "<%s>" (clime-arg-name arg)))
-                           (help (or (clime-arg-help arg) "")))
+                           (help (clime-help--append-choices
+                                  (clime-arg-help arg)
+                                  (clime-arg-choices arg))))
                        (cons name help)))
                    visible)))
         (concat "Arguments:\n" (clime-help--format-table rows))))))
@@ -132,7 +149,9 @@ Respects :group labels and :hidden flags."
                    (rows (mapcar
                           (lambda (opt)
                             (cons (clime-help--format-option-flags opt)
-                                  (or (clime-option-help opt) "")))
+                                  (clime-help--append-choices
+                                   (clime-option-help opt)
+                                   (clime-option-choices opt))))
                           opts))
                    (header (if (string-empty-p grp) "Options:" (format "%s:" grp))))
               (push (concat header "\n" (clime-help--format-table rows)) sections)))

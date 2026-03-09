@@ -105,11 +105,25 @@ FLAG-OR-NAME is used in error messages."
     (_ (signal 'clime-usage-error
                (list (format "Unknown type %s for %s" type flag-or-name))))))
 
+(defun clime--transform-value (value type choices coerce flag-or-name)
+  "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE.
+FLAG-OR-NAME is used in error messages."
+  (let ((result (clime--coerce-value value type flag-or-name)))
+    (when (and choices (not (member result choices)))
+      (signal 'clime-usage-error
+              (list (format "Invalid value \"%s\" for %s (choose from: %s)"
+                            result flag-or-name
+                            (mapconcat (lambda (c) (format "%s" c))
+                                       choices ", ")))))
+    (if coerce (funcall coerce result) result)))
+
 (defun clime--consume-option (opt params token-value)
   "Consume option OPT into PARAMS plist, returning updated plist.
 TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
   (let ((name (clime-option-name opt))
-        (type (clime-option-type opt)))
+        (type (clime-option-type opt))
+        (choices (clime-option-choices opt))
+        (coerce (clime-option-coerce opt)))
     (cond
      ;; Count option: increment
      ((clime-option-count opt)
@@ -120,13 +134,15 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
       (plist-put params name t))
      ;; Multiple: append to list
      ((clime-option-multiple opt)
-      (let* ((coerced (clime--coerce-value token-value type (car (clime-option-flags opt))))
+      (let* ((val (clime--transform-value token-value type choices coerce
+                                          (car (clime-option-flags opt))))
              (current (plist-get params name)))
-        (plist-put params name (append current (list coerced)))))
+        (plist-put params name (append current (list val)))))
      ;; Normal value option
      (t
       (plist-put params name
-                 (clime--coerce-value token-value type (car (clime-option-flags opt))))))))
+                 (clime--transform-value token-value type choices coerce
+                                         (car (clime-option-flags opt))))))))
 
 (defun clime--required-args-satisfied-p (node params)
   "Return non-nil if all required positional args of NODE have values in PARAMS."
@@ -229,21 +245,27 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
            ((clime-option-boolean-p opt)
             (when (clime--parse-boolean-env value env-var)
               (setq params (plist-put params name t))))
-           ;; Multiple option: split on comma, coerce each
+           ;; Multiple option: split on comma, transform each
            ((clime-option-multiple opt)
-            (let ((type (clime-option-type opt)))
+            (let ((type (clime-option-type opt))
+                  (choices (clime-option-choices opt))
+                  (coerce (clime-option-coerce opt)))
               (setq params
                     (plist-put params name
                                (mapcar (lambda (v)
-                                         (clime--coerce-value
-                                          (string-trim v) type env-var))
+                                         (clime--transform-value
+                                          (string-trim v) type choices
+                                          coerce env-var))
                                        (split-string value "," t))))))
            ;; Normal value option
            (t
             (setq params
                   (plist-put params name
-                             (clime--coerce-value
-                              value (clime-option-type opt) env-var)))))))))
+                             (clime--transform-value
+                              value (clime-option-type opt)
+                              (clime-option-choices opt)
+                              (clime-option-coerce opt)
+                              env-var)))))))))
   params)
 
 (defun clime--apply-defaults (nodes params)
@@ -422,9 +444,11 @@ Signal `clime-help-requested' for --help/-h/--version."
                         (setq params (plist-put params (clime-arg-name arg-spec)
                                                (nreverse rest-values))))
                     ;; Normal positional
-                    (let ((coerced (clime--coerce-value
+                    (let ((coerced (clime--transform-value
                                     (clime--resolve-stdin-value token)
                                     (clime-arg-type arg-spec)
+                                    (clime-arg-choices arg-spec)
+                                    (clime-arg-coerce arg-spec)
                                     (format "<%s>" (clime-arg-name arg-spec)))))
                       (setq params (plist-put params (clime-arg-name arg-spec) coerced)))
                     (cl-incf arg-index)
