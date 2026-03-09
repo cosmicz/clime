@@ -138,18 +138,99 @@ process environment."
           (should (string-match-p "FOO=bar" line2))
           (should (string-match-p "BAZ=qux" line2)))))))
 
-(ert-deftest clime-test-integration/init-rejects-existing-shebang ()
-  "clime-app.el init errors on a file that already has a shebang."
+(ert-deftest clime-test-integration/init-includes-version-tag ()
+  "clime-app.el init embeds a clime:VERSION tag in the shebang."
   (clime-test-with-temp-dir
     (let* ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
            (app-file (expand-file-name "test-app.el")))
       (clime-test--write-app-source app-file)
-      ;; First init succeeds
       (clime-test--run-script clime-app (list "init" app-file))
-      ;; Second init should fail
+      (with-temp-buffer
+        (insert-file-contents app-file)
+        (let ((line2 (progn (forward-line 1)
+                            (buffer-substring (point) (line-end-position)))))
+          (should (string-match-p "# clime:[0-9]+\\.[0-9]+\\.[0-9]+" line2)))))))
+
+(ert-deftest clime-test-integration/init-updates-clime-shebang ()
+  "clime-app.el init replaces an existing clime-tagged shebang."
+  (clime-test-with-temp-dir
+    (let* ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; First init
+      (clime-test--run-script clime-app (list "init" app-file))
+      ;; Second init should succeed (update)
+      (let ((result (clime-test--run-script clime-app (list "init" app-file))))
+        (should (= 0 (car result)))
+        (should (string-match-p "updated" (cdr result))))
+      ;; File should still work
+      (let ((result (clime-test--run-script app-file '("hello" "world"))))
+        (should (= 0 (car result)))
+        (should (equal "Hello, world!" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-update-changes-options ()
+  "clime-app.el init update replaces shebang with new options."
+  (clime-test-with-temp-dir
+    (let* ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; First init without env
+      (clime-test--run-script clime-app (list "init" app-file))
+      (with-temp-buffer
+        (insert-file-contents app-file)
+        (should-not (string-match-p "MY_VAR=hello" (buffer-string))))
+      ;; Update with --env
+      (let ((result (clime-test--run-script
+                     clime-app (list "init" "--env" "MY_VAR=hello" app-file))))
+        (should (= 0 (car result)))
+        (should (string-match-p "updated" (cdr result))))
+      ;; Verify env var is now in shebang
+      (with-temp-buffer
+        (insert-file-contents app-file)
+        (should (string-match-p "MY_VAR=hello" (buffer-string)))))))
+
+(ert-deftest clime-test-integration/init-rejects-non-clime-shebang ()
+  "clime-app.el init errors on a file with a non-clime shebang."
+  (clime-test-with-temp-dir
+    (let* ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; Manually prepend a non-clime shebang
+      (let ((original (with-temp-buffer
+                        (insert-file-contents app-file)
+                        (buffer-string))))
+        (with-temp-file app-file
+          (insert "#!/usr/bin/env python\n# not clime\n")
+          (insert original)))
+      ;; Init should fail
       (let ((result (clime-test--run-script clime-app (list "init" app-file))))
         (should (= 2 (car result)))
         (should (string-match-p "already has a shebang" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-force-replaces-non-clime-shebang ()
+  "clime-app.el init --force replaces a non-clime shebang."
+  (clime-test-with-temp-dir
+    (let* ((clime-app (expand-file-name "clime-app.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; Manually add a non-clime shebang
+      (let ((original (with-temp-buffer
+                        (insert-file-contents app-file)
+                        (buffer-string))))
+        (with-temp-file app-file
+          (insert "#!/usr/bin/env python\n# some other header\n")
+          (insert original)))
+      ;; Init --force should succeed
+      (let ((result (clime-test--run-script clime-app
+                                            (list "init" "--force" app-file))))
+        (should (= 0 (car result))))
+      ;; Should have clime shebang now
+      (with-temp-buffer
+        (insert-file-contents app-file)
+        (should (string-prefix-p "#!/bin/sh" (buffer-string)))
+        (let ((line2 (progn (forward-line 1)
+                            (buffer-substring (point) (line-end-position)))))
+          (should (string-match-p "# clime:" line2)))))))
 
 (ert-deftest clime-test-integration/init-rejects-missing-file ()
   "clime-app.el init errors on a nonexistent file."

@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" -l "$0" -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-app.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -55,31 +55,65 @@ Signals `clime-usage-error' if invalid."
     (signal 'clime-usage-error
             (list (format "invalid %s value %S (must be a valid symbol name)" flag name)))))
 
+(defconst clime-app--shebang-tag-re
+  "# clime:[0-9]+\\.[0-9]+\\.[0-9]+"
+  "Regexp matching the clime version tag in a shebang line 2.")
+
+(defun clime-app--clime-shebang-p (file)
+  "Return non-nil if FILE starts with a clime-tagged shebang."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 512)
+    (goto-char (point-min))
+    (and (looking-at "#!")
+         (forward-line 1)
+         (let ((line2 (buffer-substring (point) (line-end-position))))
+           (string-match-p clime-app--shebang-tag-re line2)))))
+
 (defun clime-app--make-shebang (env-vars load-paths)
   "Build a two-line polyglot shebang string.
 ENV-VARS is a list of \"NAME=VALUE\" strings.
 LOAD-PATHS is a string of formatted -L flags (may be empty).
 Always includes CLIME_ARGV0=\"$0\" so usage output shows the
-executable name rather than the DSL symbol."
+executable name rather than the DSL symbol.
+Embeds a clime:VERSION tag for detection and update support."
   (let* ((all-vars (cons "CLIME_ARGV0=\"$0\"" (or env-vars '())))
          (env-prefix (concat (mapconcat #'identity all-vars " ") " ")))
-    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s -l \"$0\" -- \"$@\" # -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
-            env-prefix load-paths)))
+    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s -l \"$0\" -- \"$@\" # clime:%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
+            env-prefix load-paths clime-version)))
 
-(defun clime-app--insert-shebang (target env-vars load-paths)
-  "Prepend a shebang to TARGET file.
-ENV-VARS and LOAD-PATHS are passed to `clime-app--make-shebang'."
-  (let ((shebang (clime-app--make-shebang env-vars load-paths)))
+(defun clime-app--write-shebang (target env-vars load-paths force)
+  "Write a shebang to TARGET file, handling existing headers.
+ENV-VARS and LOAD-PATHS are passed to `clime-app--make-shebang'.
+If TARGET has a clime-tagged shebang, replace it (return \"updated\").
+If TARGET has a non-clime shebang and FORCE is non-nil, replace it.
+If TARGET has a non-clime shebang and FORCE is nil, signal an error.
+If TARGET has no shebang, prepend one (return \"done\")."
+  (let ((shebang (clime-app--make-shebang env-vars load-paths))
+        (action nil))
     (with-temp-buffer
       (insert-file-contents target)
       (goto-char (point-min))
-      (when (looking-at "#!")
-        (signal 'clime-usage-error
-                (list (format "%s already has a shebang line"
-                              (file-name-nondirectory target)))))
-      (insert shebang)
+      (cond
+       ;; Existing shebang
+       ((looking-at "#!")
+        (if (or (clime-app--clime-shebang-p target) force)
+            (progn
+              ;; Delete the two shebang lines
+              (forward-line 2)
+              (delete-region (point-min) (point))
+              (goto-char (point-min))
+              (insert shebang)
+              (setq action "updated"))
+          (signal 'clime-usage-error
+                  (list (format "%s already has a shebang line (use --force to replace)"
+                                (file-name-nondirectory target))))))
+       ;; No shebang: prepend
+       (t
+        (insert shebang)
+        (setq action "done")))
       (write-region nil nil target))
-    (set-file-modes target #o755)))
+    (set-file-modes target #o755)
+    action))
 
 (defun clime-app--extract-code (file)
   "Extract code from FILE using GNU-style library section markers.
@@ -127,11 +161,14 @@ bundled modules continue to work."
             (clime-option standalone ("--standalone") :flag t
                           :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
+            (clime-option force ("--force" "-f") :flag t
+                          :help "Replace an existing non-clime shebang")
+
             (clime-option env ("--env" "-e") :multiple t
                           :help "Set environment variable in shebang (NAME=VALUE)")
 
             (clime-handler (ctx)
-                           (clime-let ctx (file (extras extra-load-path) standalone env)
+                           (clime-let ctx (file (extras extra-load-path) standalone force env)
                                       (let* ((clime-dir (file-name-directory clime-app--self-path))
                                              (target (expand-file-name file))
                                              (load-paths
@@ -150,8 +187,10 @@ bundled modules continue to work."
                                                   (list (format "%s does not exist" file))))
                                         (when env
                                           (clime-app--validate-env-vars env))
-                                        (clime-app--insert-shebang target env load-paths)
-                                        (format "done: %s is now executable" target)))))
+                                        (let ((action (clime-app--write-shebang
+                                                       target env load-paths force)))
+                                          (format "%s: %s is now executable"
+                                                  action target))))))
 
            ;; ── bundle ──────────────────────────────────────────────────────────
            (clime-command bundle
