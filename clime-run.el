@@ -88,6 +88,11 @@ JSON-encoded.  The --json option is auto-injected into the app."
        0)
       (clime-usage-error
        (funcall clime-format-error (cadr err))
+       (let ((err-path (caddr err)))
+         (when err-path
+           (funcall clime-format-error
+                    (format "Try '%s --help' for more information."
+                            (string-join err-path " ")))))
        2)
       (error
        (if debug-on-error

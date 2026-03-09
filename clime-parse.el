@@ -308,6 +308,8 @@ Signal `clime-help-requested' for --help/-h/--version."
         (clime--stdin-app app))
     ;; Set parent refs for direct children (if not already set)
     (clime--set-parent-refs app)
+    (condition-case err
+        (progn
     (while (< i len)
       (let* ((token (nth i argv))
              (child (and (clime-group-only-p current-node)
@@ -424,9 +426,8 @@ Signal `clime-help-requested' for --help/-h/--version."
                (not (clime-app-p current-node))
                (clime-group-children current-node)
                (not (clime-node-handler current-node)))
-      (signal 'clime-usage-error
-              (list (format "Missing subcommand for %s"
-                            (string-join path " ")))))
+      (signal 'clime-help-requested
+              (list :node current-node :path path)))
 
     ;; If we're still at root with children and no subcommand was given
     (when (and (clime-app-p current-node)
@@ -446,7 +447,11 @@ Signal `clime-help-requested' for --help/-h/--version."
      :command (if (clime-command-p current-node) current-node nil)
      :node current-node
      :path path
-     :params params)))
+     :params params))
+      ;; Enrich usage errors with the current parse path for hints
+      (clime-usage-error
+       (signal 'clime-usage-error
+               (list (cadr err) path))))))
 
 ;;; ─── Parent Ref Setup ───────────────────────────────────────────────────
 

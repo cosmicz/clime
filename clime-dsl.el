@@ -32,7 +32,8 @@
 (defun clime--extract-keywords (body valid-keys)
   "Extract keyword args from BODY, returning (KEYWORDS . REST).
 KEYWORDS is a plist of recognized keyword args from VALID-KEYS.
-REST is the remaining non-keyword forms."
+REST is the remaining non-keyword forms.
+Resolves :doc as an alias for :help (error if both are present)."
   (let ((keywords '())
         (rest '())
         (items body))
@@ -44,6 +45,12 @@ REST is the remaining non-keyword forms."
               (setq items (cddr items)))
           (push item rest)
           (setq items (cdr items)))))
+    ;; Resolve :doc → :help alias
+    (when (plist-get keywords :doc)
+      (when (plist-get keywords :help)
+        (error "Cannot use both :doc and :help on the same form"))
+      (setq keywords (plist-put keywords :help (plist-get keywords :doc)))
+      (cl-remf keywords :doc))
     (cons keywords (nreverse rest))))
 
 (defun clime--classify-body (forms)
@@ -104,7 +111,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :aliases :hidden)))
+                     '(:help :doc :aliases :hidden :epilog)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms))
@@ -121,6 +128,8 @@ ARGS is (NAME &rest BODY)."
                 `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
             ,@(when (plist-get keywords :hidden)
                 `(:hidden ,(plist-get keywords :hidden)))
+            ,@(when (plist-get keywords :epilog)
+                `(:epilog ,(plist-get keywords :epilog)))
             ,@(when (plist-get classified :options)
                 `(:options (list ,@(plist-get classified :options))))
             ,@(when (plist-get classified :args)
@@ -133,7 +142,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :aliases :hidden)))
+                     '(:help :doc :aliases :hidden :epilog)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -146,6 +155,8 @@ ARGS is (NAME &rest BODY)."
                 `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
             ,@(when (plist-get keywords :hidden)
                 `(:hidden ,(plist-get keywords :hidden)))
+            ,@(when (plist-get keywords :epilog)
+                `(:epilog ,(plist-get keywords :epilog)))
             ,@(when (plist-get classified :options)
                 `(:options (list ,@(plist-get classified :options))))
             ,@(when (plist-get classified :args)
@@ -178,7 +189,7 @@ Child forms:
   (let* ((name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      body
-                     '(:version :env-prefix :help :json-mode)))
+                     '(:version :env-prefix :help :doc :json-mode :epilog)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -193,6 +204,8 @@ Child forms:
             `(:help ,(plist-get keywords :help)))
         ,@(when (plist-get keywords :json-mode)
             `(:json-mode ,(plist-get keywords :json-mode)))
+        ,@(when (plist-get keywords :epilog)
+            `(:epilog ,(plist-get keywords :epilog)))
         ,@(when (plist-get classified :options)
             `(:options (list ,@(plist-get classified :options))))
         ,@(when (plist-get classified :args)

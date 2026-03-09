@@ -17,6 +17,14 @@
 (require 'cl-lib)
 (require 'clime-core)
 
+;;; ─── Utilities ──────────────────────────────────────────────────────────
+
+(defun clime-help--first-line (text)
+  "Return the first line of TEXT, or TEXT if single-line."
+  (if (and text (string-match "\n" text))
+      (substring text 0 (match-beginning 0))
+    text))
+
 ;;; ─── Column Alignment ─────────────────────────────────────────────────
 
 (defconst clime-help--indent "  "
@@ -140,7 +148,8 @@ Respects :group labels and :hidden flags."
       (let ((rows (mapcar
                    (lambda (entry)
                      (cons (car entry)
-                           (or (clime-node-help (cdr entry)) "")))
+                           (clime-help--first-line
+                            (or (clime-node-help (cdr entry)) ""))))
                    visible)))
         (concat "Commands:\n" (clime-help--format-table rows))))))
 
@@ -166,6 +175,10 @@ Respects :group labels and :hidden flags."
       (let ((cmds-section (clime-help--format-commands (clime-group-children node))))
         (when cmds-section
           (push cmds-section sections))))
+    ;; Epilog
+    (let ((epilog (clime-node-epilog node)))
+      (when (and epilog (not (string-empty-p epilog)))
+        (push epilog sections)))
     (concat (string-join (nreverse sections) "\n\n") "\n")))
 
 (defun clime-format-version (app)

@@ -57,6 +57,10 @@
   :version "0.5.0"
   :help "A package manager for Emacs Lisp projects."
   :json-mode t                                  ; [4] auto-injects --json
+  :epilog "Examples:
+  pkm install foo --tag dev
+  pkm -vv search
+  pkm repo add myrepo https://example.com"
 
   ;; ── Root Options ─────────────────────────────────────────────────────
   ;; [1] Count flag — stackable verbosity (-v, -vv, -vvv)

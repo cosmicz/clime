@@ -85,7 +85,8 @@ ARGS is a plist of slot values."
   (args nil :type list :documentation "Ordered list of `clime-arg' structs.")
   (parent nil :documentation "Parent node ref, or nil for root.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
-  (handler nil :type (or function null) :documentation "Handler function, called with context."))
+  (handler nil :type (or function null) :documentation "Handler function, called with context.")
+  (epilog nil :type (or string null) :documentation "Free-form text appended after auto-generated help."))
 
 ;;; ─── Command ────────────────────────────────────────────────────────────
 

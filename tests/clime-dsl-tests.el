@@ -426,5 +426,56 @@
       (should (equal id "123"))
       (should-not missing))))
 
+;;; ─── :doc Alias ─────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/doc-alias-on-app ()
+  ":doc works as alias for :help on app."
+  (eval '(clime-app clime-test--dsl-doc-app
+           :version "1"
+           :doc "App via doc"
+           (clime-command noop
+             :help "noop"
+             (clime-handler (_ctx) nil)))
+        t)
+  (should (equal (clime-node-help clime-test--dsl-doc-app) "App via doc")))
+
+(ert-deftest clime-test-dsl/doc-alias-on-command ()
+  ":doc works as alias for :help on command."
+  (eval '(clime-app clime-test--dsl-doc-cmd
+           :version "1"
+           (clime-command ping
+             :doc "Ping via doc"
+             (clime-handler (_ctx) "pong")))
+        t)
+  (let* ((children (clime-group-children clime-test--dsl-doc-cmd))
+         (cmd (cdr (assoc "ping" children))))
+    (should (equal (clime-node-help cmd) "Ping via doc"))))
+
+(ert-deftest clime-test-dsl/doc-alias-on-group ()
+  ":doc works as alias for :help on group."
+  (eval '(clime-app clime-test--dsl-doc-grp
+           :version "1"
+           (clime-group stuff
+             :doc "Stuff via doc"
+             (clime-command do-it
+               :help "Do it"
+               (clime-handler (_ctx) nil))))
+        t)
+  (let* ((children (clime-group-children clime-test--dsl-doc-grp))
+         (grp (cdr (assoc "stuff" children))))
+    (should (equal (clime-node-help grp) "Stuff via doc"))))
+
+(ert-deftest clime-test-dsl/doc-and-help-errors ()
+  "Using both :doc and :help on the same form signals an error."
+  (should-error
+   (eval '(clime-app clime-test--dsl-doc-both
+            :version "1"
+            :doc "doc" :help "help"
+            (clime-command noop
+              :help "noop"
+              (clime-handler (_ctx) nil)))
+         t)
+   :type 'error))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

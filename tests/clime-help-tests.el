@@ -255,5 +255,58 @@
     (should (string-match-p "<dst>" help))
     (should (string-match-p "Destination" help))))
 
+;;; ─── Multiline Help ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/multiline-help-first-line-in-listing ()
+  "Commands listing shows only the first line of multiline help."
+  (let* ((cmd (clime-make-command :name "deploy"
+                                  :help "Deploy the application\nUses rsync under the hood."
+                                  :handler #'ignore))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" cmd))))
+         (help (clime-format-help app '("t"))))
+    ;; First line appears in the Commands listing
+    (should (string-match-p "Deploy the application" help))
+    ;; Second line does NOT appear in the listing
+    (should-not (string-match-p "rsync" help))))
+
+(ert-deftest clime-test-help/multiline-help-full-in-detail ()
+  "Detailed command help shows the full multiline help text."
+  (let* ((cmd (clime-make-command :name "deploy"
+                                  :help "Deploy the application\nUses rsync under the hood."
+                                  :handler #'ignore))
+         (help (clime-format-help cmd '("t" "deploy"))))
+    (should (string-match-p "Deploy the application" help))
+    (should (string-match-p "rsync" help))))
+
+;;; ─── Epilog ──────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/epilog-appears-after-sections ()
+  "Epilog text appears at the end of help output."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show things"
+                                  :epilog "Examples:\n  app show 123"))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "Examples:" help))
+    (should (string-match-p "app show 123" help))
+    ;; Epilog should be after the description
+    (should (< (string-match "Show things" help)
+               (string-match "Examples:" help)))))
+
+(ert-deftest clime-test-help/no-epilog-unchanged ()
+  "Help output without epilog is unchanged."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show things"))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should-not (string-match-p "Examples:" help))))
+
+(ert-deftest clime-test-help/app-epilog ()
+  "App-level epilog appears in app help."
+  (let* ((app (clime-make-app :name "t" :version "1"
+                              :help "Test app"
+                              :epilog "See https://example.com for docs."))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "https://example.com" help))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

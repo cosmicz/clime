@@ -379,10 +379,10 @@
                   :type 'clime-usage-error)))
 
 (ert-deftest clime-test-parse/group-missing-subcommand ()
-  "Group without subcommand signals usage error."
+  "Group without subcommand signals help-requested."
   (let ((app (clime-test--group-app)))
     (should-error (clime-parse app '("dep"))
-                  :type 'clime-usage-error)))
+                  :type 'clime-help-requested)))
 
 ;;; ─── Multiple Fixed Positional Args ─────────────────────────────────────
 
