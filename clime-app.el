@@ -111,7 +111,7 @@ bundled modules continue to work."
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
 (clime-app clime-app
-           :version "0.1.0"
+           :version clime-version
            :help "clime — declarative CLI framework for Emacs Lisp."
 
            ;; ── init ─────────────────────────────────────────────────────────────

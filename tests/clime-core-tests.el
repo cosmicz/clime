@@ -319,5 +319,18 @@
     (should (equal (sort (copy-sequence (clime-node-all-ancestor-flags cmd)) #'string<)
                    '("--json" "--verbose")))))
 
+;;; ─── Package Version ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-version/constant-exists ()
+  "clime-version is a non-empty string."
+  (require 'clime)
+  (should (stringp clime-version))
+  (should (> (length clime-version) 0)))
+
+(ert-deftest clime-test-version/matches-semver ()
+  "clime-version looks like a semver string."
+  (require 'clime)
+  (should (string-match-p "^[0-9]+\\.[0-9]+\\.[0-9]" clime-version)))
+
 (provide 'clime-core-tests)
 ;;; clime-core-tests.el ends here
