@@ -11,6 +11,8 @@
 - `clime-version` constant
 - Version-tagged `init` headers with automatic update support
 - Rest args collector recognizes known options (boolean and value)
+- `init --self-dir` adds runtime `$(dirname "$0")` load path to shebang
+- `init --rel-load-path` (`-R`) adds load paths relative to script dir at runtime
 
 ### Fixed
 

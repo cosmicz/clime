@@ -2,7 +2,7 @@ EMACS ?= emacs
 
 BATCH = $(EMACS) --batch -Q -L . -L ./tests
 
-.PHONY: all compile lint test tests dist readme clean help
+.PHONY: all compile lint test tests dist init readme clean help
 
 all: compile
 
@@ -51,6 +51,10 @@ dist:
 	@./clime-make.el init --standalone --env CLIME_MAIN_APP=clime-make \
 		$(DIST_DIR)/clime.el
 
+init:
+	@./clime-make.el init clime-make.el --self-dir --standalone
+	@./clime-make.el init examples/pkm.el -R .. --standalone
+
 readme:
 	@echo "Exporting README.org → README.md..."
 	@$(EMACS) --batch -Q README.org \
@@ -72,6 +76,7 @@ help:
 	@echo "  test     - Run tests (SELECT= to filter)"
 	@echo "  tests    - Alias for 'test'"
 	@echo "  dist     - Build single-file dist/clime.el bundle"
+	@echo "  init     - Update shebangs on executable scripts"
 	@echo "  readme   - Export README.org to README.md"
 	@echo "  clean    - Remove .elc files and build artifacts"
 	@echo "  help     - Show this help message"

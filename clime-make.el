@@ -173,6 +173,12 @@ bundled modules continue to work."
             (clime-option extra-load-path ("--load-path" "-L") :multiple t
                           :help "Additional load paths to include in the shebang")
 
+            (clime-option self-dir ("--self-dir") :flag t
+                          :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
+
+            (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
+                          :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
+
             (clime-option standalone ("--standalone") :flag t
                           :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
@@ -183,20 +189,30 @@ bundled modules continue to work."
                           :help "Set environment variable in shebang (NAME=VALUE)")
 
             (clime-handler (ctx)
-                           (clime-let ctx (file (extras extra-load-path) standalone force env)
+                           (clime-let ctx (file (extras extra-load-path)
+                                                (rels rel-load-path) self-dir standalone force env)
                                       (let* ((clime-dir (file-name-directory clime-make--self-path))
                                              (target (expand-file-name file))
+                                             (self-dir-flag (if self-dir
+                                                                " -L \"$(dirname \"$0\")\""
+                                                              ""))
+                                             (rel-flags
+                                              (if rels
+                                                  (mapconcat (lambda (p)
+                                                               (format " -L \"$(dirname \"$0\")/%s\"" p))
+                                                             rels "")
+                                                ""))
+                                             (extra-flags
+                                              (if extras
+                                                  (mapconcat (lambda (p)
+                                                               (format " -L %S" (expand-file-name p)))
+                                                             extras "")
+                                                ""))
+                                             (clime-flag
+                                              (if standalone ""
+                                                (format " -L %S" clime-dir)))
                                              (load-paths
-                                              (if standalone
-                                                  (if extras
-                                                      (mapconcat (lambda (p)
-                                                                   (format " -L %S" (expand-file-name p)))
-                                                                 extras "")
-                                                    "")
-                                                (mapconcat (lambda (p)
-                                                             (format " -L %S" (expand-file-name p)))
-                                                           (cons clime-dir (or extras '()))
-                                                           ""))))
+                                              (concat self-dir-flag rel-flags clime-flag extra-flags)))
                                         (unless (file-exists-p target)
                                           (signal 'clime-usage-error
                                                   (list (format "%s does not exist" file))))
