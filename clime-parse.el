@@ -324,8 +324,22 @@ Signal `clime-help-requested' for --help/-h/--version."
          ;; 2. Help/version intercept
          ((and option-parsing
                (or (string= token "--help") (string= token "-h")))
-          (signal 'clime-help-requested
-                  (list :node current-node :path path)))
+          ;; Look ahead: resolve remaining tokens as subcommand path
+          (let ((help-node current-node)
+                (help-path (copy-sequence path))
+                (j (1+ i)))
+            (while (< j len)
+              (let* ((next (nth j argv))
+                     (child (and (clime-group-only-p help-node)
+                                 (clime-group-find-child help-node next))))
+                (if child
+                    (progn
+                      (setq help-node child)
+                      (setq help-path (append help-path (list (clime-node-name child))))
+                      (cl-incf j))
+                  (setq j len))))  ;; stop on non-command token
+            (signal 'clime-help-requested
+                    (list :node help-node :path help-path))))
 
          ((and option-parsing
                (string= token "--version")

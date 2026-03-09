@@ -271,6 +271,29 @@
         ;; command-line-args-left should be cleared
         (should (null command-line-args-left))))))
 
+;;; ─── Help Before Subcommand ─────────────────────────────────────────
+
+(ert-deftest clime-test-run/help-before-subcommand ()
+  "--help install shows install help, same as install --help."
+  (clime-test-with-run-output
+    (let ((code (clime-run clime-test--run-app '("--help" "echo"))))
+      (should (= code 0))
+      (should (string-match-p "Echo a message" clime-test--run-output)))))
+
+(ert-deftest clime-test-run/help-before-group-subcommand ()
+  "--help group cmd descends into group then command."
+  (let* ((cmd (clime-make-command :name "add" :handler #'ignore
+                                  :help "Add a dep"))
+         (grp (clime-make-group :name "dep"
+                                :children (list (cons "add" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "dep" grp)))))
+    (clime-test-with-run-output
+      (let ((code (clime-run app '("--help" "dep" "add"))))
+        (should (= code 0))
+        (should (string-match-p "Add a dep" clime-test--run-output))
+        (should (string-match-p "Usage: t dep add" clime-test--run-output))))))
+
 ;;; ─── Missing Subcommand Shows Help ──────────────────────────────────
 
 (ert-deftest clime-test-run/missing-subcommand-shows-help ()
