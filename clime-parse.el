@@ -117,6 +117,57 @@ FLAG-OR-NAME is used in error messages."
                                        choices ", ")))))
     (if coerce (funcall coerce result) result)))
 
+(defun clime--try-consume-option (tok argv i len params option-parsing
+                                      current-node root path)
+  "Try to consume TOK as a known option from ARGV at index I.
+Handles `--', `--help'/`-h', `--flag=value', and single known flags.
+Returns (PARAMS I OPTION-PARSING) if consumed, or nil if TOK is not
+a recognized option.  Signals `clime-help-requested' for help flags.
+LEN is the length of ARGV.  CURRENT-NODE and ROOT define option scope.
+PATH is the command path for help signals."
+  (cond
+   ;; -- disables option parsing
+   ((and option-parsing (string= tok "--"))
+    (list params (1+ i) nil))
+   ;; --help / -h triggers help
+   ((and option-parsing (or (string= tok "--help") (string= tok "-h")))
+    (signal 'clime-help-requested
+            (list :node current-node :path path)))
+   ;; --flag=value syntax with known option
+   ((and option-parsing
+         (clime--option-like-p tok)
+         (clime--split-long-equals tok))
+    (let* ((split (clime--split-long-equals tok))
+           (flag (car split))
+           (value (clime--resolve-stdin-value (cdr split)))
+           (found (clime--find-option-in-scope flag current-node root)))
+      (when found
+        (when (clime-option-boolean-p (car found))
+          (signal 'clime-usage-error
+                  (list (format "Option %s does not take a value" flag))))
+        (list (clime--consume-option (car found) params value)
+              (1+ i)
+              option-parsing))))
+   ;; Known single option
+   ((and option-parsing
+         (clime--option-like-p tok)
+         (clime--find-option-in-scope tok current-node root))
+    (let* ((found (clime--find-option-in-scope tok current-node root))
+           (opt (car found)))
+      (if (clime-option-boolean-p opt)
+          (list (clime--consume-option opt params nil)
+                (1+ i)
+                option-parsing)
+        ;; Value option: consume next token
+        (let ((next-i (1+ i)))
+          (when (>= next-i len)
+            (signal 'clime-usage-error
+                    (list (format "Option %s requires a value" tok))))
+          (list (clime--consume-option opt params
+                                       (clime--resolve-stdin-value (nth next-i argv)))
+                (+ i 2)
+                option-parsing)))))))
+
 (defun clime--consume-option (opt params token-value)
   "Consume option OPT into PARAMS plist, returning updated plist.
 TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
@@ -375,108 +426,45 @@ Signal `clime-help-requested' for --help/-h/--version."
          ((let ((args (clime-node-args current-node)))
             (and (< arg-index (length args))
                  (eq (clime-arg-nargs (nth arg-index args)) :rest)))
-          ;; Fall through to positional handler which enters rest loop
-          (let ((arg-spec (nth arg-index (clime-node-args current-node))))
-            (let ((rest-values '()))
-              (while (< i len)
-                (let ((tok (nth i argv)))
-                  (cond
-                   ;; -- disables option parsing
-                   ((and option-parsing (string= tok "--"))
-                    (setq option-parsing nil)
-                    (cl-incf i))
-                   ;; --help / -h triggers help
-                   ((and option-parsing
-                         (or (string= tok "--help") (string= tok "-h")))
-                    (signal 'clime-help-requested
-                            (list :node current-node :path path)))
-                   ;; --flag=value syntax
-                   ((and option-parsing
-                         (clime--option-like-p tok)
-                         (clime--split-long-equals tok))
-                    (let* ((split (clime--split-long-equals tok))
-                           (flag (car split))
-                           (value (clime--resolve-stdin-value (cdr split)))
-                           (found (clime--find-option-in-scope flag current-node root)))
-                      (if found
-                          (progn
-                            (setq params (clime--consume-option (car found) params value))
-                            (cl-incf i))
-                        ;; Unknown --x=y: collect as rest value
-                        (push (clime--resolve-stdin-value tok) rest-values)
-                        (cl-incf i))))
-                   ;; Known option
-                   ((and option-parsing
-                         (clime--option-like-p tok)
-                         (clime--find-option-in-scope tok current-node root))
-                    (let* ((found (clime--find-option-in-scope tok current-node root))
-                           (opt (car found)))
-                      (if (clime-option-boolean-p opt)
-                          (progn
-                            (setq params (clime--consume-option opt params nil))
-                            (cl-incf i))
-                        ;; Value option: consume next token
-                        (cl-incf i)
-                        (when (>= i len)
-                          (signal 'clime-usage-error
-                                  (list (format "Option %s requires a value" tok))))
-                        (setq params (clime--consume-option
-                                      opt params
-                                      (clime--resolve-stdin-value (nth i argv))))
-                        (cl-incf i))))
-                   ;; Anything else: collect as rest value
-                   (t
-                    (push (clime--resolve-stdin-value tok) rest-values)
-                    (cl-incf i)))))
-              (setq params (plist-put params (clime-arg-name arg-spec)
-                                     (nreverse rest-values))))))
+          (let ((arg-spec (nth arg-index (clime-node-args current-node)))
+                (rest-values '()))
+            (while (< i len)
+              (let* ((tok (nth i argv))
+                     (consumed (clime--try-consume-option
+                                tok argv i len params option-parsing
+                                current-node root path)))
+                (if consumed
+                    (setq params (nth 0 consumed)
+                          i (nth 1 consumed)
+                          option-parsing (nth 2 consumed))
+                  ;; Not a known option: collect as rest value
+                  (push (clime--resolve-stdin-value tok) rest-values)
+                  (cl-incf i))))
+            (setq params (plist-put params (clime-arg-name arg-spec)
+                                   (nreverse rest-values)))))
 
          ;; 4. Option-like token
          ((and option-parsing (clime--option-like-p token))
-          ;; Try --name=value split
-          (if-let* ((split (clime--split-long-equals token)))
-              ;; --name=value form
-              (let* ((flag (car split))
-                     (value (clime--resolve-stdin-value (cdr split)))
-                     (found (clime--find-option-in-scope flag current-node root)))
-                  (unless found
-                    (signal 'clime-usage-error
-                            (list (format "Unknown option %s for %s"
-                                          flag (string-join path " ")))))
-                  (when (clime-option-boolean-p (car found))
-                    (signal 'clime-usage-error
-                            (list (format "Option %s does not take a value" flag))))
-                  (setq params (clime--consume-option (car found) params value))
-                  (cl-incf i))
-              ;; Try short bundle expansion
+          (let ((consumed (clime--try-consume-option
+                           token argv i len params option-parsing
+                           current-node root path)))
+            (if consumed
+                (setq params (nth 0 consumed)
+                      i (nth 1 consumed)
+                      option-parsing (nth 2 consumed))
+              ;; Not a known option — try short bundle, then error
               (if-let* ((bundle (clime--expand-short-bundle token current-node root)))
-                  ;; Expanded bundle: process each flag
                   (progn
                     (dolist (flag bundle)
                       (let ((found (clime--find-option-in-scope flag current-node root)))
                         (setq params (clime--consume-option (car found) params nil))))
                     (cl-incf i))
-                ;; Single flag
-                (let ((found (clime--find-option-in-scope token current-node root)))
-                  (unless found
-                    (signal 'clime-usage-error
-                            (list (format "Unknown option %s for %s"
-                                          token (string-join path " ")))))
-                  (let ((opt (car found)))
-                    (if (clime-option-boolean-p opt)
-                        ;; Boolean: no value consumed
-                        (progn
-                          (setq params (clime--consume-option opt params nil))
-                          (cl-incf i))
-                      ;; Value option: consume next token
-                      (cl-incf i)
-                      (when (>= i len)
-                        (signal 'clime-usage-error
-                                (list (format "Option %s requires a value"
-                                              token))))
-                      (setq params (clime--consume-option opt params
-                                                          (clime--resolve-stdin-value (nth i argv))))
-                      (cl-incf i)))))))
+                ;; Unknown option error (includes --flag=value with unknown flag)
+                (let ((split (clime--split-long-equals token)))
+                  (signal 'clime-usage-error
+                          (list (format "Unknown option %s for %s"
+                                        (if split (car split) token)
+                                        (string-join path " ")))))))))
 
          ;; 4. Try group descent
          (child
