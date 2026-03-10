@@ -358,6 +358,102 @@ process environment."
         (should (= 0 (car result)))
         (should (equal "t:2" (cdr result)))))))
 
+;;; ─── Symlink Resolution ─────────────────────────────────────────────────
+
+(defun clime-test--write-lib-module (file-path feature code)
+  "Write an Elisp library to FILE-PATH with FEATURE and CODE."
+  (with-temp-file file-path
+    (insert (format ";;; %s --- test lib  -*- lexical-binding: t; -*-\n"
+                    (file-name-nondirectory file-path))
+            ";;; Code:\n"
+            code "\n"
+            (format "(provide '%s)\n" feature)
+            (format ";;; %s ends here\n"
+                    (file-name-nondirectory file-path)))))
+
+(ert-deftest clime-test-integration/init-self-dir-resolves-symlinks ()
+  "init --self-dir resolves symlinks so sibling files are found."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (app-dir (expand-file-name "app/"))
+           (link-dir (expand-file-name "links/")))
+      (make-directory app-dir t)
+      (make-directory link-dir t)
+      ;; Write a lib module in app/
+      (clime-test--write-lib-module
+       (expand-file-name "mylib.el" app-dir) 'mylib
+       "(defun mylib-greet (name) (format \"Hello, %s!\" name))")
+      ;; Write an app that requires mylib in app/
+      (with-temp-file (expand-file-name "myapp.el" app-dir)
+        (insert ";;; myapp.el --- test  -*- lexical-binding: t; -*-\n"
+                ";;; Code:\n"
+                "(require 'clime)\n"
+                "(require 'mylib)\n"
+                "(clime-app myapp :version \"1.0\" :help \"Test.\"\n"
+                "  (clime-command greet :help \"Greet\"\n"
+                "    (clime-arg name :help \"Name\")\n"
+                "    (clime-handler (ctx)\n"
+                "      (clime-let ctx (name) (mylib-greet name)))))\n"
+                "(clime-run-batch myapp)\n"
+                "(provide 'myapp)\n"
+                ";;; myapp.el ends here\n"))
+      ;; Init with --self-dir so it finds mylib.el
+      (clime-test--run-script clime-make
+                              (list "init" "--self-dir"
+                                    (expand-file-name "myapp.el" app-dir)))
+      ;; Symlink from a different directory
+      (make-symbolic-link (expand-file-name "myapp.el" app-dir)
+                          (expand-file-name "myapp.el" link-dir))
+      ;; Run via symlink — should resolve to app/ and find mylib
+      (let ((result (clime-test--run-script
+                     (expand-file-name "myapp.el" link-dir)
+                     '("greet" "world"))))
+        (should (= 0 (car result)))
+        (should (equal "Hello, world!" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-rel-load-path-resolves-symlinks ()
+  "init -R resolves symlinks so relative paths work through symlinks."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (project-dir (expand-file-name "project/"))
+           (lib-dir (expand-file-name "project/lib/"))
+           (bin-dir (expand-file-name "project/bin/"))
+           (link-dir (expand-file-name "links/")))
+      (make-directory lib-dir t)
+      (make-directory bin-dir t)
+      (make-directory link-dir t)
+      ;; Write a lib module in project/lib/
+      (clime-test--write-lib-module
+       (expand-file-name "mylib.el" lib-dir) 'mylib
+       "(defun mylib-greet (name) (format \"Hi, %s!\" name))")
+      ;; Write an app in project/bin/ that requires mylib
+      (with-temp-file (expand-file-name "myapp.el" bin-dir)
+        (insert ";;; myapp.el --- test  -*- lexical-binding: t; -*-\n"
+                ";;; Code:\n"
+                "(require 'clime)\n"
+                "(require 'mylib)\n"
+                "(clime-app myapp :version \"1.0\" :help \"Test.\"\n"
+                "  (clime-command greet :help \"Greet\"\n"
+                "    (clime-arg name :help \"Name\")\n"
+                "    (clime-handler (ctx)\n"
+                "      (clime-let ctx (name) (mylib-greet name)))))\n"
+                "(clime-run-batch myapp)\n"
+                "(provide 'myapp)\n"
+                ";;; myapp.el ends here\n"))
+      ;; Init with -R ../lib so it finds mylib relative to script
+      (clime-test--run-script clime-make
+                              (list "init" "-R" "../lib"
+                                    (expand-file-name "myapp.el" bin-dir)))
+      ;; Symlink from a different directory
+      (make-symbolic-link (expand-file-name "myapp.el" bin-dir)
+                          (expand-file-name "myapp.el" link-dir))
+      ;; Run via symlink — should resolve to bin/ and find ../lib/mylib
+      (let ((result (clime-test--run-script
+                     (expand-file-name "myapp.el" link-dir)
+                     '("greet" "world"))))
+        (should (= 0 (car result)))
+        (should (equal "Hi, world!" (cdr result)))))))
+
 ;;; ─── Bundle Command ─────────────────────────────────────────────────────
 
 (defun clime-test--write-module (file-path feature code)

@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; S="$(realpath "$0")";D="$(dirname "$S")"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$D" --eval "(setq load-file-name \"$S\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -79,10 +79,14 @@ or nil if FILE has no clime shebang."
          ((string-match-p "# clime:[0-9]+\\.[0-9]+\\.[0-9]+" line2)
           0))))))
 
-(defun clime-make--make-shebang (env-vars load-paths)
+(defun clime-make--make-shebang (env-vars load-paths resolve)
   "Build a two-line polyglot shebang string.
 ENV-VARS is a list of \"NAME=VALUE\" strings.
 LOAD-PATHS is a string of formatted -L flags (may be empty).
+When RESOLVE is non-nil, prepend symlink resolution via `realpath'
+so relative load paths work through symlink chains.  In this mode,
+load paths should use \"$D\" (resolved dirname) instead of
+\"$(dirname \"$0\")\".
 Always includes CLIME_ARGV0=\"$0\" so usage output shows the
 executable name rather than the DSL symbol.
 Embeds a clime-sh!:vN tag for detection and update support.
@@ -94,8 +98,14 @@ from a temp buffer with lexical-binding set and eval each with
 the lexical flag."
   (let* ((all-vars (cons "CLIME_ARGV0=\"$0\"" (or env-vars '())))
          (env-prefix (concat (mapconcat #'identity all-vars " ") " "))
+         (resolve-prefix (if resolve
+                             "S=\"$(realpath \"$0\")\";D=\"$(dirname \"$S\")\"; "
+                           ""))
+         (load-file-expr (if resolve
+                             "\\\"$S\\\""
+                           "\\\"$0\\\""))
          (eval-form (concat
-                     "--eval \"(setq load-file-name \\\"$0\\\")\""
+                     "--eval \"(setq load-file-name " load-file-expr ")\""
                      " --eval \"(with-temp-buffer"
                      "(insert-file-contents load-file-name)"
                      "(setq lexical-binding t)"
@@ -103,12 +113,12 @@ the lexical flag."
                      "(condition-case nil"
                      "(while t(eval(read(current-buffer))t))"
                      "(end-of-file nil)))\"")))
-    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s %s -- \"$@\" # clime-sh!:v%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
-            env-prefix load-paths eval-form clime-make--shebang-version)))
+    (format "#!/bin/sh\n\":\"; %s%sexec emacs --batch -Q%s %s -- \"$@\" # clime-sh!:v%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
+            resolve-prefix env-prefix load-paths eval-form clime-make--shebang-version)))
 
-(defun clime-make--write-shebang (target env-vars load-paths force)
+(defun clime-make--write-shebang (target env-vars load-paths force &optional resolve)
   "Write a shebang to TARGET file, handling existing headers.
-ENV-VARS and LOAD-PATHS are passed to `clime-make--make-shebang'.
+ENV-VARS, LOAD-PATHS, and RESOLVE are passed to `clime-make--make-shebang'.
 If TARGET has a clime-tagged shebang with a newer format version,
 signal an error (use FORCE to override).
 If TARGET has a clime-tagged shebang at same or older version,
@@ -116,7 +126,7 @@ replace it (return \"updated\").
 If TARGET has a non-clime shebang and FORCE is non-nil, replace it.
 If TARGET has a non-clime shebang and FORCE is nil, signal an error.
 If TARGET has no shebang, prepend one (return \"done\")."
-  (let ((shebang (clime-make--make-shebang env-vars load-paths))
+  (let ((shebang (clime-make--make-shebang env-vars load-paths resolve))
         (action nil))
     (with-temp-buffer
       (insert-file-contents target)
@@ -207,13 +217,12 @@ CTX is the clime context."
                        (rels rel-load-path) self-dir standalone force env)
     (let* ((clime-dir (file-name-directory clime-make--self-path))
            (target (expand-file-name file))
-           (self-dir-flag (if self-dir
-                              " -L \"$(dirname \"$0\")\""
-                            ""))
+           (resolve (or self-dir rels))
+           (self-dir-flag (if self-dir " -L \"$D\"" ""))
            (rel-flags
             (if rels
                 (mapconcat (lambda (p)
-                             (format " -L \"$(dirname \"$0\")/%s\"" p))
+                             (format " -L \"$D/%s\"" p))
                            rels "")
               ""))
            (extra-flags
@@ -232,7 +241,7 @@ CTX is the clime context."
                 (list (format "%s does not exist" file))))
       (when env
         (clime-make--validate-env-vars env))
-      (let ((action (clime-make--write-shebang target env load-paths force)))
+      (let ((action (clime-make--write-shebang target env load-paths force resolve)))
         (format "%s: %s is now executable" action target)))))
 
 (defun clime-make--bundle-handler (ctx)
