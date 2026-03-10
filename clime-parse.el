@@ -579,6 +579,36 @@ since static choices were already validated in pass 1."
                                     (mapconcat (lambda (c) (format "%s" c))
                                                resolved ", ")))))))))))
 
+(defun clime--run-validators (nodes params)
+  "Run :validate functions for options and args in NODES against PARAMS.
+Called in pass 2 after dynamic choices validation.  Skips nil values.
+Wraps errors from validators as `clime-usage-error'."
+  (dolist (node nodes)
+    (dolist (opt (clime-node-options node))
+      (let ((vfn (clime-option-validate opt)))
+        (when vfn
+          (let ((val (plist-get params (clime-option-name opt))))
+            (when val
+              (condition-case err
+                  (funcall vfn val)
+                (error
+                 (signal 'clime-usage-error
+                         (list (format "Invalid value for %s: %s"
+                                       (car (clime-option-flags opt))
+                                       (error-message-string err)))))))))))
+    (dolist (arg (clime-node-args node))
+      (let ((vfn (clime-arg-validate arg)))
+        (when vfn
+          (let ((val (plist-get params (clime-arg-name arg))))
+            (when val
+              (condition-case err
+                  (funcall vfn val)
+                (error
+                 (signal 'clime-usage-error
+                         (list (format "Invalid value for <%s>: %s"
+                                       (clime-arg-name arg)
+                                       (error-message-string err)))))))))))))
+
 (defun clime-parse-finalize (result)
   "Finalize RESULT from pass-1 parse (pass 2).
 Validates dynamic choices, applies env vars, applies defaults,
@@ -591,6 +621,8 @@ and checks required params.  Returns the updated RESULT."
          (root (cl-find-if #'clime-app-p visited-nodes)))
     ;; Validate dynamic choices (functions resolved now, after setup)
     (clime--validate-dynamic-choices visited-nodes params)
+    ;; Run :validate functions (after choices, before env/defaults)
+    (clime--run-validators visited-nodes params)
     ;; Apply env vars, then defaults, then check required
     (setq params (clime--apply-env visited-nodes params root))
     (setq params (clime--apply-defaults visited-nodes params))

@@ -34,6 +34,7 @@
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
   (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
+  (validate nil :type (or function null) :documentation "Pass-2 validator; receives final value, should signal error on failure.")
   (separator nil :type (or string null) :documentation "Split each value by this string; implies :multiple t.")
   (category nil :type (or string null) :documentation "Help display category label.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help."))
@@ -73,7 +74,8 @@ Used for lazy slots like :choices and :default."
   (default nil :documentation "Default value, or a function for lazy defaults.")
   (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
-  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion."))
+  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
+  (validate nil :type (or function null) :documentation "Pass-2 validator; receives final value, should signal error on failure."))
 
 (defun clime-make-arg (&rest args)
   "Create a `clime-arg' with validation.

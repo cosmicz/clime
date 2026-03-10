@@ -1193,5 +1193,83 @@
     (should (equal (clime-parse-result-path result)
                    '("t" "repo" "add")))))
 
+;;; ─── :validate Slot ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/validate-option-pass ()
+  "Option :validate that succeeds does not error."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :validate (lambda (v) (unless (string-match-p "^[0-9]+$" v)
+                                                          (error "Must be numeric")))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--id" "42"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id)
+                   "42"))))
+
+(ert-deftest clime-test-parse/validate-option-fail ()
+  "Option :validate that signals error produces clime-usage-error."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :validate (lambda (v) (unless (string-match-p "^[0-9]+$" v)
+                                                          (error "Must be numeric")))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--id" "abc"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/validate-nil-skipped ()
+  "Option :validate is skipped when value is nil (not supplied)."
+  (let* ((called nil)
+         (opt (clime-make-option :name 'id :flags '("--id")
+                                  :validate (lambda (_v) (setq called t))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (clime-parse app '("show"))
+    (should-not called)))
+
+(ert-deftest clime-test-parse/validate-arg ()
+  "Arg :validate that signals error produces clime-usage-error."
+  (let* ((arg (clime-make-arg :name 'file :required t
+                               :validate (lambda (v) (unless (string-suffix-p ".el" v)
+                                                       (error "Must be an .el file")))))
+         (cmd (clime-make-command :name "load" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "load" cmd)))))
+    (should-error (clime-parse app '("load" "foo.py"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/validate-after-choices ()
+  "Option :validate runs after dynamic :choices validation."
+  (let* ((order '())
+         (opt (clime-make-option :name 'fmt :flags '("--fmt")
+                                  :choices (lambda ()
+                                             (push 'choices order)
+                                             '("json" "csv"))
+                                  :validate (lambda (_v) (push 'validate order))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (clime-parse app '("show" "--fmt" "json"))
+    (should (equal (nreverse order) '(choices validate)))))
+
+(ert-deftest clime-test-parse/validate-multiple-option ()
+  "Option :validate receives the full list for :multiple options."
+  (let* ((received nil)
+         (opt (clime-make-option :name 'tag :flags '("--tag") :multiple t
+                                  :validate (lambda (v) (setq received v))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (clime-parse app '("show" "--tag" "a" "--tag" "b"))
+    (should (equal received '("a" "b")))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here
