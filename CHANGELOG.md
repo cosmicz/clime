@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.2.0)
+## 0.2.0 — 2026-03-10
 
 ### Added
 
@@ -13,6 +13,10 @@
 - `clime-params-plist`: convert context params to keyword plist, eliminating
   `clime-let` + plist reconstruction boilerplate
 - `clime-parse-finalize`: public API for explicit pass-2 control
+
+- `init --self-dir` and `init --rel-load-path` now resolve symlinks at runtime
+  via `realpath`, so relative load paths work correctly when the script is
+  invoked through a symlink
 
 ### Changed
 
