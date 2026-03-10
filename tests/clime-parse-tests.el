@@ -811,6 +811,58 @@
          (should (string-match-p "csv" msg))
          (should (string-match-p "xml" msg)))))))
 
+;;; ─── Lazy Choices (Function) ────────────────────────────────────────
+
+(ert-deftest clime-test-parse/choices-function-option-valid ()
+  "Option with :choices as a function accepts valid values."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices (lambda () '("json" "table" "csv"))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--format" "json"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'format)
+                   "json"))))
+
+(ert-deftest clime-test-parse/choices-function-option-invalid ()
+  "Option with :choices as a function rejects invalid values."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices (lambda () '("json" "table" "csv"))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--format" "xml"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/choices-function-positional-arg ()
+  "Positional arg with :choices as a function validates value."
+  (let* ((arg (clime-make-arg :name 'action
+                               :choices (lambda () '("start" "stop"))))
+         (cmd (clime-make-command :name "svc" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "svc" cmd))))
+         (result (clime-parse app '("svc" "start"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'action)
+                   "start"))))
+
+(ert-deftest clime-test-parse/choices-function-error-lists-values ()
+  "Error message from function choices includes the resolved values."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices (lambda () '("json" "csv"))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (condition-case err
+        (progn (clime-parse app '("show" "--format" "xml")) (should nil))
+      (clime-usage-error
+       (let ((msg (cadr err)))
+         (should (string-match-p "json" msg))
+         (should (string-match-p "csv" msg)))))))
+
 ;;; ─── Rest Args + Known Options ──────────────────────────────────────
 
 (defun clime-test--rest-with-opts-app ()

@@ -32,7 +32,7 @@
   (env nil :type (or string null) :documentation "Env var name override.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
-  (choices nil :type list :documentation "Allowed values (compared post-coercion).")
+  (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
   (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
   (group nil :type (or string null) :documentation "Help display group label.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help."))
@@ -55,6 +55,11 @@ ARGS is a plist of slot values."
       (eq (clime-option-type option) 'boolean)
       (eql (clime-option-nargs option) 0)))
 
+(defun clime--resolve-value (value)
+  "Resolve VALUE, calling it if it is a function.
+Used for lazy slots like :choices and :default."
+  (if (functionp value) (funcall value) value))
+
 ;;; ─── Arg ────────────────────────────────────────────────────────────────
 
 (cl-defstruct (clime-arg (:constructor clime-arg--create)
@@ -66,7 +71,7 @@ ARGS is a plist of slot values."
   (required t :type boolean)
   (default nil :documentation "Default value, or a function for lazy defaults.")
   (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
-  (choices nil :type list :documentation "Allowed values (compared post-coercion).")
+  (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
   (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion."))
 
 (defun clime-make-arg (&rest args)

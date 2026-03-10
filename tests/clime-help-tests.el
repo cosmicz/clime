@@ -330,5 +330,15 @@
          (help (clime-format-help cmd '("app" "svc"))))
     (should (string-match-p "choices: start, stop" help))))
 
+(ert-deftest clime-test-help/choices-function-shown-in-help ()
+  "Option with :choices as a function resolves and shows values in help."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices (lambda () '("json" "table"))
+                                  :help "Output format"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "choices: json, table" help))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

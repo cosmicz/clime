@@ -79,10 +79,12 @@ to the widest entry plus `clime-help--min-gap'."
     (string-join (nreverse parts) " ")))
 
 (defun clime-help--choices-suffix (choices)
-  "Return a choices annotation string, or nil if CHOICES is empty."
-  (when choices
-    (format "(choices: %s)"
-            (mapconcat (lambda (c) (format "%s" c)) choices ", "))))
+  "Return a choices annotation string, or nil if CHOICES is empty.
+CHOICES may be a list or a function returning a list."
+  (let ((resolved (clime--resolve-value choices)))
+    (when resolved
+      (format "(choices: %s)"
+              (mapconcat (lambda (c) (format "%s" c)) resolved ", ")))))
 
 (defun clime-help--append-choices (help-text choices)
   "Append choices annotation to HELP-TEXT if CHOICES is non-nil."

@@ -107,14 +107,16 @@ FLAG-OR-NAME is used in error messages."
 
 (defun clime--transform-value (value type choices coerce flag-or-name)
   "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE.
+CHOICES may be a list or a function returning a list.
 FLAG-OR-NAME is used in error messages."
-  (let ((result (clime--coerce-value value type flag-or-name)))
-    (when (and choices (not (member result choices)))
+  (let* ((result (clime--coerce-value value type flag-or-name))
+         (resolved (clime--resolve-value choices)))
+    (when (and resolved (not (member result resolved)))
       (signal 'clime-usage-error
               (list (format "Invalid value \"%s\" for %s (choose from: %s)"
                             result flag-or-name
                             (mapconcat (lambda (c) (format "%s" c))
-                                       choices ", ")))))
+                                       resolved ", ")))))
     (if coerce (funcall coerce result) result)))
 
 (defun clime--try-consume-option (tok argv i len params option-parsing
@@ -329,18 +331,14 @@ NODES is a list of nodes whose params to process.  Returns updated PARAMS."
           (let ((default (clime-option-default opt)))
             (when default
               (setq params (plist-put params name
-                                      (if (functionp default)
-                                          (funcall default)
-                                        default))))))))
+                                      (clime--resolve-value default))))))))
     (dolist (arg (clime-node-args node))
       (let ((name (clime-arg-name arg)))
         (unless (plist-member params name)
           (let ((default (clime-arg-default arg)))
             (when default
               (setq params (plist-put params name
-                                      (if (functionp default)
-                                          (funcall default)
-                                        default)))))))))
+                                      (clime--resolve-value default)))))))))
   params)
 
 (defun clime--check-required (nodes params path)
