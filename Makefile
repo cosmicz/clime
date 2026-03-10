@@ -6,13 +6,15 @@ BATCH = $(EMACS) --batch -Q -L . -L ./tests
 
 all: compile
 
+SRCS := $(filter-out clime-make-main.el,$(wildcard *.el))
+
 compile:
 	@echo "Compiling clime Elisp files..."
-	@$(BATCH) -f batch-byte-compile *.el
+	@$(BATCH) -f batch-byte-compile $(SRCS)
 
 lint:
 	@echo "Running lint checks..."
-	@$(BATCH) --eval '(require (quote bytecomp))' --eval '(setq byte-compile-error-on-warn t byte-compile-warnings (quote (not docstrings-wide)))' -f batch-byte-compile *.el
+	@$(BATCH) --eval '(require (quote bytecomp))' --eval '(setq byte-compile-error-on-warn t byte-compile-warnings (quote (not docstrings-wide)))' -f batch-byte-compile $(SRCS)
 	@echo "Byte-compile clean."
 	@$(BATCH) --eval '\
 	  (let ((files (directory-files "." t "^clime.*\\.el$$")) \
