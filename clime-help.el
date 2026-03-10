@@ -185,6 +185,29 @@ Default groups are replaced by their children (inlined at parent level)."
                    visible)))
         (concat "Commands:\n" (clime-help--format-table rows))))))
 
+(defun clime-help--collect-ancestor-options (node)
+  "Collect all options from ancestors of NODE.
+Walk the parent chain, gathering each ancestor's non-hidden options.
+Returns a flat list of `clime-option' structs, deduped by flag set."
+  (let ((parent (clime-node-parent node))
+        (seen-flags (make-hash-table :test 'equal))
+        (result '()))
+    ;; Mark current node's flags as seen (so we don't duplicate)
+    (dolist (opt (clime-node-options node))
+      (dolist (flag (clime-option-flags opt))
+        (puthash flag t seen-flags)))
+    ;; Walk ancestors
+    (while parent
+      (dolist (opt (clime-node-options parent))
+        (unless (or (clime-option-hidden opt)
+                    (cl-some (lambda (flag) (gethash flag seen-flags))
+                             (clime-option-flags opt)))
+          (dolist (flag (clime-option-flags opt))
+            (puthash flag t seen-flags))
+          (push opt result)))
+      (setq parent (clime-node-parent parent)))
+    (nreverse result)))
+
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
 (defun clime-format-help (node path)
@@ -202,6 +225,20 @@ Default groups are replaced by their children (inlined at parent level)."
     (let ((opts-section (clime-help--format-options (clime-node-options node))))
       (when opts-section
         (push opts-section sections)))
+    ;; Global Options (inherited from ancestors)
+    (let* ((ancestor-opts (clime-help--collect-ancestor-options node))
+           (global-section (when ancestor-opts
+                             (let ((rows (mapcar
+                                          (lambda (opt)
+                                            (cons (clime-help--format-option-flags opt)
+                                                  (clime-help--append-choices
+                                                   (clime-option-help opt)
+                                                   (clime-option-choices opt))))
+                                          ancestor-opts)))
+                               (concat "Global Options:\n"
+                                       (clime-help--format-table rows))))))
+      (when global-section
+        (push global-section sections)))
     ;; Commands (for groups), inlining default groups
     (when (clime-group-only-p node)
       (let ((cmds-section (clime-help--format-commands

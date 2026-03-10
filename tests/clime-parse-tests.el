@@ -480,20 +480,103 @@
     ;; verbose should NOT be incremented since -v came after --
     (should-not (plist-get (clime-parse-result-params result) 'verbose))))
 
-;;; ─── Group Scope Closure ───────────────────────────────────────────
+;;; ─── Ancestor Option Propagation ────────────────────────────────────
 
-(ert-deftest clime-test-parse/group-option-rejected-after-descent ()
-  "Group-scoped option is rejected after descending into child command."
+(ert-deftest clime-test-parse/group-option-visible-to-child ()
+  "Group option is visible to child commands via ancestor propagation."
   (let* ((grp-opt (clime-make-option :name 'scope :flags '("--scope")))
          (cmd (clime-make-command :name "list" :handler #'ignore))
          (grp (clime-make-group :name "config"
                                 :options (list grp-opt)
                                 :children (list (cons "list" cmd))))
          (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "config" grp)))))
-    ;; --scope after descending into "list" should be unknown
-    (should-error (clime-parse app '("config" "list" "--scope" "local"))
-                  :type 'clime-usage-error)))
+                              :children (list (cons "config" grp))))
+         (result (clime-parse app '("config" "list" "--scope" "local"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'scope)
+                   "local"))))
+
+(ert-deftest clime-test-parse/group-option-before-child ()
+  "Group option works before the child command name."
+  (let* ((grp-opt (clime-make-option :name 'scope :flags '("--scope")))
+         (cmd (clime-make-command :name "list" :handler #'ignore))
+         (grp (clime-make-group :name "config"
+                                :options (list grp-opt)
+                                :children (list (cons "list" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "config" grp))))
+         (result (clime-parse app '("config" "--scope" "local" "list"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'scope)
+                   "local"))))
+
+(ert-deftest clime-test-parse/multi-level-ancestor-propagation ()
+  "Options propagate through multiple group levels."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("-v") :count t))
+         (mid-opt (clime-make-option :name 'env :flags '("--env")))
+         (cmd (clime-make-command :name "start" :handler #'ignore))
+         (inner-grp (clime-make-group :name "svc"
+                                       :children (list (cons "start" cmd))))
+         (outer-grp (clime-make-group :name "deploy"
+                                       :options (list mid-opt)
+                                       :children (list (cons "svc" inner-grp))))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list root-opt)
+                              :children (list (cons "deploy" outer-grp))))
+         (result (clime-parse app '("deploy" "svc" "start" "-v" "--env" "prod"))))
+    (should (= (plist-get (clime-parse-result-params result) 'verbose) 1))
+    (should (equal (plist-get (clime-parse-result-params result) 'env) "prod"))))
+
+(ert-deftest clime-test-parse/ancestor-boolean-option ()
+  "Boolean ancestor option works from a descendant."
+  (let* ((grp-opt (clime-make-option :name 'dry-run :flags '("--dry-run") :nargs 0))
+         (cmd (clime-make-command :name "apply" :handler #'ignore))
+         (grp (clime-make-group :name "config"
+                                :options (list grp-opt)
+                                :children (list (cons "apply" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "config" grp))))
+         (result (clime-parse app '("config" "apply" "--dry-run"))))
+    (should (eq (plist-get (clime-parse-result-params result) 'dry-run) t))))
+
+(ert-deftest clime-test-parse/ancestor-option-with-equals ()
+  "Ancestor option with --flag=value syntax works."
+  (let* ((grp-opt (clime-make-option :name 'env :flags '("--env")))
+         (cmd (clime-make-command :name "run" :handler #'ignore))
+         (grp (clime-make-group :name "deploy"
+                                :options (list grp-opt)
+                                :children (list (cons "run" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" grp))))
+         (result (clime-parse app '("deploy" "run" "--env=staging"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'env)
+                   "staging"))))
+
+(ert-deftest clime-test-parse/ancestor-short-bundle ()
+  "Short flag bundle includes ancestor boolean options."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (grp-opt (clime-make-option :name 'force :flags '("-f") :nargs 0))
+         (cmd (clime-make-command :name "apply" :handler #'ignore))
+         (grp (clime-make-group :name "config"
+                                :options (list grp-opt)
+                                :children (list (cons "apply" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list root-opt)
+                              :children (list (cons "config" grp))))
+         (result (clime-parse app '("config" "apply" "-vf"))))
+    (should (eq (plist-get (clime-parse-result-params result) 'verbose) t))
+    (should (eq (plist-get (clime-parse-result-params result) 'force) t))))
+
+(ert-deftest clime-test-parse/inline-group-option-propagates ()
+  "Inline group options propagate to descendants."
+  (let* ((grp-opt (clime-make-option :name 'env :flags '("--env")))
+         (cmd (clime-make-command :name "start" :handler #'ignore))
+         (grp (clime-make-group :name "svc" :inline t
+                                :options (list grp-opt)
+                                :children (list (cons "start" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "svc" grp))))
+         (result (clime-parse app '("start" "--env" "prod"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'env)
+                   "prod"))))
 
 ;;; ─── Root Global After Deep Descent ────────────────────────────────
 

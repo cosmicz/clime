@@ -368,6 +368,58 @@
     (should (string-match-p "add" help))
     (should-not (string-match-p "secret" help))))
 
+;;; ─── Ancestor Options in Help ────────────────────────────────────────
+
+(ert-deftest clime-test-help/ancestor-options-shown ()
+  "Help for a child command shows inherited ancestor options."
+  (let* ((grp-opt (clime-make-option :name 'env :flags '("--env")
+                                      :help "Target environment"))
+         (cmd (clime-make-command :name "start" :handler #'ignore
+                                  :help "Start the service"))
+         (grp (clime-make-group :name "deploy"
+                                :options (list grp-opt)
+                                :children (list (cons "start" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" grp)))))
+    ;; Need parent refs set for ancestor walk
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help cmd '("t" "deploy" "start"))))
+      (should (string-match-p "--env" help))
+      (should (string-match-p "Target environment" help)))))
+
+(ert-deftest clime-test-help/ancestor-options-separate-section ()
+  "Ancestor options appear under a distinct heading, not mixed with local."
+  (let* ((grp-opt (clime-make-option :name 'env :flags '("--env")
+                                      :help "Target environment"))
+         (cmd-opt (clime-make-option :name 'port :flags '("--port")
+                                      :help "Port number"))
+         (cmd (clime-make-command :name "start" :handler #'ignore
+                                  :options (list cmd-opt)))
+         (grp (clime-make-group :name "deploy"
+                                :options (list grp-opt)
+                                :children (list (cons "start" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" grp)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help cmd '("t" "deploy" "start"))))
+      ;; Local options in Options section
+      (should (string-match-p "--port" help))
+      ;; Ancestor options in a separate section
+      (should (string-match-p "Global Options:" help))
+      (should (string-match-p "--env" help)))))
+
+(ert-deftest clime-test-help/no-ancestor-section-when-empty ()
+  "No Global Options section when the command has no ancestors with options."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list (clime-make-option
+                                                  :name 'json :flags '("--json")
+                                                  :nargs 0 :help "JSON output"))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help cmd '("t" "show"))))
+      (should-not (string-match-p "Global Options:" help)))))
+
 (ert-deftest clime-test-help/choices-function-shown-in-help ()
   "Option with :choices as a function resolves and shows values in help."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")

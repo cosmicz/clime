@@ -52,16 +52,19 @@ Matches anything starting with \"-\" that isn't just \"-\" alone."
         (cons (substring token 0 pos)
               (substring token (1+ pos)))))))
 
-(defun clime--find-option-in-scope (flag current-node root)
-  "Find option matching FLAG, first in CURRENT-NODE then in ROOT.
-Return (OPTION . SCOPE) where SCOPE is \\='current or \\='root, or nil."
+(defun clime--find-option-in-scope (flag current-node _root)
+  "Find option matching FLAG, first in CURRENT-NODE then in ancestors.
+Walk the parent chain from CURRENT-NODE upward.
+Return (OPTION . SCOPE) where SCOPE is \\='current or \\='ancestor, or nil."
   (let ((opt (clime-node-find-option current-node flag)))
     (if opt
         (cons opt 'current)
-      (unless (eq current-node root)
-        (let ((root-opt (clime-node-find-option root flag)))
-          (when root-opt
-            (cons root-opt 'root)))))))
+      (let ((node (clime-node-parent current-node)))
+        (while (and node (not opt))
+          (setq opt (clime-node-find-option node flag))
+          (unless opt (setq node (clime-node-parent node))))
+        (when opt
+          (cons opt 'ancestor))))))
 
 (defun clime--expand-short-bundle (token current-node root)
   "Try to expand TOKEN as a short flag bundle like \"-abc\".

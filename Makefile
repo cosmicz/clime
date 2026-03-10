@@ -2,7 +2,7 @@ EMACS ?= emacs
 
 BATCH = $(EMACS) --batch -Q -L . -L ./tests
 
-.PHONY: all compile lint test tests dist init readme clean help
+.PHONY: all compile lint test tests dist init readme clean clean-elc help
 
 all: compile
 
@@ -32,7 +32,7 @@ lint:
 SELECT ?= ^clime-test-
 SELECTOR ?= $(SELECT)
 
-test:
+test: clean-elc
 	@$(BATCH) -l ./tests/clime-tests-runner.el \
 		--eval '(clime-run-tests-batch "$(SELECTOR)")'
 
@@ -62,9 +62,11 @@ readme:
 		--eval '(org-md-export-to-markdown)'
 	@echo "Done."
 
-clean:
-	@echo "Cleaning up compilation artifacts..."
+clean-elc:
 	@rm -f *.elc tests/*.elc
+
+clean: clean-elc
+	@echo "Cleaning up all build artifacts..."
 	@rm -rf .packages $(DIST_DIR)
 	@echo "Done."
 
