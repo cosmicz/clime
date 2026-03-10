@@ -216,10 +216,12 @@ Options on uncategorized inline groups with no own :category are skipped."
 
 (defun clime-help--format-sections (items)
   "Format ITEMS into interleaved category sections.
-ITEMS is a flat list of (CATEGORY-PATH TYPE ITEM) from `clime-help--collect-items'.
-Groups by category path.  Uncategorized options use \"Options:\",
-uncategorized commands use \"Commands:\".  Sections appear in first-occurrence order.
-:group items with :help render as a description line under the heading."
+ITEMS is a flat list of (CATEGORY-PATH TYPE ITEM) from
+`clime-help--collect-items'.  Groups by category path.
+Uncategorized options use \"Options:\", uncategorized commands
+use \"Commands:\".  Sections appear in first-occurrence order.
+:group items with :help render as a description line under
+the heading."
   (let ((grouped (make-hash-table :test 'equal))
         (order '()))
     ;; Partition items by section key
