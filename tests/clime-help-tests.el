@@ -330,6 +330,29 @@
          (help (clime-format-help cmd '("app" "svc"))))
     (should (string-match-p "choices: start, stop" help))))
 
+(ert-deftest clime-test-help/default-group-inlined ()
+  "Default group's children appear at parent level in help."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :help "Add a thing"))
+         (rm-cmd (clime-make-command :name "remove" :handler #'ignore
+                                      :help "Remove a thing"))
+         (grp (clime-make-group :name "repo" :inline t
+                                :help "Manage repos"
+                                :children (list (cons "add" add-cmd)
+                                                (cons "remove" rm-cmd))))
+         (info-cmd (clime-make-command :name "info" :handler #'ignore
+                                        :help "Show info"))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "repo" grp)
+                                              (cons "info" info-cmd))))
+         (help (clime-format-help app '("myapp"))))
+    ;; Default group's children should appear at top level
+    (should (string-match-p "add" help))
+    (should (string-match-p "remove" help))
+    (should (string-match-p "info" help))
+    ;; The group name itself should not appear as a command
+    (should-not (string-match-p "repo" help))))
+
 (ert-deftest clime-test-help/choices-function-shown-in-help ()
   "Option with :choices as a function resolves and shows values in help."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")

@@ -159,6 +159,17 @@ Respects :group labels and :hidden flags."
               (push (concat header "\n" (clime-help--format-table rows)) sections)))
           (string-join (nreverse sections) "\n\n"))))))
 
+(defun clime-help--effective-children (node)
+  "Return the effective children alist for NODE.
+Default groups are replaced by their children (inlined at parent level)."
+  (cl-mapcan (lambda (entry)
+               (let ((child (cdr entry)))
+                 (if (and (clime-group-p child)
+                          (clime-node-inline child))
+                     (copy-sequence (clime-group-children child))
+                   (list entry))))
+             (clime-group-children node)))
+
 (defun clime-help--format-commands (children)
   "Format the Commands section for CHILDREN alist."
   (let* ((visible (cl-remove-if
@@ -191,9 +202,10 @@ Respects :group labels and :hidden flags."
     (let ((opts-section (clime-help--format-options (clime-node-options node))))
       (when opts-section
         (push opts-section sections)))
-    ;; Commands (for groups)
+    ;; Commands (for groups), inlining default groups
     (when (clime-group-only-p node)
-      (let ((cmds-section (clime-help--format-commands (clime-group-children node))))
+      (let ((cmds-section (clime-help--format-commands
+                           (clime-help--effective-children node))))
         (when cmds-section
           (push cmds-section sections))))
     ;; Epilog

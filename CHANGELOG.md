@@ -14,6 +14,7 @@
 - `init --self-dir` adds runtime `$(dirname "$0")` load path to shebang
 - `init --rel-load-path` (`-R`) adds load paths relative to script dir at runtime
 - `:choices` now accepts a function for lazy evaluation at parse/help time
+- Inline groups (`:inline t`): promote a group's children to parent level for dispatch and help
 
 ### Fixed
 

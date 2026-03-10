@@ -142,7 +142,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :epilog)))
+                     '(:help :doc :aliases :hidden :inline :epilog)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -155,6 +155,8 @@ ARGS is (NAME &rest BODY)."
                 `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
             ,@(when (plist-get keywords :hidden)
                 `(:hidden ,(plist-get keywords :hidden)))
+            ,@(when (plist-get keywords :inline)
+                `(:inline ,(plist-get keywords :inline)))
             ,@(when (plist-get keywords :epilog)
                 `(:epilog ,(plist-get keywords :epilog)))
             ,@(when (plist-get classified :options)

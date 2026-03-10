@@ -94,6 +94,7 @@ ARGS is a plist of slot values."
   (args nil :type list :documentation "Ordered list of `clime-arg' structs.")
   (parent nil :documentation "Parent node ref, or nil for root.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
+  (inline nil :type boolean :documentation "If non-nil, promote children to parent level for dispatch and help.")
   (handler nil :type (or function null) :documentation "Handler function, called with context.")
   (epilog nil :type (or string null) :documentation "Free-form text appended after auto-generated help."))
 
@@ -211,6 +212,7 @@ Return the option struct, or nil if not found."
 
 (defun clime-group-find-child (group name)
   "Find a child node in GROUP by NAME or alias.
+If not found directly, falls through to the default group's children.
 Return the child node, or nil if not found."
   (let ((children (clime-group-children group)))
     (or (cdr (assoc name children))
@@ -218,6 +220,13 @@ Return the child node, or nil if not found."
                    (let ((child (cdr entry)))
                      (when (member name (clime-node-aliases child))
                        child)))
+                 children)
+        ;; Fall through to default group's children
+        (cl-some (lambda (entry)
+                   (let ((child (cdr entry)))
+                     (when (and (clime-group-p child)
+                                (clime-node-inline child))
+                       (clime-group-find-child child name))))
                  children))))
 
 (defun clime-node-all-ancestor-flags (node)

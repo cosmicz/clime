@@ -937,5 +937,56 @@
                    '("arg1")))
     (should (eq (plist-get (clime-parse-result-params result) 'force) t))))
 
+;;; ─── Default Group ──────────────────────────────────────────────────
+
+(defun clime-test--default-group-app ()
+  "Build an app with a default group whose children are promoted."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :args (list (clime-make-arg :name 'name))))
+         (rm-cmd (clime-make-command :name "remove" :handler #'ignore
+                                      :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "add" add-cmd)
+                                                (cons "remove" rm-cmd))))
+         (other-cmd (clime-make-command :name "info" :handler #'ignore)))
+    (clime-make-app :name "t" :version "1"
+                    :children (list (cons "repo" grp)
+                                    (cons "info" other-cmd)))))
+
+(ert-deftest clime-test-parse/default-group-promoted-dispatch ()
+  "Commands in a :default group are accessible at parent level."
+  (let* ((app (clime-test--default-group-app))
+         (result (clime-parse app '("add" "myrepo"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name)
+                   "myrepo"))))
+
+(ert-deftest clime-test-parse/default-group-direct-still-works ()
+  "The group name still works as a prefix."
+  (let* ((app (clime-test--default-group-app))
+         (result (clime-parse app '("repo" "add" "myrepo"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name)
+                   "myrepo"))))
+
+(ert-deftest clime-test-parse/default-group-parent-child-wins ()
+  "Parent's own children take priority over default group's."
+  (let* ((add-cmd (clime-make-command :name "info" :handler #'ignore
+                                       :args (list (clime-make-arg :name 'topic))))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "info" add-cmd))))
+         (parent-info (clime-make-command :name "info" :handler #'ignore))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "repo" grp)
+                                              (cons "info" parent-info))))
+         (result (clime-parse app '("info"))))
+    ;; Should dispatch to parent's info (no args), not repo's info (has topic arg)
+    (should-not (plist-get (clime-parse-result-params result) 'topic))))
+
+(ert-deftest clime-test-parse/default-group-non-default-unaffected ()
+  "Non-default groups don't promote their children."
+  (let* ((app (clime-test--group-app)))
+    ;; "add" without "dep" prefix should fail
+    (should-error (clime-parse app '("add" "foo" "https://example.com"))
+                  :type 'clime-usage-error)))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here
