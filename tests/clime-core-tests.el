@@ -319,6 +319,42 @@
     (should (equal (sort (copy-sequence (clime-node-all-ancestor-flags cmd)) #'string<)
                    '("--json" "--verbose")))))
 
+;;; ─── Params Plist ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-params-plist/all-params ()
+  "Convert all context params to keyword plist."
+  (let* ((ctx (clime-context--create
+               :params '(verbose 3 package "foo" force t))))
+    (should (equal (clime-params-plist ctx)
+                   '(:verbose 3 :package "foo" :force t)))))
+
+(ert-deftest clime-test-params-plist/filtered ()
+  "Convert only named params to keyword plist, omitting nil."
+  (let* ((ctx (clime-context--create
+               :params '(verbose 3 package "foo" force nil quiet nil))))
+    (should (equal (clime-params-plist ctx 'package 'verbose)
+                   '(:package "foo" :verbose 3)))))
+
+(ert-deftest clime-test-params-plist/filtered-omits-nil ()
+  "Filtered form omits params with nil values."
+  (let* ((ctx (clime-context--create
+               :params '(verbose nil force nil package "foo"))))
+    (should (equal (clime-params-plist ctx 'verbose 'force 'package)
+                   '(:package "foo")))))
+
+(ert-deftest clime-test-params-plist/empty-params ()
+  "Empty params returns nil."
+  (let* ((ctx (clime-context--create :params nil)))
+    (should (null (clime-params-plist ctx)))
+    (should (null (clime-params-plist ctx 'foo)))))
+
+(ert-deftest clime-test-params-plist/count-and-multiple ()
+  "Works with count values and multiple (list) values."
+  (let* ((ctx (clime-context--create
+               :params '(verbose 3 tag ("dev" "test")))))
+    (should (equal (clime-params-plist ctx)
+                   '(:verbose 3 :tag ("dev" "test"))))))
+
 ;;; ─── Package Version ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-version/constant-exists ()

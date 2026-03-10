@@ -201,6 +201,23 @@ Example:
                    bindings)
        ,@body)))
 
+(defun clime-params-plist (ctx &rest names)
+  "Return keyword plist from CTX params.
+With NAMES, include only those params (omitting nil values);
+otherwise include all params as-is."
+  (let ((params (clime-context-params ctx))
+        (result '()))
+    (if names
+        (dolist (name names)
+          (let ((val (plist-get params name)))
+            (when val
+              (push (intern (format ":%s" name)) result)
+              (push val result))))
+      (cl-loop for (key val) on params by #'cddr
+               do (push (intern (format ":%s" key)) result)
+                  (push val result)))
+    (nreverse result)))
+
 ;;; ─── Tree Queries ───────────────────────────────────────────────────────
 
 (defun clime-node-find-option (node flag)
