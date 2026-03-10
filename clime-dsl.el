@@ -84,6 +84,10 @@ Supports :flag t as shorthand for :nargs 0 (boolean flag)."
     (when (plist-get plist :flag)
       (setq plist (plist-put (cl-copy-list plist) :nargs 0))
       (cl-remf plist :flag))
+    ;; :separator implies :multiple t
+    (when (and (plist-get plist :separator)
+               (not (plist-member plist :multiple)))
+      (setq plist (plist-put (cl-copy-list plist) :multiple t)))
     `(clime-make-option :name ',name :flags ',flags ,@plist)))
 
 (defun clime--build-arg (args)

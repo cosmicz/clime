@@ -160,6 +160,89 @@
     (should (equal (plist-get (clime-parse-result-params result) 'tag)
                    '("a" "b")))))
 
+;;; ─── Separator Options ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/separator-single-value ()
+  "Separator option with comma-separated values splits into a list."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag" "-t")
+                                 :separator "," :multiple t))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "a,b,c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+(ert-deftest clime-test-parse/separator-repeated-flags ()
+  "Separator option with repeated flags flattens all values."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag" "-t")
+                                 :separator "," :multiple t))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "a" "--tag" "b,c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+(ert-deftest clime-test-parse/separator-no-split-without-separator ()
+  "Multiple option without separator does not split on commas."
+  (let* ((app (clime-test--multi-opt-app))
+         (result (clime-parse app '("create" "--tag" "a,b"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a,b")))))
+
+(ert-deftest clime-test-parse/separator-with-choices ()
+  "Separator option validates each element against choices."
+  (let* ((opt (clime-make-option :name 'status :flags '("--status")
+                                 :separator "," :multiple t
+                                 :choices '("TODO" "ON" "DONE")))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "list" cmd))))
+         (result (clime-parse app '("list" "--status" "TODO,ON"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'status)
+                   '("TODO" "ON")))))
+
+(ert-deftest clime-test-parse/separator-choices-rejects-invalid ()
+  "Separator option rejects invalid elements against choices."
+  (let* ((opt (clime-make-option :name 'status :flags '("--status")
+                                 :separator "," :multiple t
+                                 :choices '("TODO" "ON" "DONE")))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "list" cmd)))))
+    (should-error (clime-parse app '("list" "--status" "TODO,BOGUS"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/separator-with-coerce ()
+  "Separator option applies coerce to each element."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :separator "," :multiple t
+                                 :coerce #'upcase))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "dev,ci"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("DEV" "CI")))))
+
+(ert-deftest clime-test-parse/separator-empty-segments-filtered ()
+  "Empty segments from splitting are filtered out."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :separator "," :multiple t))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "a,,b"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b")))))
+
 ;;; ─── Positional Args ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-parse/positional-arg ()

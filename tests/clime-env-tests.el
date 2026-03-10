@@ -209,6 +209,19 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
       (should (equal (plist-get (clime-parse-result-params result) 'tag)
                      '("dev" "prod" "test"))))))
 
+(ert-deftest clime-test-env/separator-option-env ()
+  "Separator option splits env var on separator, not comma."
+  (clime-test-with-env (("MYAPP_TAG" "dev:prod:test"))
+    (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                   :multiple t :separator ":"))
+           (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                    :options (list opt)))
+           (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
+                                :children (list (cons "cmd" cmd))))
+           (result (clime-parse app '("cmd"))))
+      (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                     '("dev" "prod" "test"))))))
+
 ;;; ─── Edge cases ────────────────────────────────────────────────────────
 
 (ert-deftest clime-test-env/empty-env-var-ignored ()

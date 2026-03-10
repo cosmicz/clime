@@ -194,12 +194,18 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
      ;; Boolean (non-count): set t
      ((clime-option-boolean-p opt)
       (plist-put params name t))
-     ;; Multiple: append to list
+     ;; Multiple: append to list (split by separator if set)
      ((clime-option-multiple opt)
-      (let* ((val (clime--transform-value token-value type choices coerce
-                                          (car (clime-option-flags opt))))
+      (let* ((sep (clime-option-separator opt))
+             (raw-vals (if sep
+                          (split-string token-value sep t)
+                        (list token-value)))
+             (flag (car (clime-option-flags opt)))
+             (vals (mapcar (lambda (v)
+                             (clime--transform-value v type choices coerce flag))
+                           raw-vals))
              (current (plist-get params name)))
-        (plist-put params name (append current (list val)))))
+        (plist-put params name (append current vals))))
      ;; Normal value option
      (t
       (plist-put params name
@@ -307,18 +313,19 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
            ((clime-option-boolean-p opt)
             (when (clime--parse-boolean-env value env-var)
               (setq params (plist-put params name t))))
-           ;; Multiple option: split on comma, transform each
+           ;; Multiple option: split on separator (or comma), transform each
            ((clime-option-multiple opt)
             (let ((type (clime-option-type opt))
                   (choices (clime-option-choices opt))
-                  (coerce (clime-option-coerce opt)))
+                  (coerce (clime-option-coerce opt))
+                  (sep (or (clime-option-separator opt) ",")))
               (setq params
                     (plist-put params name
                                (mapcar (lambda (v)
                                          (clime--transform-value
                                           (string-trim v) type choices
                                           coerce env-var))
-                                       (split-string value "," t))))))
+                                       (split-string value sep t))))))
            ;; Normal value option
            (t
             (setq params
