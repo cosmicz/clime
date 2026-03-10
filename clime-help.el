@@ -395,6 +395,11 @@ Returns a flat list of `clime-option' structs, deduped by flag set."
     (let ((epilog (clime-node-epilog node)))
       (when (and epilog (not (string-empty-p epilog)))
         (push epilog sections)))
+    ;; Command help footer
+    (when (and (clime-branch-p node) (clime-group-children node))
+      (push (format "Run \"%s COMMAND --help\" for more information on a command."
+                    (string-join path " "))
+            sections))
     (concat (string-join (nreverse sections) "\n\n") "\n")))
 
 (defun clime-format-version (app)

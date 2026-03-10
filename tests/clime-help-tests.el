@@ -874,5 +874,49 @@ into one section with indented sub-headings."
       (should (string-match-p "^Options:" help))
       (should (string-match-p "^Commands:" help)))))
 
+;;; ─── Command Footer ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/footer-shown-for-group ()
+  "Branch nodes with children show a command help footer."
+  (let ((help (clime-format-help clime-test--help-app '("myapp"))))
+    (should (string-match-p
+             "Run \"myapp COMMAND --help\" for more information on a command\\."
+             help))))
+
+(ert-deftest clime-test-help/footer-not-shown-for-leaf ()
+  "Leaf commands do not show a command help footer."
+  (let ((help (clime-format-help clime-test--help-cmd '("myapp" "show"))))
+    (should-not (string-match-p "for more information on a command" help))))
+
+(ert-deftest clime-test-help/footer-nested-group-path ()
+  "Nested group footer uses full path."
+  (let* ((cmd (clime-make-command :name "keys" :handler #'ignore
+                                   :help "Manage keys"))
+         (grp (clime-make-group :name "config" :help "Config management"
+                                 :children (list (cons "keys" cmd))))
+         (app (clime-make-app :name "myapp" :version "1"
+                               :children (list (cons "config" grp)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help grp '("myapp" "config"))))
+      (should (string-match-p
+               "Run \"myapp config COMMAND --help\" for more information"
+               help)))))
+
+(ert-deftest clime-test-help/footer-after-epilog ()
+  "Footer appears after epilog text."
+  (let* ((cmd (clime-make-command :name "sub" :handler #'ignore
+                                   :help "A sub"))
+         (app (clime-make-app :name "myapp" :version "1"
+                               :epilog "See https://example.com"
+                               :children (list (cons "sub" cmd)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help app '("myapp"))))
+      (should (string-match-p "See https://example\\.com" help))
+      (should (string-match-p "for more information on a command" help))
+      ;; Footer comes after epilog
+      (let ((epilog-pos (string-match "See https://example\\.com" help))
+            (footer-pos (string-match "for more information" help)))
+        (should (> footer-pos epilog-pos))))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here
