@@ -57,18 +57,33 @@ path/to/clime-make.el init greet.el
 
 ** How the shebang works
 
-~clime-make.el init~ prepends a polyglot header that's valid as both
-shell script and Elisp.  It uses a read/eval loop with explicit
-~lexical-binding~ to work around Emacs not recognizing the cookie on
-polyglot lines:
+~clime-make.el init~ prepends a two-line polyglot header that's valid as
+both shell script and Elisp:
 
 #+begin_src bash
 #!/bin/sh
-":"; exec emacs --batch -Q -L "/path/to/clime" \
+":"; CLIME_ARGV0="$0" exec emacs --batch -Q \
+  -L "$(dirname "$0")" \
   --eval "(setq load-file-name \"$0\")" \
-  --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" \
-  -- "$@"
+  --eval "(with-temp-buffer \
+    (insert-file-contents load-file-name) \
+    (setq lexical-binding t) \
+    (goto-char(point-min)) \
+    (condition-case nil \
+      (while t(eval(read(current-buffer))t)) \
+      (end-of-file nil)))" \
+  -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 #+end_src
+
+Line 2 is both a shell no-op (~":"~) and the Emacs invocation.  It uses
+a read/eval loop that explicitly sets ~lexical-binding~ to ~t~, since
+the ~":"~ prefix on line 2 prevents Emacs from recognizing the ~-*-~
+cookie during normal file loading.  The cookie is still useful: editors
+use it to detect the major mode when opening the file for editing.
+
+The ~# clime-sh!:vN~ tag lets ~init~ detect and update existing
+shebangs without clobbering newer formats.  ~CLIME_ARGV0~ preserves
+the original script name for usage output.
 
 So ~./myapp.el hello world~ just works from your shell.
 
@@ -90,11 +105,14 @@ So ~./myapp.el hello world~ just works from your shell.
 - Stdin via ~-~ sentinel
 - JSON output mode (~:json-mode t~)
 - Epilog text for extra help content
-- Option groups in help output
+- Category sections in help output (options, commands, inline groups)
 - Rest args (~:nargs :rest~)
 - Invocable groups (group with its own handler)
 - Inline groups (~:inline t~) --- promote children to parent level
 - Lazy choices (~:choices~ accepts a function)
+- Ancestor option propagation --- group options available to all descendants
+- Setup hook (~:setup~) with two-pass parse for config loading
+- ~clime-params-plist~ --- convert context params to keyword plist
 - Single-file distribution via ~bundle~ command
 
 ** Options
@@ -406,22 +424,142 @@ When ~--json~ is set, handler return values are encoded as JSON:
 ./myapp.el show --json 123
 #+end_src
 
-** Option groups in help
+** Categories in help
 
-Group related options under a heading in ~--help~ output:
+Use ~:category~ on options, commands, or inline groups to organize
+~--help~ into named sections.  Items sharing a category appear under
+one heading; uncategorized items fall back to "Options:" or "Commands:".
+
+Options with ~:category~:
 
 #+begin_src emacs-lisp
 (clime-option author ("--author" "-a")
   :help "Filter by author"
-  :group "Filter")
+  :category "Filter")
 
 (clime-option since ("--since")
   :help "Only after DATE"
-  :group "Filter")
+  :category "Filter")
 #+end_src
 
-These appear under a "Filter:" section in help instead of the
-default "Options:" section.
+These appear under a "Filter:" section instead of "Options:".
+
+Commands with ~:category~:
+
+#+begin_src emacs-lisp
+(clime-command search
+  :help "Search items" :category "Filter")
+(clime-command list
+  :help "List items" :category "Filter")
+(clime-command show
+  :help "Show details")   ;; uncategorized → "Commands:"
+#+end_src
+
+Options and commands with the same ~:category~ share a section.
+
+Inline groups with ~:category~ apply it to all their children and
+options:
+
+#+begin_src emacs-lisp
+(clime-group admin
+  :inline t :category "Admin"
+  :help "Administrative commands"
+
+  (clime-option admin-token ("--admin-token")
+    :help "Admin API token")
+
+  (clime-command status
+    :help "Show system status"))
+#+end_src
+
+This renders as:
+
+#+begin_example
+Admin:
+  Administrative commands
+
+  --admin-token VALUE    Admin API token
+  status                 Show system status
+#+end_example
+
+Nested inline groups compose category paths --- an inner group with
+~:category "Config"~ inside an outer ~:category "Admin"~ produces
+"Admin / Config:" in help.
+
+** Ancestor option propagation
+
+Options declared at any level are automatically available to all
+descendants.  A ~--verbose~ flag on the app or on a group can be used
+from any child command:
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+
+  (clime-option verbose ("-v" "--verbose") :count t
+    :help "Increase verbosity")
+
+  (clime-group repo
+    :help "Manage repositories"
+    (clime-option registry ("--registry") :help "Registry URL")
+
+    (clime-command add
+      :help "Add a repo"
+      (clime-arg name :help "Repo name")
+      ;; Handler can access verbose (from app) and registry (from group)
+      (clime-handler (ctx)
+        (clime-let ctx (name verbose registry)
+          (format "Adding %s (verbose=%s, registry=%s)" name verbose registry))))))
+#+end_src
+
+In ~--help~, inherited options appear in a separate "Global Options:"
+section.
+
+** Setup hook
+
+The ~:setup~ hook runs after pass-1 parsing (all values extracted from
+argv) but before pass-2 finalization (dynamic ~:choices~ validation,
+env vars, defaults).  This lets apps load configuration that influences
+dynamic option values:
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+  :env-prefix "MYAPP"
+  :setup (lambda (app result)
+           (let ((dir (plist-get (clime-parse-result-params result) 'config-dir)))
+             (my-load-config (or dir "~/.myapp"))))
+
+  (clime-option config-dir ("--config-dir")
+    :help "Config directory")
+
+  (clime-option level ("--level")
+    :help "Log level"
+    :choices #'my-configured-levels)  ; resolved after setup
+
+  (clime-command run
+    :help "Run the app"
+    (clime-handler (ctx) "running")))
+#+end_src
+
+Static ~:choices~ (literal lists) are validated immediately in pass 1.
+Dynamic ~:choices~ (functions) are deferred to pass 2 after the setup
+hook has run.
+
+** ~clime-params-plist~
+
+Convert context params to a keyword plist, useful for passing parsed
+values to other functions:
+
+#+begin_src emacs-lisp
+(clime-handler (ctx)
+  ;; All params as keyword plist
+  (my-function (clime-params-plist ctx))
+  ;; => (:verbose 3 :package "foo" :force t)
+
+  ;; Selected params only (nil values omitted)
+  (my-other-function (clime-params-plist ctx 'package 'force)))
+#+end_src
 
 ** Stdin
 
@@ -455,10 +593,10 @@ listings, and shown in full in detailed command help.
 
 | Macro            | Purpose                            | Key arguments                                                             |
 |------------------+------------------------------------+---------------------------------------------------------------------------|
-| ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~              |
-| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:epilog~                                |
-| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:inline~, ~:epilog~                     |
-| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:env~   |
+| ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~, ~:setup~   |
+| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:epilog~, ~:category~                   |
+| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:inline~, ~:epilog~, ~:category~        |
+| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:env~, ~:category~ |
 | ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:default~, ~:help~            |
 | ~clime-handler~  | Attach a handler to a command      | ~(ctx)~ --- receives the parse context                                   |
 | ~clime-let~      | Destructure context in a handler   | ~ctx (var1 var2 ...)~ --- binds option/arg values                        |
@@ -471,40 +609,132 @@ See =examples/pkm.el= for a comprehensive demo covering all major features.
 
 * Bundling & Distribution
 
-~clime-make.el~ provides two commands for distribution:
+~clime-make.el~ provides two commands: ~init~ (make a script
+executable) and ~bundle~ (combine files into one).
 
-*~bundle~* --- concatenate source files into a single =.el=:
+** Making a script executable (~init~)
+
+For a single-file app that lives alongside clime:
 
 #+begin_src bash
-./clime-make.el bundle -o dist/myapp.el \
-    --provide myapp --main myapp \
-    src/myapp-core.el src/myapp-commands.el src/myapp.el
+./clime-make.el init myapp.el
+./myapp.el --help
 #+end_src
 
-With ~--main~, the bundle works as both a library (~require 'myapp~)
-and a standalone CLI.
+~init~ prepends a polyglot shebang, sets the executable bit, and adds
+~-L~ flags so Emacs can find clime at runtime.
 
-*~init~* --- add a shebang to make any =.el= file executable:
+Common options:
 
 #+begin_src bash
+# Script in a subdirectory that needs the parent on the load path
+./clime-make.el init -R .. examples/myapp.el
+
+# Script's own dir on the load path (for local requires)
+./clime-make.el init --self-dir myapp.el
+
+# Bundled/vendored app that doesn't need the clime load path
+./clime-make.el init --standalone --self-dir dist/myapp.el
+
+# Set env vars in the shebang
 ./clime-make.el init --env CLIME_MAIN_APP=myapp dist/myapp.el
 #+end_src
 
-For dual-use bundles, pass ~--env CLIME_MAIN_APP=<app>~ so the entry
-point only activates when run directly (not when loaded as a library).
+Re-running ~init~ on a file that already has a clime shebang updates
+it in place.  ~init~ refuses to overwrite a non-clime shebang (use
+~--force~) or to downgrade a newer shebang format version.
 
-~init~ supports runtime load-path options for scripts that live
-alongside their dependencies:
+** Building a single-file distribution (~bundle~)
+
+For multi-file projects, ~bundle~ concatenates source files into one:
 
 #+begin_src bash
-# Add script's own directory to load path
-./clime-make.el init --self-dir myapp.el
+./clime-make.el bundle -o dist/myapp.el \
+    --provide myapp \
+    src/myapp-core.el src/myapp-commands.el src/myapp.el
+#+end_src
 
-# Add a path relative to the script's directory
-./clime-make.el init -R .. examples/myapp.el
+The output provides the feature (~'myapp~) and can be used as a
+library via ~(require 'myapp)~.
 
-# Standalone (no clime load path)
-./clime-make.el init --standalone --self-dir myapp.el
+*** Adding an entrypoint (~--main~)
+
+To make the bundle also work as a standalone CLI, pass ~--main~:
+
+#+begin_src bash
+./clime-make.el bundle -o dist/myapp.el \
+    --provide myapp --main myapp-main.el \
+    src/myapp-core.el src/myapp-commands.el src/myapp.el
+
+./clime-make.el init --standalone --self-dir \
+    --env CLIME_MAIN_APP=myapp dist/myapp.el
+#+end_src
+
+The main file is a short script --- it requires the app and runs it:
+
+#+begin_src emacs-lisp
+;;; myapp-main.el --- Entrypoint for myapp  -*- lexical-binding: t; -*-
+;;; Code:
+(require 'myapp)
+(clime-run-batch myapp)
+;;; myapp-main.el ends here
+#+end_src
+
+Its code is wrapped in a ~clime-main-script-p~ guard inside the
+bundle, so it only executes when ~CLIME_MAIN_APP~ matches the feature
+name --- not when loaded as a library.  The ~--main~ file must /not/
+contain an =;;; Entrypoint:= marker.
+
+*** Entrypoint markers in source files
+
+Source files can contain an =;;; Entrypoint:= section that separates
+library code from standalone entrypoint code:
+
+#+begin_src emacs-lisp
+;;; myapp.el --- My app  -*- lexical-binding: t; -*-
+;;; Code:
+(require 'clime)
+(clime-app myapp :version "1.0" ...)
+(provide 'myapp)
+;;; Entrypoint:
+(clime-run-batch myapp)
+;;; myapp.el ends here
+#+end_src
+
+The bundler extracts only the library section (=;;; Code:= to
+=;;; Entrypoint:=), stripping the entrypoint automatically.  This lets
+each source file run standalone during development while bundling
+cleanly.  Files without the marker are extracted up to
+=;;; ... ends here= as usual.
+
+If ~(clime-run-batch ...)~ appears in a source file's library section
+(above the marker or without one), ~bundle~ signals an error --- move
+it below =;;; Entrypoint:=.
+
+*** Typical project layout
+
+#+begin_example
+myapp/
+  vendor/clime/          # clime source (git clone or submodule)
+  src/
+    myapp-core.el        # library code
+    myapp-commands.el    # commands
+    myapp.el             # app definition + (provide 'myapp)
+  myapp-main.el          # standalone entrypoint
+  dist/
+    myapp.el             # bundled output (single file)
+  Makefile
+#+end_example
+
+A minimal Makefile:
+
+#+begin_src makefile
+CLIME := vendor/clime/clime-make.el
+SRCS  := src/myapp-core.el src/myapp-commands.el src/myapp.el
+
+dist/myapp.el: $(SRCS) myapp-main.el
+	$(CLIME) bundle -o $@ --provide myapp --main myapp-main.el $(SRCS)
+	$(CLIME) init --standalone --self-dir --env CLIME_MAIN_APP=myapp $@
 #+end_src
 
 * Installation

@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; S="$(realpath "$0")";D="$(dirname "$S")"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$D" --eval "(setq load-file-name \"$S\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -35,10 +35,6 @@
   "\\`[A-Za-z_][A-Za-z0-9_]*=[-./:@A-Za-z0-9_]*\\'"
   "Regexp matching safe NAME=VALUE env var assignments for shebang.")
 
-(defconst clime-make--symbol-re
-  "\\`[[:alpha:]_][[:alnum:]_:+*/<>=!?-]*\\'"
-  "Regexp matching safe Elisp symbol names.")
-
 (defun clime-make--validate-env-vars (env-vars)
   "Validate each entry in ENV-VARS matches safe NAME=VALUE format.
 Signals `clime-usage-error' on the first invalid entry."
@@ -47,17 +43,15 @@ Signals `clime-usage-error' on the first invalid entry."
       (signal 'clime-usage-error
               (list (format "invalid --env value %S (expected NAME=VALUE with safe characters)" e))))))
 
-(defun clime-make--validate-symbol (name flag)
-  "Validate NAME is a safe Elisp symbol name.
-FLAG is the option name for error messages.
-Signals `clime-usage-error' if invalid."
-  (unless (string-match-p clime-make--symbol-re name)
-    (signal 'clime-usage-error
-            (list (format "invalid %s value %S (must be a valid symbol name)" flag name)))))
+
+(defconst clime-make--shebang-version "1"
+  "Shebang format version, independent of `clime-version'.
+Bumped when the polyglot launcher structure changes.")
 
 (defconst clime-make--shebang-tag-re
-  "# clime:[0-9]+\\.[0-9]+\\.[0-9]+"
-  "Regexp matching the clime version tag in a shebang line 2.")
+  "# clime\\(?:-sh!:v[0-9]+\\|:[0-9]+\\.[0-9]+\\.[0-9]+\\)"
+  "Regexp matching a clime shebang tag (old or new format) in line 2.
+Matches both the legacy `# clime:X.Y.Z' and current `# clime-sh!:vN'.")
 
 (defun clime-make--clime-shebang-p (file)
   "Return non-nil if FILE starts with a clime-tagged shebang."
@@ -69,13 +63,33 @@ Signals `clime-usage-error' if invalid."
          (let ((line2 (buffer-substring (point) (line-end-position))))
            (string-match-p clime-make--shebang-tag-re line2)))))
 
-(defun clime-make--make-shebang (env-vars load-paths)
+(defun clime-make--shebang-file-version (file)
+  "Return the shebang format version from FILE, or nil.
+Returns an integer for `clime-sh!:vN' tags, 0 for legacy `clime:X.Y.Z' tags,
+or nil if FILE has no clime shebang."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 512)
+    (goto-char (point-min))
+    (when (looking-at "#!")
+      (forward-line 1)
+      (let ((line2 (buffer-substring (point) (line-end-position))))
+        (cond
+         ((string-match "# clime-sh!:v\\([0-9]+\\)" line2)
+          (string-to-number (match-string 1 line2)))
+         ((string-match-p "# clime:[0-9]+\\.[0-9]+\\.[0-9]+" line2)
+          0))))))
+
+(defun clime-make--make-shebang (env-vars load-paths resolve)
   "Build a two-line polyglot shebang string.
 ENV-VARS is a list of \"NAME=VALUE\" strings.
 LOAD-PATHS is a string of formatted -L flags (may be empty).
+When RESOLVE is non-nil, prepend symlink resolution via `realpath'
+so relative load paths work through symlink chains.  In this mode,
+load paths should use \"$D\" (resolved dirname) instead of
+\"$(dirname \"$0\")\".
 Always includes CLIME_ARGV0=\"$0\" so usage output shows the
 executable name rather than the DSL symbol.
-Embeds a clime:VERSION tag for detection and update support.
+Embeds a clime-sh!:vN tag for detection and update support.
 
 Uses --eval with a read/eval loop instead of -l to force
 `lexical-binding' to t.  The standard polyglot (\":\" on line 2)
@@ -84,8 +98,14 @@ from a temp buffer with lexical-binding set and eval each with
 the lexical flag."
   (let* ((all-vars (cons "CLIME_ARGV0=\"$0\"" (or env-vars '())))
          (env-prefix (concat (mapconcat #'identity all-vars " ") " "))
+         (resolve-prefix (if resolve
+                             "S=\"$(realpath \"$0\")\";D=\"$(dirname \"$S\")\"; "
+                           ""))
+         (load-file-expr (if resolve
+                             "\\\"$S\\\""
+                           "\\\"$0\\\""))
          (eval-form (concat
-                     "--eval \"(setq load-file-name \\\"$0\\\")\""
+                     "--eval \"(setq load-file-name " load-file-expr ")\""
                      " --eval \"(with-temp-buffer"
                      "(insert-file-contents load-file-name)"
                      "(setq lexical-binding t)"
@@ -93,17 +113,20 @@ the lexical flag."
                      "(condition-case nil"
                      "(while t(eval(read(current-buffer))t))"
                      "(end-of-file nil)))\"")))
-    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s %s -- \"$@\" # clime:%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
-            env-prefix load-paths eval-form clime-version)))
+    (format "#!/bin/sh\n\":\"; %s%sexec emacs --batch -Q%s %s -- \"$@\" # clime-sh!:v%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
+            resolve-prefix env-prefix load-paths eval-form clime-make--shebang-version)))
 
-(defun clime-make--write-shebang (target env-vars load-paths force)
+(defun clime-make--write-shebang (target env-vars load-paths force &optional resolve)
   "Write a shebang to TARGET file, handling existing headers.
-ENV-VARS and LOAD-PATHS are passed to `clime-make--make-shebang'.
-If TARGET has a clime-tagged shebang, replace it (return \"updated\").
+ENV-VARS, LOAD-PATHS, and RESOLVE are passed to `clime-make--make-shebang'.
+If TARGET has a clime-tagged shebang with a newer format version,
+signal an error (use FORCE to override).
+If TARGET has a clime-tagged shebang at same or older version,
+replace it (return \"updated\").
 If TARGET has a non-clime shebang and FORCE is non-nil, replace it.
 If TARGET has a non-clime shebang and FORCE is nil, signal an error.
 If TARGET has no shebang, prepend one (return \"done\")."
-  (let ((shebang (clime-make--make-shebang env-vars load-paths))
+  (let ((shebang (clime-make--make-shebang env-vars load-paths resolve))
         (action nil))
     (with-temp-buffer
       (insert-file-contents target)
@@ -111,17 +134,33 @@ If TARGET has no shebang, prepend one (return \"done\")."
       (cond
        ;; Existing shebang
        ((looking-at "#!")
-        (if (or (clime-make--clime-shebang-p target) force)
-            (progn
-              ;; Delete the two shebang lines
-              (forward-line 2)
-              (delete-region (point-min) (point))
-              (goto-char (point-min))
-              (insert shebang)
-              (setq action "updated"))
-          (signal 'clime-usage-error
-                  (list (format "%s already has a shebang line (use --force to replace)"
-                                (file-name-nondirectory target))))))
+        (let ((file-ver (clime-make--shebang-file-version target))
+              (our-ver (string-to-number clime-make--shebang-version)))
+          (cond
+           ;; Newer clime shebang — refuse unless forced
+           ((and file-ver (> file-ver our-ver) (not force))
+            (signal 'clime-usage-error
+                    (list (format "%s has a newer shebang format (v%d > v%d); use --force to downgrade"
+                                  (file-name-nondirectory target) file-ver our-ver))))
+           ;; Clime shebang (same, older, or forced newer) — replace 2 lines
+           (file-ver
+            (forward-line 2)
+            (delete-region (point-min) (point))
+            (goto-char (point-min))
+            (insert shebang)
+            (setq action "updated"))
+           ;; Non-clime shebang with force — replace only the #! line
+           (force
+            (forward-line 1)
+            (delete-region (point-min) (point))
+            (goto-char (point-min))
+            (insert shebang)
+            (setq action "updated"))
+           ;; Non-clime shebang, no force
+           (t
+            (signal 'clime-usage-error
+                    (list (format "%s already has a shebang line (use --force to replace)"
+                                  (file-name-nondirectory target))))))))
        ;; No shebang: prepend
        (t
         (insert shebang)
@@ -131,31 +170,137 @@ If TARGET has no shebang, prepend one (return \"done\")."
     action))
 
 (defun clime-make--extract-code (file)
-  "Extract code from FILE using GNU-style library section markers.
-FILE must contain a top-level `;;; Code:' section and a terminating
-`;;; ... ends here' line.  Strips top-level `(clime-run-batch ...)'
-forms but keeps `(provide ...)' forms so `require' chains between
-bundled modules continue to work."
+  "Extract library code from FILE using GNU-style section markers.
+Returns text between `;;; Code:' and `;;; Entrypoint:' (or
+`;;; ... ends here' if no entrypoint marker).  The entrypoint
+section, if present, is excluded."
   (with-temp-buffer
     (insert-file-contents file)
-    (let ((start (and (re-search-forward "^;;; Code:" nil t)
-                      (forward-line 1)
-                      (point)))
-          (end (and (re-search-forward "^;;; .* ends here" nil t)
-                    (line-beginning-position))))
+    (let* ((start (and (re-search-forward "^;;; Code:" nil t)
+                       (forward-line 1)
+                       (point)))
+           (end (when start
+                  (if (re-search-forward "^;;; Entrypoint:" nil t)
+                      (line-beginning-position)
+                    (goto-char start)
+                    (and (re-search-forward "^;;; .* ends here" nil t)
+                         (line-beginning-position))))))
       (unless (and start end)
         (signal 'clime-usage-error
                 (list (format "%s: missing ;;; Code: or ;;; ... ends here markers"
                               (file-name-nondirectory file)))))
-      (let ((code (buffer-substring start end)))
-        ;; Strip clime-run-batch lines.  Keep (provide ...) so that
-        ;; (require ...) calls between modules are satisfied.
-        (with-temp-buffer
-          (insert code)
-          (goto-char (point-min))
-          (while (re-search-forward "^(clime-run-batch .*\n?" nil t)
-            (replace-match ""))
-          (buffer-string))))))
+      (buffer-substring start end))))
+
+(defun clime-make--extract-entry (file)
+  "Extract entrypoint code from FILE.
+Returns text between `;;; Entrypoint:' and `;;; ... ends here',
+or nil if FILE has no `;;; Entrypoint:' marker."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (when (re-search-forward "^;;; Entrypoint:" nil t)
+      (forward-line 1)
+      (let ((start (point))
+            (end (and (re-search-forward "^;;; .* ends here" nil t)
+                      (line-beginning-position))))
+        (unless end
+          (signal 'clime-usage-error
+                  (list (format "%s: missing ;;; ... ends here after ;;; Entrypoint:"
+                                (file-name-nondirectory file)))))
+        (buffer-substring start end)))))
+
+;;; ─── Handlers ──────────────────────────────────────────────────────────
+
+(defun clime-make--init-handler (ctx)
+  "Handle the `init' command: add a polyglot shebang to an Elisp file.
+CTX is the clime context."
+  (clime-let ctx (file (extras extra-load-path)
+                       (rels rel-load-path) self-dir standalone force env)
+    (let* ((clime-dir (file-name-directory clime-make--self-path))
+           (target (expand-file-name file))
+           (resolve (or self-dir rels))
+           (self-dir-flag (if self-dir " -L \"$D\"" ""))
+           (rel-flags
+            (if rels
+                (mapconcat (lambda (p)
+                             (format " -L \"$D/%s\"" p))
+                           rels "")
+              ""))
+           (extra-flags
+            (if extras
+                (mapconcat (lambda (p)
+                             (format " -L %S" (expand-file-name p)))
+                           extras "")
+              ""))
+           (clime-flag
+            (if standalone ""
+              (format " -L %S" clime-dir)))
+           (load-paths
+            (concat self-dir-flag rel-flags clime-flag extra-flags)))
+      (unless (file-exists-p target)
+        (signal 'clime-usage-error
+                (list (format "%s does not exist" file))))
+      (when env
+        (clime-make--validate-env-vars env))
+      (let ((action (clime-make--write-shebang target env load-paths force resolve)))
+        (format "%s: %s is now executable" action target)))))
+
+(defun clime-make--bundle-handler (ctx)
+  "Handle the `bundle' command: concatenate source files into one.
+CTX is the clime context."
+  (clime-let ctx (files output provide main description)
+    (let* ((out (expand-file-name output))
+           (feature (or provide
+                        (file-name-sans-extension
+                         (file-name-nondirectory out))))
+           (desc (or description "Bundled Elisp distribution"))
+           (out-name (file-name-nondirectory out)))
+      ;; Validate inputs
+      (when main
+        (let ((main-path (expand-file-name main)))
+          (unless (file-exists-p main-path)
+            (signal 'clime-usage-error
+                    (list (format "%s does not exist" main))))
+          (when (clime-make--extract-entry main-path)
+            (signal 'clime-usage-error
+                    (list (format "%s: --main file must not contain ;;; Entrypoint: marker"
+                                  (file-name-nondirectory main)))))))
+      (dolist (f files)
+        (unless (file-exists-p f)
+          (signal 'clime-usage-error
+                  (list (format "%s does not exist" f)))))
+      ;; Build the bundle
+      (with-temp-buffer
+        ;; Header
+        (insert (format ";;; %s --- %s  -*- lexical-binding: t; -*-\n"
+                        out-name desc))
+        (insert "\n;;; Code:\n\n")
+        ;; Extract and concatenate source files
+        (dolist (f files)
+          (let ((code (clime-make--extract-code (expand-file-name f))))
+            (when (string-match-p "^(clime-run-batch " code)
+              (signal 'clime-usage-error
+                      (list (format "%s: (clime-run-batch ...) in library section; move it below ;;; Entrypoint:"
+                                    (file-name-nondirectory f)))))
+            (insert (format ";; --- %s ---\n" (file-name-nondirectory f)))
+            (insert code)
+            (insert "\n")))
+        ;; Provide
+        (insert (format "(provide '%s)\n" feature))
+        ;; Guarded entry point from --main file
+        (when main
+          (let ((entry-code (clime-make--extract-code (expand-file-name main))))
+            (insert ";;; Entrypoint:\n")
+            (insert (format "(when (clime-main-script-p '%s)\n" feature))
+            (insert entry-code)
+            (insert ")\n")))
+        ;; Footer
+        (insert (format ";;; %s ends here\n" out-name))
+        ;; Write output
+        (let ((dir (file-name-directory out)))
+          (when (and dir (not (file-directory-p dir)))
+            (make-directory dir t)))
+        (write-region nil nil out))
+      (format "Wrote %s" out))))
 
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
@@ -188,40 +333,7 @@ bundled modules continue to work."
             (clime-option env ("--env" "-e") :multiple t
                           :help "Set environment variable in shebang (NAME=VALUE)")
 
-            (clime-handler (ctx)
-                           (clime-let ctx (file (extras extra-load-path)
-                                                (rels rel-load-path) self-dir standalone force env)
-                                      (let* ((clime-dir (file-name-directory clime-make--self-path))
-                                             (target (expand-file-name file))
-                                             (self-dir-flag (if self-dir
-                                                                " -L \"$(dirname \"$0\")\""
-                                                              ""))
-                                             (rel-flags
-                                              (if rels
-                                                  (mapconcat (lambda (p)
-                                                               (format " -L \"$(dirname \"$0\")/%s\"" p))
-                                                             rels "")
-                                                ""))
-                                             (extra-flags
-                                              (if extras
-                                                  (mapconcat (lambda (p)
-                                                               (format " -L %S" (expand-file-name p)))
-                                                             extras "")
-                                                ""))
-                                             (clime-flag
-                                              (if standalone ""
-                                                (format " -L %S" clime-dir)))
-                                             (load-paths
-                                              (concat self-dir-flag rel-flags clime-flag extra-flags)))
-                                        (unless (file-exists-p target)
-                                          (signal 'clime-usage-error
-                                                  (list (format "%s does not exist" file))))
-                                        (when env
-                                          (clime-make--validate-env-vars env))
-                                        (let ((action (clime-make--write-shebang
-                                                       target env load-paths force)))
-                                          (format "%s: %s is now executable"
-                                                  action target))))))
+            (clime-handler (ctx) (clime-make--init-handler ctx)))
 
            ;; ── bundle ──────────────────────────────────────────────────────────
            (clime-command bundle
@@ -236,54 +348,14 @@ bundled modules continue to work."
                                         :help "Feature name for (provide 'FEATURE) (default: output filename)")
 
                           (clime-option main ("--main" "-m")
-                                        :help "Add guarded entry point (use init --env CLIME_MAIN_APP=APP to activate)")
+                                        :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
 
                           (clime-option description ("--description" "-d")
                                         :help "One-line description for the file header")
 
-                          (clime-handler (ctx)
-                                         (clime-let ctx (files output provide main description)
-                                                    (let* ((out (expand-file-name output))
-                                                           (feature (or provide
-                                                                        (file-name-sans-extension
-                                                                         (file-name-nondirectory out))))
-                                                           (desc (or description "Bundled Elisp distribution"))
-                                                           (out-name (file-name-nondirectory out)))
-                                                      ;; Validate inputs
-                                                      (when main
-                                                        (clime-make--validate-symbol main "--main"))
-                                                      (dolist (f files)
-                                                        (unless (file-exists-p f)
-                                                          (signal 'clime-usage-error
-                                                                  (list (format "%s does not exist" f)))))
-                                                      ;; Build the bundle
-                                                      (with-temp-buffer
-                                                        ;; Header
-                                                        (insert (format ";;; %s --- %s  -*- lexical-binding: t; -*-\n"
-                                                                        out-name desc))
-                                                        (insert "\n;;; Code:\n\n")
-                                                        ;; Extract and concatenate source files
-                                                        (dolist (f files)
-                                                          (insert (format ";; --- %s ---\n"
-                                                                          (file-name-nondirectory f)))
-                                                          (insert (clime-make--extract-code (expand-file-name f)))
-                                                          (insert "\n"))
-                                                        ;; Provide
-                                                        (insert (format "(provide '%s)\n" feature))
-                                                        ;; Guarded entry point
-                                                        (when main
-                                                          (insert (format "(when (clime-main-script-p '%s)\n" main))
-                                                          (insert (format "  (clime-run-batch %s))\n\n" main)))
-                                                        ;; Footer
-                                                        (insert (format ";;; %s ends here\n" out-name))
-                                                        ;; Write output
-                                                        (let ((dir (file-name-directory out)))
-                                                          (when (and dir (not (file-directory-p dir)))
-                                                            (make-directory dir t)))
-                                                        (write-region nil nil out))
-                                                      (format "Wrote %s" out))))))
-
-(clime-run-batch clime-make)
+                          (clime-handler (ctx) (clime-make--bundle-handler ctx))))
 
 (provide 'clime-make)
+;;; Entrypoint:
+(clime-run-batch clime-make)
 ;;; clime-make.el ends here

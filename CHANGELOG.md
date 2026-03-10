@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.2.0 — 2026-03-10
+
+### Added
+
+- Ancestor option propagation: options from any ancestor (app, group) are
+  now available to all descendant commands, with a "Global Options:" section
+  in help output
+- Two-pass parse with `:setup` hook: app-level initialization runs after
+  pass-1 (argv parsed) but before pass-2 (dynamic choices validated, env/defaults applied).
+  Enables config loading that influences lazy `:choices` and `:default` functions.
+- `clime-params-plist`: convert context params to keyword plist, eliminating
+  `clime-let` + plist reconstruction boilerplate
+- `clime-parse-finalize`: public API for explicit pass-2 control
+- `:separator` slot on options: split a single value into a list
+  (e.g. `--tags=a,b,c` with `:separator ","` yields `("a" "b" "c")`)
+- `:category` slot on commands, groups, and options: group items under
+  named sections in help output (e.g. `Admin:`, `I/O:`)
+
+- `init --self-dir` and `init --rel-load-path` now resolve symlinks at runtime
+  via `realpath`, so relative load paths work correctly when the script is
+  invoked through a symlink
+
+### Changed
+
+- Shebang tag changed from `# clime:X.Y.Z` to `# clime-sh!:vN`, separating
+  the shebang format version from the library version
+- `init` refuses to downgrade a newer shebang format version (use `--force`
+  to override); detects and upgrades legacy `clime:X.Y.Z` tags automatically
+- Renamed `:group` option slot to `:category` (avoids confusion with `clime-group`)
+- Help renderer rewritten as a collect-and-render pipeline, improving inline
+  group handling and enabling category-based section grouping
+- Static `:choices` (literal lists) validated in pass 1; dynamic `:choices`
+  (functions) deferred to pass 2
+- `bundle --main` now takes a file path (was a symbol name); the main file's
+  code is wrapped in a `clime-main-script-p` guard and placed in an
+  `;;; Entrypoint:` section
+- `bundle` strips `;;; Entrypoint:` sections from source files instead of
+  using regex to remove `(clime-run-batch ...)` forms
+- `bundle` errors if source files contain `(clime-run-batch ...)` in their
+  library section (must be below `;;; Entrypoint:` marker)
+
 ## 0.1.1 — 2026-03-09
 
 ### Added

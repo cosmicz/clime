@@ -151,7 +151,7 @@ process environment."
         (insert-file-contents app-file)
         (let ((line2 (progn (forward-line 1)
                             (buffer-substring (point) (line-end-position)))))
-          (should (string-match-p "# clime:[0-9]+\\.[0-9]+\\.[0-9]+" line2)))))))
+          (should (string-match-p "# clime-sh!:v[0-9]+" line2)))))))
 
 (ert-deftest clime-test-integration/init-updates-clime-shebang ()
   "clime-make.el init replaces an existing clime-tagged shebang."
@@ -169,6 +169,69 @@ process environment."
       (let ((result (clime-test--run-script app-file '("hello" "world"))))
         (should (= 0 (car result)))
         (should (equal "Hello, world!" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-skips-same-version-shebang ()
+  "clime-make.el init is idempotent: re-running on same version preserves content."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; First init
+      (clime-test--run-script clime-make (list "init" app-file))
+      (let ((after-first (with-temp-buffer
+                           (insert-file-contents app-file)
+                           (buffer-string))))
+        ;; Second init
+        (clime-test--run-script clime-make (list "init" app-file))
+        (let ((after-second (with-temp-buffer
+                              (insert-file-contents app-file)
+                              (buffer-string))))
+          (should (equal after-first after-second)))))))
+
+(ert-deftest clime-test-integration/init-rejects-newer-shebang-version ()
+  "clime-make.el init refuses to downgrade a newer shebang version."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; Manually prepend a future-version shebang
+      (let ((original (with-temp-buffer
+                        (insert-file-contents app-file)
+                        (buffer-string))))
+        (with-temp-file app-file
+          (insert "#!/bin/sh\n\":\"; exec emacs --batch -Q -- \"$@\" # clime-sh!:v999 -*- lexical-binding: t; -*-\n")
+          (insert original)))
+      ;; Init should refuse (exit non-zero)
+      (let ((result (clime-test--run-script clime-make (list "init" app-file))))
+        (should (/= 0 (car result)))
+        (should (string-match-p "newer" (cdr result))))
+      ;; --force should override
+      (let ((result (clime-test--run-script clime-make (list "init" "--force" app-file))))
+        (should (= 0 (car result)))))))
+
+(ert-deftest clime-test-integration/init-updates-legacy-shebang ()
+  "clime-make.el init detects and replaces a legacy clime:X.Y.Z shebang."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; Manually prepend a legacy-format shebang
+      (let ((original (with-temp-buffer
+                        (insert-file-contents app-file)
+                        (buffer-string))))
+        (with-temp-file app-file
+          (insert "#!/bin/sh\n\":\"; exec emacs --batch -Q -- \"$@\" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-\n")
+          (insert original)))
+      ;; Init should detect the old tag and update it
+      (let ((result (clime-test--run-script clime-make (list "init" app-file))))
+        (should (= 0 (car result)))
+        (should (string-match-p "updated" (cdr result))))
+      ;; New shebang should have the new tag format
+      (with-temp-buffer
+        (insert-file-contents app-file)
+        (forward-line 1)
+        (let ((line2 (buffer-substring (point) (line-end-position))))
+          (should (string-match-p "# clime-sh!:v[0-9]+" line2)))))))
 
 (ert-deftest clime-test-integration/init-update-changes-options ()
   "clime-make.el init update replaces shebang with new options."
@@ -232,7 +295,7 @@ process environment."
         (should (string-prefix-p "#!/bin/sh" (buffer-string)))
         (let ((line2 (progn (forward-line 1)
                             (buffer-substring (point) (line-end-position)))))
-          (should (string-match-p "# clime:" line2)))))))
+          (should (string-match-p "# clime-sh!:v[0-9]+" line2)))))))
 
 (ert-deftest clime-test-integration/init-rejects-missing-file ()
   "clime-make.el init errors on a nonexistent file."
@@ -295,6 +358,102 @@ process environment."
         (should (= 0 (car result)))
         (should (equal "t:2" (cdr result)))))))
 
+;;; ─── Symlink Resolution ─────────────────────────────────────────────────
+
+(defun clime-test--write-lib-module (file-path feature code)
+  "Write an Elisp library to FILE-PATH with FEATURE and CODE."
+  (with-temp-file file-path
+    (insert (format ";;; %s --- test lib  -*- lexical-binding: t; -*-\n"
+                    (file-name-nondirectory file-path))
+            ";;; Code:\n"
+            code "\n"
+            (format "(provide '%s)\n" feature)
+            (format ";;; %s ends here\n"
+                    (file-name-nondirectory file-path)))))
+
+(ert-deftest clime-test-integration/init-self-dir-resolves-symlinks ()
+  "init --self-dir resolves symlinks so sibling files are found."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (app-dir (expand-file-name "app/"))
+           (link-dir (expand-file-name "links/")))
+      (make-directory app-dir t)
+      (make-directory link-dir t)
+      ;; Write a lib module in app/
+      (clime-test--write-lib-module
+       (expand-file-name "mylib.el" app-dir) 'mylib
+       "(defun mylib-greet (name) (format \"Hello, %s!\" name))")
+      ;; Write an app that requires mylib in app/
+      (with-temp-file (expand-file-name "myapp.el" app-dir)
+        (insert ";;; myapp.el --- test  -*- lexical-binding: t; -*-\n"
+                ";;; Code:\n"
+                "(require 'clime)\n"
+                "(require 'mylib)\n"
+                "(clime-app myapp :version \"1.0\" :help \"Test.\"\n"
+                "  (clime-command greet :help \"Greet\"\n"
+                "    (clime-arg name :help \"Name\")\n"
+                "    (clime-handler (ctx)\n"
+                "      (clime-let ctx (name) (mylib-greet name)))))\n"
+                "(clime-run-batch myapp)\n"
+                "(provide 'myapp)\n"
+                ";;; myapp.el ends here\n"))
+      ;; Init with --self-dir so it finds mylib.el
+      (clime-test--run-script clime-make
+                              (list "init" "--self-dir"
+                                    (expand-file-name "myapp.el" app-dir)))
+      ;; Symlink from a different directory
+      (make-symbolic-link (expand-file-name "myapp.el" app-dir)
+                          (expand-file-name "myapp.el" link-dir))
+      ;; Run via symlink — should resolve to app/ and find mylib
+      (let ((result (clime-test--run-script
+                     (expand-file-name "myapp.el" link-dir)
+                     '("greet" "world"))))
+        (should (= 0 (car result)))
+        (should (equal "Hello, world!" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-rel-load-path-resolves-symlinks ()
+  "init -R resolves symlinks so relative paths work through symlinks."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (project-dir (expand-file-name "project/"))
+           (lib-dir (expand-file-name "project/lib/"))
+           (bin-dir (expand-file-name "project/bin/"))
+           (link-dir (expand-file-name "links/")))
+      (make-directory lib-dir t)
+      (make-directory bin-dir t)
+      (make-directory link-dir t)
+      ;; Write a lib module in project/lib/
+      (clime-test--write-lib-module
+       (expand-file-name "mylib.el" lib-dir) 'mylib
+       "(defun mylib-greet (name) (format \"Hi, %s!\" name))")
+      ;; Write an app in project/bin/ that requires mylib
+      (with-temp-file (expand-file-name "myapp.el" bin-dir)
+        (insert ";;; myapp.el --- test  -*- lexical-binding: t; -*-\n"
+                ";;; Code:\n"
+                "(require 'clime)\n"
+                "(require 'mylib)\n"
+                "(clime-app myapp :version \"1.0\" :help \"Test.\"\n"
+                "  (clime-command greet :help \"Greet\"\n"
+                "    (clime-arg name :help \"Name\")\n"
+                "    (clime-handler (ctx)\n"
+                "      (clime-let ctx (name) (mylib-greet name)))))\n"
+                "(clime-run-batch myapp)\n"
+                "(provide 'myapp)\n"
+                ";;; myapp.el ends here\n"))
+      ;; Init with -R ../lib so it finds mylib relative to script
+      (clime-test--run-script clime-make
+                              (list "init" "-R" "../lib"
+                                    (expand-file-name "myapp.el" bin-dir)))
+      ;; Symlink from a different directory
+      (make-symbolic-link (expand-file-name "myapp.el" bin-dir)
+                          (expand-file-name "myapp.el" link-dir))
+      ;; Run via symlink — should resolve to bin/ and find ../lib/mylib
+      (let ((result (clime-test--run-script
+                     (expand-file-name "myapp.el" link-dir)
+                     '("greet" "world"))))
+        (should (= 0 (car result)))
+        (should (equal "Hi, world!" (cdr result)))))))
+
 ;;; ─── Bundle Command ─────────────────────────────────────────────────────
 
 (defun clime-test--write-module (file-path feature code)
@@ -342,8 +501,9 @@ FEATURE is the provide symbol, CODE is the body between markers."
           ;; No shebang (bundle never adds shebang)
           (should-not (string-prefix-p "#!" content)))))))
 
-(ert-deftest clime-test-integration/bundle-strips-run-batch ()
-  "clime bundle strips (clime-run-batch ...) from extracted code."
+(ert-deftest clime-test-integration/bundle-rejects-run-batch-in-library ()
+  "clime bundle errors when source has (clime-run-batch ...) in library section.
+Users must move it below ;;; Entrypoint: marker."
   (clime-test-with-temp-dir
     (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
@@ -353,29 +513,32 @@ FEATURE is the provide symbol, CODE is the body between markers."
                      clime-make
                      (list "bundle" "-o" out
                            (expand-file-name "app.el")))))
-        (should (= 0 (car result))))
-      (with-temp-buffer
-        (insert-file-contents out)
-        (should (string-match-p "defvar myapp" (buffer-string)))
-        (should-not (string-match-p "clime-run-batch" (buffer-string)))))))
+        (should (= 2 (car result)))
+        (should (string-match-p "clime-run-batch.*Entrypoint" (cdr result)))))))
 
 (ert-deftest clime-test-integration/bundle-main-guard ()
-  "clime bundle --main adds guarded entry point."
+  "clime bundle --main FILE adds guarded entry point from file."
   (clime-test-with-temp-dir
     (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
       (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
+      ;; Main file — plain script, no ;;; Entrypoint: marker
+      (clime-test--write-module "app-main.el" 'myapp-main
+                                "(require 'myapp)\n(clime-run-batch myapp)")
       (let ((result (clime-test--run-script
                      clime-make
-                     (list "bundle" "-o" out "--main" "myapp"
+                     (list "bundle" "-o" out
+                           "--main" (expand-file-name "app-main.el")
                            (expand-file-name "app.el")))))
         (should (= 0 (car result))))
       (with-temp-buffer
         (insert-file-contents out)
         (let ((content (buffer-string)))
-          ;; Has guarded entry point
-          (should (string-match-p "clime-main-script-p 'myapp" content))
+          ;; Has guarded entry point using provide feature
+          (should (string-match-p "clime-main-script-p 'bundle" content))
           (should (string-match-p "clime-run-batch myapp" content))
+          ;; Has ;;; Entrypoint: marker
+          (should (string-match-p "^;;; Entrypoint:" content))
           ;; No shebang (that's init's job)
           (should-not (string-prefix-p "#!" content)))))))
 
@@ -410,18 +573,36 @@ FEATURE is the provide symbol, CODE is the body between markers."
         (insert-file-contents out)
         (should (string-match-p "My awesome tool" (buffer-string)))))))
 
-(ert-deftest clime-test-integration/bundle-rejects-unsafe-main ()
-  "clime bundle --main rejects values that aren't valid symbol names."
+(ert-deftest clime-test-integration/bundle-rejects-missing-main ()
+  "clime bundle --main errors when the main file doesn't exist."
   (clime-test-with-temp-dir
     (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
       (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
       (let ((result (clime-test--run-script
                      clime-make
-                     (list "bundle" "-o" out "--main" "foo bar"
+                     (list "bundle" "-o" out
+                           "--main" (expand-file-name "nonexistent.el")
                            (expand-file-name "app.el")))))
         (should (= 2 (car result)))
-        (should (string-match-p "invalid --main" (cdr result)))))))
+        (should (string-match-p "does not exist" (cdr result)))))))
+
+(ert-deftest clime-test-integration/bundle-rejects-main-with-entry-marker ()
+  "clime bundle --main rejects files that contain ;;; Entrypoint: marker."
+  (clime-test-with-temp-dir
+    (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (out (expand-file-name "bundle.el")))
+      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
+      (clime-test--write-module-with-entry "bad-main.el" 'myapp
+                                           "(require 'myapp)"
+                                           "(clime-run-batch myapp)")
+      (let ((result (clime-test--run-script
+                     clime-make
+                     (list "bundle" "-o" out
+                           "--main" (expand-file-name "bad-main.el")
+                           (expand-file-name "app.el")))))
+        (should (= 2 (car result)))
+        (should (string-match-p "Entrypoint" (cdr result)))))))
 
 (ert-deftest clime-test-integration/bundle-rejects-missing-source ()
   "clime bundle errors when a source file doesn't exist."
@@ -459,6 +640,44 @@ FEATURE is the provide symbol, CODE is the body between markers."
                            (expand-file-name "app.el")))))
         (should (= 0 (car result))))
       (should (file-exists-p out)))))
+
+;;; ─── Entrypoint Section Markers ─────────────────────────────────────────
+
+(defun clime-test--write-module-with-entry (file-path feature lib-code entry-code)
+  "Write an Elisp module with an ;;; Entrypoint: section to FILE-PATH.
+FEATURE is the provide symbol, LIB-CODE is the library body,
+ENTRY-CODE is the entrypoint body after the Entrypoint marker."
+  (with-temp-file file-path
+    (insert (format ";;; %s --- test module  -*- lexical-binding: t; -*-\n"
+                    (file-name-nondirectory file-path))
+            ";;; Code:\n"
+            lib-code "\n"
+            (format "(provide '%s)\n" feature)
+            ";;; Entrypoint:\n"
+            entry-code "\n"
+            (format ";;; %s ends here\n"
+                    (file-name-nondirectory file-path)))))
+
+(ert-deftest clime-test-integration/bundle-strips-entry-section ()
+  "clime bundle strips ;;; Entrypoint: section from source files."
+  (clime-test-with-temp-dir
+    (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (out (expand-file-name "bundle.el")))
+      (clime-test--write-module-with-entry "app.el" 'myapp
+                                           "(defvar myapp nil)"
+                                           "(clime-run-batch myapp)")
+      (let ((result (clime-test--run-script
+                     clime-make
+                     (list "bundle" "-o" out
+                           (expand-file-name "app.el")))))
+        (should (= 0 (car result))))
+      (with-temp-buffer
+        (insert-file-contents out)
+        (let ((content (buffer-string)))
+          ;; Library code present
+          (should (string-match-p "defvar myapp" content))
+          ;; Entrypoint code stripped
+          (should-not (string-match-p "clime-run-batch" content)))))))
 
 ;;; ─── Example App ────────────────────────────────────────────────────────
 

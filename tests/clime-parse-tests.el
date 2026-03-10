@@ -160,6 +160,89 @@
     (should (equal (plist-get (clime-parse-result-params result) 'tag)
                    '("a" "b")))))
 
+;;; ─── Separator Options ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/separator-single-value ()
+  "Separator option with comma-separated values splits into a list."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag" "-t")
+                                 :separator "," :multiple t))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "a,b,c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+(ert-deftest clime-test-parse/separator-repeated-flags ()
+  "Separator option with repeated flags flattens all values."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag" "-t")
+                                 :separator "," :multiple t))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "a" "--tag" "b,c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+(ert-deftest clime-test-parse/separator-no-split-without-separator ()
+  "Multiple option without separator does not split on commas."
+  (let* ((app (clime-test--multi-opt-app))
+         (result (clime-parse app '("create" "--tag" "a,b"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a,b")))))
+
+(ert-deftest clime-test-parse/separator-with-choices ()
+  "Separator option validates each element against choices."
+  (let* ((opt (clime-make-option :name 'status :flags '("--status")
+                                 :separator "," :multiple t
+                                 :choices '("TODO" "ON" "DONE")))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "list" cmd))))
+         (result (clime-parse app '("list" "--status" "TODO,ON"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'status)
+                   '("TODO" "ON")))))
+
+(ert-deftest clime-test-parse/separator-choices-rejects-invalid ()
+  "Separator option rejects invalid elements against choices."
+  (let* ((opt (clime-make-option :name 'status :flags '("--status")
+                                 :separator "," :multiple t
+                                 :choices '("TODO" "ON" "DONE")))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "list" cmd)))))
+    (should-error (clime-parse app '("list" "--status" "TODO,BOGUS"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/separator-with-coerce ()
+  "Separator option applies coerce to each element."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :separator "," :multiple t
+                                 :coerce #'upcase))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "dev,ci"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("DEV" "CI")))))
+
+(ert-deftest clime-test-parse/separator-empty-segments-filtered ()
+  "Empty segments from splitting are filtered out."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :separator "," :multiple t))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "a,,b"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b")))))
+
 ;;; ─── Positional Args ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-parse/positional-arg ()
@@ -480,20 +563,103 @@
     ;; verbose should NOT be incremented since -v came after --
     (should-not (plist-get (clime-parse-result-params result) 'verbose))))
 
-;;; ─── Group Scope Closure ───────────────────────────────────────────
+;;; ─── Ancestor Option Propagation ────────────────────────────────────
 
-(ert-deftest clime-test-parse/group-option-rejected-after-descent ()
-  "Group-scoped option is rejected after descending into child command."
+(ert-deftest clime-test-parse/group-option-visible-to-child ()
+  "Group option is visible to child commands via ancestor propagation."
   (let* ((grp-opt (clime-make-option :name 'scope :flags '("--scope")))
          (cmd (clime-make-command :name "list" :handler #'ignore))
          (grp (clime-make-group :name "config"
                                 :options (list grp-opt)
                                 :children (list (cons "list" cmd))))
          (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "config" grp)))))
-    ;; --scope after descending into "list" should be unknown
-    (should-error (clime-parse app '("config" "list" "--scope" "local"))
-                  :type 'clime-usage-error)))
+                              :children (list (cons "config" grp))))
+         (result (clime-parse app '("config" "list" "--scope" "local"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'scope)
+                   "local"))))
+
+(ert-deftest clime-test-parse/group-option-before-child ()
+  "Group option works before the child command name."
+  (let* ((grp-opt (clime-make-option :name 'scope :flags '("--scope")))
+         (cmd (clime-make-command :name "list" :handler #'ignore))
+         (grp (clime-make-group :name "config"
+                                :options (list grp-opt)
+                                :children (list (cons "list" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "config" grp))))
+         (result (clime-parse app '("config" "--scope" "local" "list"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'scope)
+                   "local"))))
+
+(ert-deftest clime-test-parse/multi-level-ancestor-propagation ()
+  "Options propagate through multiple group levels."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("-v") :count t))
+         (mid-opt (clime-make-option :name 'env :flags '("--env")))
+         (cmd (clime-make-command :name "start" :handler #'ignore))
+         (inner-grp (clime-make-group :name "svc"
+                                       :children (list (cons "start" cmd))))
+         (outer-grp (clime-make-group :name "deploy"
+                                       :options (list mid-opt)
+                                       :children (list (cons "svc" inner-grp))))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list root-opt)
+                              :children (list (cons "deploy" outer-grp))))
+         (result (clime-parse app '("deploy" "svc" "start" "-v" "--env" "prod"))))
+    (should (= (plist-get (clime-parse-result-params result) 'verbose) 1))
+    (should (equal (plist-get (clime-parse-result-params result) 'env) "prod"))))
+
+(ert-deftest clime-test-parse/ancestor-boolean-option ()
+  "Boolean ancestor option works from a descendant."
+  (let* ((grp-opt (clime-make-option :name 'dry-run :flags '("--dry-run") :nargs 0))
+         (cmd (clime-make-command :name "apply" :handler #'ignore))
+         (grp (clime-make-group :name "config"
+                                :options (list grp-opt)
+                                :children (list (cons "apply" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "config" grp))))
+         (result (clime-parse app '("config" "apply" "--dry-run"))))
+    (should (eq (plist-get (clime-parse-result-params result) 'dry-run) t))))
+
+(ert-deftest clime-test-parse/ancestor-option-with-equals ()
+  "Ancestor option with --flag=value syntax works."
+  (let* ((grp-opt (clime-make-option :name 'env :flags '("--env")))
+         (cmd (clime-make-command :name "run" :handler #'ignore))
+         (grp (clime-make-group :name "deploy"
+                                :options (list grp-opt)
+                                :children (list (cons "run" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" grp))))
+         (result (clime-parse app '("deploy" "run" "--env=staging"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'env)
+                   "staging"))))
+
+(ert-deftest clime-test-parse/ancestor-short-bundle ()
+  "Short flag bundle includes ancestor boolean options."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (grp-opt (clime-make-option :name 'force :flags '("-f") :nargs 0))
+         (cmd (clime-make-command :name "apply" :handler #'ignore))
+         (grp (clime-make-group :name "config"
+                                :options (list grp-opt)
+                                :children (list (cons "apply" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list root-opt)
+                              :children (list (cons "config" grp))))
+         (result (clime-parse app '("config" "apply" "-vf"))))
+    (should (eq (plist-get (clime-parse-result-params result) 'verbose) t))
+    (should (eq (plist-get (clime-parse-result-params result) 'force) t))))
+
+(ert-deftest clime-test-parse/inline-group-option-propagates ()
+  "Inline group options propagate to descendants."
+  (let* ((grp-opt (clime-make-option :name 'env :flags '("--env")))
+         (cmd (clime-make-command :name "start" :handler #'ignore))
+         (grp (clime-make-group :name "svc" :inline t
+                                :options (list grp-opt)
+                                :children (list (cons "start" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "svc" grp))))
+         (result (clime-parse app '("start" "--env" "prod"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'env)
+                   "prod"))))
 
 ;;; ─── Root Global After Deep Descent ────────────────────────────────
 
@@ -1000,6 +1166,32 @@
          (result (clime-parse app '("a" "myrepo"))))
     (should (equal (plist-get (clime-parse-result-params result) 'name)
                    "myrepo"))))
+
+;;; ─── Inline Group Path ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/inline-group-path-includes-group ()
+  "Parse path includes inline group name when dispatching through it."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "add" add-cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "repo" grp))))
+         (result (clime-parse app '("add" "myrepo"))))
+    (should (equal (clime-parse-result-path result)
+                   '("t" "repo" "add")))))
+
+(ert-deftest clime-test-parse/inline-group-direct-path ()
+  "Direct dispatch through group name also includes it in path."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "add" add-cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "repo" grp))))
+         (result (clime-parse app '("repo" "add" "myrepo"))))
+    (should (equal (clime-parse-result-path result)
+                   '("t" "repo" "add")))))
 
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

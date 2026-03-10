@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")/.." --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; S="$(realpath "$0")";D="$(dirname "$S")"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$D/.." --eval "(setq load-file-name \"$S\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; pkm.el --- Example clime app: a mock package manager  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -31,6 +31,8 @@
 ;;  14.  Group handler           config (shows all) / config set|get
 ;;  15.  Hidden command          debug
 ;;  16.  Context destructuring   clime-let macro in handlers
+;;  17.  Command categories      search/list under "Discovery"
+;;  18.  Inline group category   admin inline group with option + command
 ;;
 ;; Run it (this file is directly executable via the shebang header):
 ;;   chmod +x examples/pkm.el
@@ -106,10 +108,11 @@
                 (if tags (format " tags=%s" (string-join tags ",")) "")))))
 
   ;; ── search ───────────────────────────────────────────────────────────
-  ;; [10] Optional positional arg, [6] symbol alias
+  ;; [10] Optional positional arg, [6] symbol alias, [17] command category
   (clime-command search
     :help "Search the package registry"
     :aliases (s)
+    :category "Discovery"
 
     (clime-arg query :required nil
       :help "Search query (omit to list all)")
@@ -125,18 +128,19 @@
           (format "Listing all packages (limit %s)" limit)))))
 
   ;; ── list ─────────────────────────────────────────────────────────────
-  ;; [11] Option groups in help, [6] symbol alias
+  ;; [11] Option groups in help, [6] symbol alias, [17] command category
   (clime-command list
     :help "List installed packages"
     :aliases (ls)
+    :category "Discovery"
 
     (clime-option author ("--author" "-a")
       :help "Filter by author"
-      :group "Filter")
+      :category "Filter")
 
     (clime-option since ("--since")
       :help "Only packages installed after DATE"
-      :group "Filter")
+      :category "Filter")
 
     (clime-option sort ("--sort" "-s")
       :help "Sort field"
@@ -222,6 +226,21 @@
         (clime-let ctx (key value)
           (format "Set %s = %s" key value)))))
 
+  ;; ── admin (inline group with category) ──────────────────────────────
+  ;; [18] Inline group with :category — option and command share a section
+  (clime-group admin
+    :inline t
+    :category "Admin"
+    :help "Administrative operations"
+
+    (clime-option admin-token ("--admin-token")
+      :help "Admin API token")
+
+    (clime-command gc
+      :help "Run garbage collection on cache"
+      (clime-handler (_ctx)
+        "Garbage collecting cache...")))
+
   ;; ── debug (hidden) ───────────────────────────────────────────────────
   ;; [15] Hidden command — not shown in help, but still callable
   (clime-command debug
@@ -234,9 +253,7 @@
                 (or verbose 0)
                 (if internal-trace "on" "off"))))))
 
-;; ─── Batch Entry Point ───────────────────────────────────────────────────
-
-(clime-run-batch pkm)
-
 (provide 'pkm)
+;;; Entrypoint:
+(clime-run-batch pkm)
 ;;; pkm.el ends here

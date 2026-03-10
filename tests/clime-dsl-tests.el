@@ -393,6 +393,22 @@
     (should (clime-option-boolean-p opt))
     (should (eql (clime-option-nargs opt) 0))))
 
+;;; ─── Separator Shorthand ────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/separator-implies-multiple ()
+  ":separator in DSL auto-sets :multiple t."
+  (eval '(clime-app clime-test--dsl-sep
+           :version "1"
+           (clime-command test
+             :help "Test"
+             (clime-option tag ("--tag") :separator ",")
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (assoc "test" (clime-group-children clime-test--dsl-sep))))
+         (opt (car (clime-command-options cmd))))
+    (should (clime-option-multiple opt))
+    (should (equal (clime-option-separator opt) ","))))
+
 ;;; ─── Symbol Aliases ──────────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/symbol-aliases ()

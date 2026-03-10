@@ -165,13 +165,13 @@
 ;;; ─── Option Groups ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-help/option-groups ()
-  "Options with :group label are clustered under group header."
+  "Options with :category label are clustered under group header."
   (let* ((opt-a (clime-make-option :name 'verbose :flags '("--verbose")
                                     :count t :help "Verbosity"))
          (opt-b (clime-make-option :name 'to :flags '("--to")
-                                    :help "Target" :group "Workflow"))
+                                    :help "Target" :category "Workflow"))
          (opt-c (clime-make-option :name 'from :flags '("--from")
-                                    :help "Source" :group "Workflow"))
+                                    :help "Source" :category "Workflow"))
          (cmd (clime-make-command :name "x" :handler #'ignore
                                   :options (list opt-a opt-b opt-c)))
          (help (clime-format-help cmd '("app" "x"))))
@@ -194,6 +194,371 @@
   "Hidden commands are not shown in help."
   (let ((help (clime-format-help clime-test--help-app '("myapp"))))
     (should-not (string-match-p "debug" help))))
+
+;;; ─── Category Specs ──────────────────────────────────────────────────
+;;
+;; Spec numbering matches acceptance criteria on clime-162.
+
+;; 6. No categories → "Options:" / "Commands:" (backward compat)
+(ert-deftest clime-test-help/cat-06-no-categories-backward-compat ()
+  "Without :category, help renders Options: and Commands: as before."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")
+                                  :count t :help "Verbosity"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                   :help "Show details"))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "show" cmd))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Options:" help))
+    (should (string-match-p "^Commands:" help))))
+
+;; 7. Commands with :category → grouped headings
+(ert-deftest clime-test-help/cat-07-command-categories ()
+  "Commands with :category are grouped under category headings."
+  (let* ((cmd-a (clime-make-command :name "search" :handler #'ignore
+                                     :help "Search beads" :category "Filter"))
+         (cmd-b (clime-make-command :name "list" :handler #'ignore
+                                     :help "List beads" :category "Filter"))
+         (cmd-c (clime-make-command :name "claim" :handler #'ignore
+                                     :help "Claim a bead" :category "Lifecycle"))
+         (cmd-d (clime-make-command :name "show" :handler #'ignore
+                                     :help "Show details"))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "search" cmd-a)
+                                              (cons "list" cmd-b)
+                                              (cons "claim" cmd-c)
+                                              (cons "show" cmd-d))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Filter:" help))
+    (should (string-match-p "^Lifecycle:" help))
+    (should (string-match-p "^Commands:" help))
+    ;; Uncategorized "show" under Commands:, not under a category
+    (should (string-match-p "Commands:.*show" (replace-regexp-in-string "\n" " " help)))))
+
+;; 8. Options with :category → grouped headings
+(ert-deftest clime-test-help/cat-08-option-categories ()
+  "Options with :category are grouped under category headings."
+  (let* ((opt-a (clime-make-option :name 'json :flags '("--json")
+                                    :nargs 0 :help "JSON output" :category "Output"))
+         (opt-b (clime-make-option :name 'verbose :flags '("-v")
+                                    :count t :help "Verbosity"))
+         (cmd (clime-make-command :name "show" :handler #'ignore :help "Show"))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt-b opt-a)
+                              :children (list (cons "show" cmd))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Options:" help))
+    (should (string-match-p "^Output:" help))
+    ;; --json under Output, -v under Options
+    (let ((output-pos (string-match "^Output:" help))
+          (opts-pos (string-match "^Options:" help)))
+      (should (string-match-p "--json" (substring help output-pos)))
+      (should (string-match-p "-v" (substring help opts-pos))))))
+
+;; 9. Mixed options+commands same category → unified section
+(ert-deftest clime-test-help/cat-09-mixed-options-and-commands ()
+  "Options and commands with same :category share a section."
+  (let* ((opt (clime-make-option :name 'status :flags '("--status")
+                                  :help "Filter by status" :category "Filter"))
+         (cmd (clime-make-command :name "search" :handler #'ignore
+                                   :help "Search beads" :category "Filter"))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "search" cmd))))
+         (help (clime-format-help app '("t"))))
+    ;; Single Filter section with both
+    (should (string-match-p "^Filter:" help))
+    (should (string-match-p "--status" help))
+    (should (string-match-p "search" help))
+    ;; No separate Options: or Commands:
+    (should-not (string-match-p "^Options:" help))
+    (should-not (string-match-p "^Commands:" help))))
+
+;; 10. Inline group with :category → children inherit
+(ert-deftest clime-test-help/cat-10-inline-group-children-inherit ()
+  "Inline group with :category renders its children under that category."
+  (let* ((cmd-a (clime-make-command :name "search" :handler #'ignore
+                                     :help "Search beads"))
+         (cmd-b (clime-make-command :name "list" :handler #'ignore
+                                     :help "List beads"))
+         (grp (clime-make-group :name "filter" :inline t :category "Filter"
+                                :children (list (cons "search" cmd-a)
+                                                (cons "list" cmd-b))))
+         (cmd-c (clime-make-command :name "show" :handler #'ignore
+                                     :help "Show details"))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "filter" grp)
+                                              (cons "show" cmd-c))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Filter:" help))
+    (should (string-match-p "search" help))
+    (should (string-match-p "list" help))
+    (should (string-match-p "^Commands:" help))
+    (should (string-match-p "show" help))))
+
+;; 11. Inline group option inherits group category
+(ert-deftest clime-test-help/cat-11-inline-group-option-inherits ()
+  "Option on inline group with :category renders under that category."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                  :help "Admin token"))
+         (cmd (clime-make-command :name "status" :handler #'ignore
+                                   :help "Show status"))
+         (grp (clime-make-group :name "admin" :inline t :category "Admin"
+                                :options (list opt)
+                                :children (list (cons "status" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "admin" grp))))
+         (help (clime-format-help app '("t"))))
+    ;; Both option and command under Admin:
+    (should (string-match-p "^Admin:" help))
+    (should (string-match-p "--token" help))
+    (should (string-match-p "status" help))))
+
+;; 12. Inline group option with own :category → composes with group
+(ert-deftest clime-test-help/cat-12-inline-option-composes ()
+  "Option with own :category on categorized inline group composes path."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                  :help "Auth token" :category "Auth"))
+         (cmd (clime-make-command :name "status" :handler #'ignore
+                                   :help "Show status"))
+         (grp (clime-make-group :name "admin" :inline t :category "Admin"
+                                :options (list opt)
+                                :children (list (cons "status" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "admin" grp))))
+         (help (clime-format-help app '("t"))))
+    ;; Option composes: Admin / Auth
+    (should (string-match-p "^Admin / Auth:" help))
+    (should (string-match-p "--token" help))
+    ;; Command inherits: Admin
+    (should (string-match-p "^Admin:" help))
+    (should (string-match-p "status" help))))
+
+;; 13. Nested inline groups → paths compose
+(ert-deftest clime-test-help/cat-13-nested-inline-compose ()
+  "Nested inline groups compose category paths."
+  (let* ((get-cmd (clime-make-command :name "get" :handler #'ignore
+                                       :help "Get config value"))
+         (set-cmd (clime-make-command :name "set" :handler #'ignore
+                                       :help "Set config value"))
+         (config-grp (clime-make-group :name "config" :inline t
+                                        :category "Config"
+                                        :children (list (cons "get" get-cmd)
+                                                        (cons "set" set-cmd))))
+         (status-cmd (clime-make-command :name "status" :handler #'ignore
+                                          :help "Show status"))
+         (admin-grp (clime-make-group :name "admin" :inline t
+                                       :category "Admin"
+                                       :children (list (cons "config" config-grp)
+                                                       (cons "status" status-cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "admin" admin-grp))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Admin / Config:" help))
+    (should (string-match-p "^Admin:" help))
+    (should (string-match-p "get" help))
+    (should (string-match-p "set" help))
+    (should (string-match-p "status" help))))
+
+;; 14. Uncategorized inline group → transparent for children
+(ert-deftest clime-test-help/cat-14-uncategorized-inline-transparent ()
+  "Uncategorized inline group children fall through to Commands:."
+  (let* ((cmd-a (clime-make-command :name "search" :handler #'ignore
+                                     :help "Search"))
+         (grp (clime-make-group :name "stuff" :inline t
+                                :children (list (cons "search" cmd-a))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "stuff" grp))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Commands:" help))
+    (should (string-match-p "search" help))))
+
+;; 15. Uncategorized inline group, categorized children → child's category
+(ert-deftest clime-test-help/cat-15-uncategorized-group-categorized-children ()
+  "Categorized children of uncategorized inline group keep their own category."
+  (let* ((cmd-a (clime-make-command :name "search" :handler #'ignore
+                                     :help "Search" :category "Filter"))
+         (cmd-b (clime-make-command :name "deploy" :handler #'ignore
+                                     :help "Deploy" :category "Deploy"))
+         (grp (clime-make-group :name "stuff" :inline t
+                                :children (list (cons "search" cmd-a)
+                                                (cons "deploy" cmd-b))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "stuff" grp))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Filter:" help))
+    (should (string-match-p "^Deploy:" help))
+    ;; No Commands: — both have categories
+    (should-not (string-match-p "^Commands:" help))))
+
+;; 16. Uncategorized inline group, option with no category → skipped
+(ert-deftest clime-test-help/cat-16-uncategorized-inline-option-skipped ()
+  "Option on uncategorized inline group with no own category is skipped."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                  :help "A token"))
+         (cmd (clime-make-command :name "run" :handler #'ignore :help "Run"))
+         (grp (clime-make-group :name "stuff" :inline t
+                                :options (list opt)
+                                :children (list (cons "run" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "stuff" grp))))
+         (help (clime-format-help app '("t"))))
+    ;; Option is skipped — no category home
+    (should-not (string-match-p "--token" help))
+    ;; Command still appears under Commands:
+    (should (string-match-p "^Commands:" help))
+    (should (string-match-p "run" help))))
+
+;; 17. Uncategorized inline group, option with own :category → renders
+(ert-deftest clime-test-help/cat-17-uncategorized-group-categorized-option ()
+  "Option with :category on uncategorized inline group renders under that category."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                  :help "Auth token" :category "Auth"))
+         (cmd (clime-make-command :name "run" :handler #'ignore :help "Run"))
+         (grp (clime-make-group :name "stuff" :inline t
+                                :options (list opt)
+                                :children (list (cons "run" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "stuff" grp))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Auth:" help))
+    (should (string-match-p "--token" help))
+    (should (string-match-p "^Commands:" help))))
+
+;; 18. Same category from different branches → merged
+(ert-deftest clime-test-help/cat-18-same-category-different-branches ()
+  "Same category path from separate inline groups merges into one section."
+  (let* ((cmd-a (clime-make-command :name "search" :handler #'ignore
+                                     :help "Search beads"))
+         (grp-a (clime-make-group :name "filter1" :inline t :category "Filter"
+                                  :children (list (cons "search" cmd-a))))
+         (cmd-b (clime-make-command :name "list" :handler #'ignore
+                                     :help "List beads"))
+         (grp-b (clime-make-group :name "filter2" :inline t :category "Filter"
+                                  :children (list (cons "list" cmd-b))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "filter1" grp-a)
+                                              (cons "filter2" grp-b))))
+         (help (clime-format-help app '("t"))))
+    ;; Single Filter: section with both commands
+    (should (string-match-p "^Filter:" help))
+    (should (string-match-p "search" help))
+    (should (string-match-p "list" help))
+    ;; Only one Filter: heading
+    (should (= 1 (let ((count 0) (start 0))
+                   (while (string-match "^Filter:" help start)
+                     (cl-incf count)
+                     (setq start (match-end 0)))
+                   count)))))
+
+;; 18b. Same composed category from different nested branches → merged
+(ert-deftest clime-test-help/cat-18b-same-composed-path-merges ()
+  "Same composed category path from different nested branches merges."
+  (let* ((get-cmd (clime-make-command :name "get" :handler #'ignore
+                                       :help "Get value"))
+         (config-a (clime-make-group :name "config1" :inline t :category "Config"
+                                     :children (list (cons "get" get-cmd))))
+         (admin-a (clime-make-group :name "admin1" :inline t :category "Admin"
+                                    :children (list (cons "config1" config-a))))
+         (set-cmd (clime-make-command :name "set" :handler #'ignore
+                                       :help "Set value"))
+         (config-b (clime-make-group :name "config2" :inline t :category "Config"
+                                     :children (list (cons "set" set-cmd))))
+         (admin-b (clime-make-group :name "admin2" :inline t :category "Admin"
+                                    :children (list (cons "config2" config-b))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "admin1" admin-a)
+                                              (cons "admin2" admin-b))))
+         (help (clime-format-help app '("t"))))
+    ;; Both get and set under single "Admin / Config:" heading
+    (should (string-match-p "^Admin / Config:" help))
+    (should (string-match-p "get" help))
+    (should (string-match-p "set" help))
+    ;; Only one such heading
+    (should (= 1 (let ((count 0) (start 0))
+                   (while (string-match "^Admin / Config:" help start)
+                     (cl-incf count)
+                     (setq start (match-end 0)))
+                   count)))))
+
+;; 19. Interleaved sections in first-occurrence order
+(ert-deftest clime-test-help/cat-19-interleaved-order ()
+  "Category sections appear in first-occurrence order, interleaved."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")
+                                  :count t :help "Verbosity"))
+         (cmd-a (clime-make-command :name "search" :handler #'ignore
+                                     :help "Search" :category "Filter"))
+         (cmd-b (clime-make-command :name "show" :handler #'ignore
+                                     :help "Show"))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "search" cmd-a)
+                                              (cons "show" cmd-b))))
+         (help (clime-format-help app '("t"))))
+    ;; Options before Filter before Commands
+    (let ((opts-pos (string-match "^Options:" help))
+          (filter-pos (string-match "^Filter:" help))
+          (cmds-pos (string-match "^Commands:" help)))
+      (should opts-pos)
+      (should filter-pos)
+      (should cmds-pos)
+      (should (< opts-pos filter-pos))
+      (should (< filter-pos cmds-pos)))))
+
+;; 20. Hidden items excluded
+(ert-deftest clime-test-help/cat-20-hidden-excluded ()
+  "Hidden options and commands are excluded from categorized sections."
+  (let* ((opt (clime-make-option :name 'debug :flags '("--debug")
+                                  :nargs 0 :help "Debug" :hidden t
+                                  :category "Dev"))
+         (cmd-a (clime-make-command :name "internal" :handler #'ignore
+                                     :help "Internal" :hidden t
+                                     :category "Dev"))
+         (cmd-b (clime-make-command :name "show" :handler #'ignore
+                                     :help "Show" :category "Dev"))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "internal" cmd-a)
+                                              (cons "show" cmd-b))))
+         (help (clime-format-help app '("t"))))
+    ;; Only non-hidden "show" appears
+    (should (string-match-p "show" help))
+    (should-not (string-match-p "internal" help))
+    (should-not (string-match-p "--debug" help))))
+
+;; 21. Inline group with :help renders section description
+(ert-deftest clime-test-help/cat-21-group-help-as-description ()
+  "Inline group with :category and :help renders description under heading."
+  (let* ((cmd (clime-make-command :name "search" :handler #'ignore
+                                   :help "Search items"))
+         (grp (clime-make-group :name "filter" :inline t
+                                :category "Filter"
+                                :help "Commands for filtering results"
+                                :children (list (cons "search" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "filter" grp))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Filter:" help))
+    (should (string-match-p "Commands for filtering results" help))
+    (should (string-match-p "search" help))))
+
+;; 22. Three-level nested inline groups
+(ert-deftest clime-test-help/cat-22-three-level-inline-nesting ()
+  "Three levels of nested inline groups compose category paths."
+  (let* ((cmd (clime-make-command :name "get" :handler #'ignore
+                                   :help "Get value"))
+         (l3 (clime-make-group :name "keys" :inline t :category "Keys"
+                                :children (list (cons "get" cmd))))
+         (l2 (clime-make-group :name "config" :inline t :category "Config"
+                                :children (list (cons "keys" l3))))
+         (l1 (clime-make-group :name "admin" :inline t :category "Admin"
+                                :children (list (cons "config" l2))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "admin" l1))))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "^Admin / Config / Keys:" help))
+    (should (string-match-p "get" help))))
 
 ;;; ─── Version ──────────────────────────────────────────────────────────
 
@@ -367,6 +732,58 @@
          (help (clime-format-help app '("myapp"))))
     (should (string-match-p "add" help))
     (should-not (string-match-p "secret" help))))
+
+;;; ─── Ancestor Options in Help ────────────────────────────────────────
+
+(ert-deftest clime-test-help/ancestor-options-shown ()
+  "Help for a child command shows inherited ancestor options."
+  (let* ((grp-opt (clime-make-option :name 'env :flags '("--env")
+                                      :help "Target environment"))
+         (cmd (clime-make-command :name "start" :handler #'ignore
+                                  :help "Start the service"))
+         (grp (clime-make-group :name "deploy"
+                                :options (list grp-opt)
+                                :children (list (cons "start" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" grp)))))
+    ;; Need parent refs set for ancestor walk
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help cmd '("t" "deploy" "start"))))
+      (should (string-match-p "--env" help))
+      (should (string-match-p "Target environment" help)))))
+
+(ert-deftest clime-test-help/ancestor-options-separate-section ()
+  "Ancestor options appear under a distinct heading, not mixed with local."
+  (let* ((grp-opt (clime-make-option :name 'env :flags '("--env")
+                                      :help "Target environment"))
+         (cmd-opt (clime-make-option :name 'port :flags '("--port")
+                                      :help "Port number"))
+         (cmd (clime-make-command :name "start" :handler #'ignore
+                                  :options (list cmd-opt)))
+         (grp (clime-make-group :name "deploy"
+                                :options (list grp-opt)
+                                :children (list (cons "start" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" grp)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help cmd '("t" "deploy" "start"))))
+      ;; Local options in Options section
+      (should (string-match-p "--port" help))
+      ;; Ancestor options in a separate section
+      (should (string-match-p "Global Options:" help))
+      (should (string-match-p "--env" help)))))
+
+(ert-deftest clime-test-help/no-ancestor-section-when-empty ()
+  "No Global Options section when the command has no ancestors with options."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list (clime-make-option
+                                                  :name 'json :flags '("--json")
+                                                  :nargs 0 :help "JSON output"))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help cmd '("t" "show"))))
+      (should-not (string-match-p "Global Options:" help)))))
 
 (ert-deftest clime-test-help/choices-function-shown-in-help ()
   "Option with :choices as a function resolves and shows values in help."

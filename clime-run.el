@@ -72,17 +72,22 @@ JSON-encoded.  The --json option is auto-injected into the app."
                                  #'clime-output-error
                                clime-format-error)))
     (condition-case err
-        (let* ((result (clime-parse app argv))
-               (node (clime-parse-result-node result))
-               (handler (clime-node-handler node))
-               (ctx (clime--build-context app result)))
-          (when handler
-            (let ((retval (funcall handler ctx)))
-              (when retval
-                (if clime--json-mode-p
-                    (clime-output-success retval)
-                  (princ retval)))))
-          0)
+        (let* ((setup (clime-app-setup app))
+               (result (clime-parse app argv (and setup t))))
+          ;; When setup hook exists: call it, then finalize (pass 2)
+          (when setup
+            (funcall setup app result)
+            (clime-parse-finalize result))
+          (let* ((node (clime-parse-result-node result))
+                 (handler (clime-node-handler node))
+                 (ctx (clime--build-context app result)))
+            (when handler
+              (let ((retval (funcall handler ctx)))
+                (when retval
+                  (if clime--json-mode-p
+                      (clime-output-success retval)
+                    (princ retval)))))
+            0))
       (clime-help-requested
        (clime--print-help (cdr err))
        0)

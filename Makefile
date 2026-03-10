@@ -2,17 +2,19 @@ EMACS ?= emacs
 
 BATCH = $(EMACS) --batch -Q -L . -L ./tests
 
-.PHONY: all compile lint test tests dist init readme clean help
+.PHONY: all compile lint test tests dist init readme clean clean-elc help
 
 all: compile
 
+SRCS := $(filter-out clime-make-main.el,$(wildcard *.el))
+
 compile:
 	@echo "Compiling clime Elisp files..."
-	@$(BATCH) -f batch-byte-compile *.el
+	@$(BATCH) -f batch-byte-compile $(SRCS)
 
 lint:
 	@echo "Running lint checks..."
-	@$(BATCH) --eval '(require (quote bytecomp))' --eval '(setq byte-compile-error-on-warn t byte-compile-warnings (quote (not docstrings-wide)))' -f batch-byte-compile *.el
+	@$(BATCH) --eval '(require (quote bytecomp))' --eval '(setq byte-compile-error-on-warn t byte-compile-warnings (quote (not docstrings-wide)))' -f batch-byte-compile $(SRCS)
 	@echo "Byte-compile clean."
 	@$(BATCH) --eval '\
 	  (let ((files (directory-files "." t "^clime.*\\.el$$")) \
@@ -32,7 +34,7 @@ lint:
 SELECT ?= ^clime-test-
 SELECTOR ?= $(SELECT)
 
-test:
+test: clean-elc
 	@$(BATCH) -l ./tests/clime-tests-runner.el \
 		--eval '(clime-run-tests-batch "$(SELECTOR)")'
 
@@ -45,10 +47,10 @@ DIST_SRCS = clime-settings.el clime-core.el clime-parse.el \
 
 dist:
 	@./clime-make.el bundle -o $(DIST_DIR)/clime.el \
-		--provide clime --main clime-make \
+		--provide clime --main clime-make-main.el \
 		--description "Declarative CLI framework for Emacs Lisp" \
 		$(DIST_SRCS)
-	@./clime-make.el init --standalone --env CLIME_MAIN_APP=clime-make \
+	@./clime-make.el init --standalone --env CLIME_MAIN_APP=clime \
 		$(DIST_DIR)/clime.el
 
 init:
@@ -62,9 +64,11 @@ readme:
 		--eval '(org-md-export-to-markdown)'
 	@echo "Done."
 
-clean:
-	@echo "Cleaning up compilation artifacts..."
+clean-elc:
 	@rm -f *.elc tests/*.elc
+
+clean: clean-elc
+	@echo "Cleaning up all build artifacts..."
 	@rm -rf .packages $(DIST_DIR)
 	@echo "Done."
 

@@ -329,5 +329,87 @@
                   (clime-run app '("dep" "add")))))
       (should (cl-some (lambda (m) (string-match-p "t dep add --help" m)) msgs)))))
 
+;;; ─── Setup Hook ────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-run/setup-hook-called ()
+  "Setup hook is called with app and parse-result before handler."
+  (let* ((setup-called nil)
+         (handler-called nil)
+         (cmd (clime-make-command :name "go" :handler
+                                  (lambda (_ctx) (setq handler-called t) nil)))
+         (app (clime-make-app :name "t" :version "1"
+                              :setup (lambda (a result)
+                                       (should (clime-app-p a))
+                                       (should (clime-parse-result-p result))
+                                       (should-not handler-called)
+                                       (setq setup-called t))
+                              :children (list (cons "go" cmd)))))
+    (clime-run app '("go"))
+    (should setup-called)
+    (should handler-called)))
+
+(ert-deftest clime-test-run/setup-hook-receives-parsed-values ()
+  "Setup hook receives parse-result with typed param values."
+  (let* ((captured-result nil)
+         (opt (clime-make-option :name 'verbose :flags '("-v") :count t))
+         (cmd (clime-make-command :name "go" :handler (lambda (_ctx) nil)))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :setup (lambda (_app result)
+                                       (setq captured-result result))
+                              :children (list (cons "go" cmd)))))
+    (clime-run app '("-v" "go"))
+    (should captured-result)
+    (should (equal (plist-get (clime-parse-result-params captured-result)
+                              'verbose)
+                   1))))
+
+(ert-deftest clime-test-run/setup-hook-influences-dynamic-choices ()
+  "Setup hook can set state that dynamic :choices reads in pass 2."
+  (let* ((allowed-values nil)
+         (opt (clime-make-option :name 'level :flags '("--level")
+                                  :choices (lambda () allowed-values)))
+         (cmd (clime-make-command :name "go" :handler (lambda (_ctx) nil)
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :setup (lambda (_app _result)
+                                       (setq allowed-values '("low" "high")))
+                              :children (list (cons "go" cmd)))))
+    ;; Dynamic choices resolved in pass 2 after setup sets allowed-values
+    (let ((code (clime-run app '("go" "--level" "high"))))
+      (should (= code 0)))))
+
+(ert-deftest clime-test-run/static-choices-validated-in-pass-1 ()
+  "Static :choices (literal list) are validated during pass 1."
+  (let* ((opt (clime-make-option :name 'level :flags '("--level")
+                                  :choices '("low" "high")))
+         (cmd (clime-make-command :name "go" :handler (lambda (_ctx) nil)
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "go" cmd)))))
+    ;; "bogus" is not in static choices — error even without setup
+    (let ((code (clime-run app '("go" "--level" "bogus"))))
+      (should (= code 2)))))
+
+(ert-deftest clime-test-run/setup-hook-error-returns-1 ()
+  "Setup hook error is treated as runtime error (exit code 1)."
+  (let* ((debug-on-error nil)
+         (cmd (clime-make-command :name "go" :handler (lambda (_ctx) nil)))
+         (app (clime-make-app :name "t" :version "1"
+                              :setup (lambda (_app _result) (error "Setup failed"))
+                              :children (list (cons "go" cmd)))))
+    (let ((code (clime-run app '("go"))))
+      (should (= code 1)))))
+
+(ert-deftest clime-test-run/no-setup-hook-works ()
+  "App without :setup works normally."
+  (let* ((cmd (clime-make-command :name "go" :handler (lambda (_ctx) "ok")))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "go" cmd)))))
+    (clime-test-with-run-output
+      (let ((code (clime-run app '("go"))))
+        (should (= code 0))
+        (should (equal clime-test--run-output "ok"))))))
+
 (provide 'clime-run-tests)
 ;;; clime-run-tests.el ends here

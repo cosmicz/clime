@@ -31,7 +31,9 @@
   (command nil :documentation "Resolved leaf command, or nil for group.")
   (node nil :documentation "Terminal node where parsing ended.")
   (path nil :type list :documentation "List of node names from root to command.")
-  (params nil :type list :documentation "Plist of (param-name value) for all scopes."))
+  (params nil :type list :documentation "Plist of (param-name value) for all scopes.")
+  (visited-nodes nil :type list :documentation "Nodes visited during parse (for finalization).")
+  (finalized nil :type boolean :documentation "Non-nil after pass-2 finalization."))
 
 ;;; ─── Internal Helpers ───────────────────────────────────────────────────
 
@@ -52,16 +54,19 @@ Matches anything starting with \"-\" that isn't just \"-\" alone."
         (cons (substring token 0 pos)
               (substring token (1+ pos)))))))
 
-(defun clime--find-option-in-scope (flag current-node root)
-  "Find option matching FLAG, first in CURRENT-NODE then in ROOT.
-Return (OPTION . SCOPE) where SCOPE is \\='current or \\='root, or nil."
+(defun clime--find-option-in-scope (flag current-node _root)
+  "Find option matching FLAG, first in CURRENT-NODE then in ancestors.
+Walk the parent chain from CURRENT-NODE upward.
+Return (OPTION . SCOPE) where SCOPE is \\='current or \\='ancestor, or nil."
   (let ((opt (clime-node-find-option current-node flag)))
     (if opt
         (cons opt 'current)
-      (unless (eq current-node root)
-        (let ((root-opt (clime-node-find-option root flag)))
-          (when root-opt
-            (cons root-opt 'root)))))))
+      (let ((node (clime-node-parent current-node)))
+        (while (and node (not opt))
+          (setq opt (clime-node-find-option node flag))
+          (unless opt (setq node (clime-node-parent node))))
+        (when opt
+          (cons opt 'ancestor))))))
 
 (defun clime--expand-short-bundle (token current-node root)
   "Try to expand TOKEN as a short flag bundle like \"-abc\".
@@ -108,9 +113,13 @@ FLAG-OR-NAME is used in error messages."
 (defun clime--transform-value (value type choices coerce flag-or-name)
   "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE.
 CHOICES may be a list or a function returning a list.
+Dynamic choices (functions) are skipped here and deferred to
+`clime-parse-finalize' (pass 2), enabling a setup hook to
+configure state before validation.
 FLAG-OR-NAME is used in error messages."
   (let* ((result (clime--coerce-value value type flag-or-name))
-         (resolved (clime--resolve-value choices)))
+         ;; Only validate static choices in pass 1; defer dynamic (functionp)
+         (resolved (and choices (not (functionp choices)) choices)))
     (when (and resolved (not (member result resolved)))
       (signal 'clime-usage-error
               (list (format "Invalid value \"%s\" for %s (choose from: %s)"
@@ -185,12 +194,18 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
      ;; Boolean (non-count): set t
      ((clime-option-boolean-p opt)
       (plist-put params name t))
-     ;; Multiple: append to list
+     ;; Multiple: append to list (split by separator if set)
      ((clime-option-multiple opt)
-      (let* ((val (clime--transform-value token-value type choices coerce
-                                          (car (clime-option-flags opt))))
+      (let* ((sep (clime-option-separator opt))
+             (raw-vals (if sep
+                          (split-string token-value sep t)
+                        (list token-value)))
+             (flag (car (clime-option-flags opt)))
+             (vals (mapcar (lambda (v)
+                             (clime--transform-value v type choices coerce flag))
+                           raw-vals))
              (current (plist-get params name)))
-        (plist-put params name (append current (list val)))))
+        (plist-put params name (append current vals))))
      ;; Normal value option
      (t
       (plist-put params name
@@ -298,18 +313,19 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
            ((clime-option-boolean-p opt)
             (when (clime--parse-boolean-env value env-var)
               (setq params (plist-put params name t))))
-           ;; Multiple option: split on comma, transform each
+           ;; Multiple option: split on separator (or comma), transform each
            ((clime-option-multiple opt)
             (let ((type (clime-option-type opt))
                   (choices (clime-option-choices opt))
-                  (coerce (clime-option-coerce opt)))
+                  (coerce (clime-option-coerce opt))
+                  (sep (or (clime-option-separator opt) ",")))
               (setq params
                     (plist-put params name
                                (mapcar (lambda (v)
                                          (clime--transform-value
                                           (string-trim v) type choices
                                           coerce env-var))
-                                       (split-string value "," t))))))
+                                       (split-string value sep t))))))
            ;; Normal value option
            (t
             (setq params
@@ -362,11 +378,15 @@ PATH is the command path for error messages.  Signals `clime-usage-error'."
 
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
-(defun clime-parse (app argv)
+(defun clime-parse (app argv &optional skip-finalize)
   "Parse ARGV against APP command tree.
 Return a `clime-parse-result' on success.
 Signal `clime-usage-error' on parse failures.
-Signal `clime-help-requested' for --help/-h/--version."
+Signal `clime-help-requested' for --help/-h/--version.
+
+When SKIP-FINALIZE is non-nil, return an unfinalized result (pass 1 only).
+The caller must call `clime-parse-finalize' to complete pass 2.
+This enables a setup hook to run between passes."
   (let ((current-node app)
         (root app)
         (option-parsing t)
@@ -383,9 +403,10 @@ Signal `clime-help-requested' for --help/-h/--version."
         (progn
     (while (< i len)
       (let* ((token (nth i argv))
-             (child (and (clime-group-only-p current-node)
-                         (clime--required-args-satisfied-p current-node params)
-                         (clime-group-find-child current-node token))))
+             (child-path (and (clime-group-only-p current-node)
+                              (clime--required-args-satisfied-p current-node params)
+                              (clime-group-find-child-path current-node token)))
+             (child (car (last child-path))))
         (cond
          ;; 1. End of options
          ((string= token "--")
@@ -401,12 +422,13 @@ Signal `clime-help-requested' for --help/-h/--version."
                 (j (1+ i)))
             (while (< j len)
               (let* ((next (nth j argv))
-                     (child (and (clime-group-only-p help-node)
-                                 (clime-group-find-child help-node next))))
-                (if child
+                     (found (and (clime-group-only-p help-node)
+                                 (clime-group-find-child-path help-node next))))
+                (if found
                     (progn
-                      (setq help-node child)
-                      (setq help-path (append help-path (list (clime-node-name child))))
+                      (dolist (node found)
+                        (setq help-node node)
+                        (setq help-path (append help-path (list (clime-node-name node)))))
                       (cl-incf j))
                   (setq j len))))  ;; stop on non-command token
             (signal 'clime-help-requested
@@ -464,11 +486,12 @@ Signal `clime-help-requested' for --help/-h/--version."
                                         (if split (car split) token)
                                         (string-join path " ")))))))))
 
-         ;; 4. Try group descent
+         ;; 4. Try group descent (child-path includes inline groups)
          (child
-          (setq current-node child)
-          (setq path (append path (list (clime-node-name child))))
-          (push child visited-nodes)
+          (dolist (node child-path)
+            (setq current-node node)
+            (setq path (append path (list (clime-node-name node))))
+            (push node visited-nodes))
           (setq arg-index 0)
           (cl-incf i))
 
@@ -508,17 +531,16 @@ Signal `clime-help-requested' for --help/-h/--version."
       (signal 'clime-help-requested
               (list :node current-node :path path)))
 
-    ;; Apply env vars, then defaults, then check required
-    (setq params (clime--apply-env visited-nodes params root))
-    (setq params (clime--apply-defaults visited-nodes params))
-    (clime--check-required visited-nodes params path)
-
-    ;; Build result
-    (clime-parse-result--create
-     :command (if (clime-command-p current-node) current-node nil)
-     :node current-node
-     :path path
-     :params params))
+    ;; Build pass-1 result
+    (let ((result (clime-parse-result--create
+                   :command (if (clime-command-p current-node) current-node nil)
+                   :node current-node
+                   :path path
+                   :params params
+                   :visited-nodes visited-nodes)))
+      (if skip-finalize
+          result
+        (clime-parse-finalize result))))
       ;; Enrich usage errors with the current parse path for hints
       (clime-usage-error
        (signal 'clime-usage-error
@@ -539,6 +561,60 @@ Also runs ancestor collision checks after parent refs are established."
       (let ((child (cdr entry)))
         (setf (clime-node-parent child) node)
         (clime--set-parent-refs-1 child)))))
+
+;;; ─── Pass-2 Finalization ────────────────────────────────────────────────
+
+(defun clime--validate-dynamic-choices (nodes params)
+  "Validate PARAMS against dynamic (function) :choices in NODES.
+Only checks options and args whose :choices slot is a function,
+since static choices were already validated in pass 1."
+  (dolist (node nodes)
+    (dolist (opt (clime-node-options node))
+      (let ((choices (clime-option-choices opt)))
+        (when (functionp choices)
+          (let ((val (plist-get params (clime-option-name opt)))
+                (resolved (funcall choices)))
+            (when (and val resolved)
+              (let ((vals (if (clime-option-multiple opt) val (list val))))
+                (dolist (v vals)
+                  (unless (member v resolved)
+                    (signal 'clime-usage-error
+                            (list (format "Invalid value \"%s\" for %s (choose from: %s)"
+                                          v (car (clime-option-flags opt))
+                                          (mapconcat (lambda (c) (format "%s" c))
+                                                     resolved ", "))))))))))))
+    (dolist (arg (clime-node-args node))
+      (let ((choices (clime-arg-choices arg)))
+        (when (functionp choices)
+          (let ((val (plist-get params (clime-arg-name arg)))
+                (resolved (funcall choices)))
+            (when (and val resolved (not (member val resolved)))
+              (signal 'clime-usage-error
+                      (list (format "Invalid value \"%s\" for <%s> (choose from: %s)"
+                                    val (clime-arg-name arg)
+                                    (mapconcat (lambda (c) (format "%s" c))
+                                               resolved ", ")))))))))))
+
+(defun clime-parse-finalize (result)
+  "Finalize RESULT from pass-1 parse (pass 2).
+Validates dynamic choices, applies env vars, applies defaults,
+and checks required params.  Returns the updated RESULT."
+  (when (clime-parse-result-finalized result)
+    (error "clime-parse-finalize: result already finalized"))
+  (let* ((visited-nodes (clime-parse-result-visited-nodes result))
+         (params (clime-parse-result-params result))
+         (path (clime-parse-result-path result))
+         (root (cl-find-if #'clime-app-p visited-nodes)))
+    ;; Validate dynamic choices (functions resolved now, after setup)
+    (clime--validate-dynamic-choices visited-nodes params)
+    ;; Apply env vars, then defaults, then check required
+    (setq params (clime--apply-env visited-nodes params root))
+    (setq params (clime--apply-defaults visited-nodes params))
+    (clime--check-required visited-nodes params path)
+    ;; Update and mark finalized
+    (setf (clime-parse-result-params result) params)
+    (setf (clime-parse-result-finalized result) t)
+    result))
 
 (provide 'clime-parse)
 ;;; clime-parse.el ends here

@@ -84,6 +84,10 @@ Supports :flag t as shorthand for :nargs 0 (boolean flag)."
     (when (plist-get plist :flag)
       (setq plist (plist-put (cl-copy-list plist) :nargs 0))
       (cl-remf plist :flag))
+    ;; :separator implies :multiple t
+    (when (and (plist-get plist :separator)
+               (not (plist-member plist :multiple)))
+      (setq plist (plist-put (cl-copy-list plist) :multiple t)))
     `(clime-make-option :name ',name :flags ',flags ,@plist)))
 
 (defun clime--build-arg (args)
@@ -111,7 +115,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :epilog)))
+                     '(:help :doc :aliases :hidden :epilog :category)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms))
@@ -130,6 +134,8 @@ ARGS is (NAME &rest BODY)."
                 `(:hidden ,(plist-get keywords :hidden)))
             ,@(when (plist-get keywords :epilog)
                 `(:epilog ,(plist-get keywords :epilog)))
+            ,@(when (plist-get keywords :category)
+                `(:category ,(plist-get keywords :category)))
             ,@(when (plist-get classified :options)
                 `(:options (list ,@(plist-get classified :options))))
             ,@(when (plist-get classified :args)
@@ -142,7 +148,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :inline :epilog)))
+                     '(:help :doc :aliases :hidden :inline :epilog :category)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -159,6 +165,8 @@ ARGS is (NAME &rest BODY)."
                 `(:inline ,(plist-get keywords :inline)))
             ,@(when (plist-get keywords :epilog)
                 `(:epilog ,(plist-get keywords :epilog)))
+            ,@(when (plist-get keywords :category)
+                `(:category ,(plist-get keywords :category)))
             ,@(when (plist-get classified :options)
                 `(:options (list ,@(plist-get classified :options))))
             ,@(when (plist-get classified :args)
@@ -191,7 +199,7 @@ Child forms:
   (let* ((name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      body
-                     '(:version :env-prefix :help :doc :json-mode :epilog)))
+                     '(:version :env-prefix :help :doc :json-mode :epilog :setup)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -208,6 +216,8 @@ Child forms:
             `(:json-mode ,(plist-get keywords :json-mode)))
         ,@(when (plist-get keywords :epilog)
             `(:epilog ,(plist-get keywords :epilog)))
+        ,@(when (plist-get keywords :setup)
+            `(:setup ,(plist-get keywords :setup)))
         ,@(when (plist-get classified :options)
             `(:options (list ,@(plist-get classified :options))))
         ,@(when (plist-get classified :args)

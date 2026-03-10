@@ -132,14 +132,14 @@ Appends repeat indicator for :count and :multiple options."
 
 (defun clime-help--format-options (options)
   "Format the Options section for OPTIONS list.
-Respects :group labels and :hidden flags."
+Respects :category labels and :hidden flags."
   (let ((visible (cl-remove-if #'clime-option-hidden options)))
     (when visible
       (let ((grouped (make-hash-table :test 'equal))
             (group-order '()))
         ;; Partition by group label
         (dolist (opt visible)
-          (let ((grp (or (clime-option-group opt) "")))
+          (let ((grp (or (clime-option-category opt) "")))
             (unless (gethash grp grouped)
               (push grp group-order))
             (push opt (gethash grp grouped))))
@@ -159,31 +159,140 @@ Respects :group labels and :hidden flags."
               (push (concat header "\n" (clime-help--format-table rows)) sections)))
           (string-join (nreverse sections) "\n\n"))))))
 
-(defun clime-help--effective-children (node)
-  "Return the effective children alist for NODE.
-Default groups are replaced by their children (inlined at parent level)."
-  (cl-mapcan (lambda (entry)
-               (let ((child (cdr entry)))
-                 (if (and (clime-group-p child)
-                          (clime-node-inline child))
-                     (copy-sequence (clime-group-children child))
-                   (list entry))))
-             (clime-group-children node)))
+(defun clime-help--category-path (node stop-at)
+  "Build category path from NODE up to (but not including) STOP-AT.
+Walks `clime-node-parent', collecting non-nil `clime-node-category'
+values.  Returns a list of category strings, outermost first."
+  (let ((segments '())
+        (cur node))
+    (while (and cur (not (eq cur stop-at)))
+      (let ((cat (clime-node-category cur)))
+        (when cat (push cat segments)))
+      (setq cur (clime-node-parent cur)))
+    segments))
 
-(defun clime-help--format-commands (children)
-  "Format the Commands section for CHILDREN alist."
-  (let* ((visible (cl-remove-if
-                   (lambda (entry)
-                     (clime-node-hidden (cdr entry)))
-                   children)))
-    (when visible
-      (let ((rows (mapcar
-                   (lambda (entry)
-                     (cons (car entry)
-                           (clime-help--first-line
-                            (or (clime-node-help (cdr entry)) ""))))
-                   visible)))
-        (concat "Commands:\n" (clime-help--format-table rows))))))
+(defun clime-help--collect-items (node)
+  "Collect help items from NODE using `clime-node-collect'.
+Returns flat list of (CATEGORY-PATH TYPE ITEM) where:
+  CATEGORY-PATH — list of category strings (outermost first), or nil.
+  TYPE          — :option, :command, or :group.
+  ITEM          — the struct.
+
+Options on uncategorized inline groups with no own :category are skipped."
+  (let ((raw (clime-node-collect node))
+        (items '()))
+    (dolist (entry raw)
+      (let* ((type (car entry))
+             (item (cadr entry)))
+        (pcase type
+          (:group
+           ;; Emit group if it has :help (for section descriptions)
+           (let ((path (clime-help--category-path item node)))
+             (when (and path (clime-node-help item))
+               (push (list path :group item) items))))
+          (:option
+           (let* ((owner (caddr entry))
+                  (path (clime-help--category-path owner node))
+                  (own-cat (clime-option-category item))
+                  (full-path (if own-cat (append path (list own-cat)) path)))
+             ;; Skip options with empty category path (uncategorized on
+             ;; uncategorized inline group).  Top-level options (parent = node)
+             ;; are always kept.
+             (when (or full-path (eq owner node))
+               (push (list full-path :option item) items))))
+          (:command
+           (let* ((path (clime-help--category-path (clime-node-parent item) node))
+                  (own-cat (clime-node-category item))
+                  (full-path (if own-cat (append path (list own-cat)) path)))
+             (push (list full-path :command item) items))))))
+    (nreverse items)))
+
+(defun clime-help--option-row (opt)
+  "Format OPT as a (left . help) table row."
+  (cons (clime-help--format-option-flags opt)
+        (clime-help--append-choices
+         (clime-option-help opt)
+         (clime-option-choices opt))))
+
+(defun clime-help--format-sections (items)
+  "Format ITEMS into interleaved category sections.
+ITEMS is a flat list of (CATEGORY-PATH TYPE ITEM) from
+`clime-help--collect-items'.  Groups by category path.
+Uncategorized options use \"Options:\", uncategorized commands
+use \"Commands:\".  Sections appear in first-occurrence order.
+:group items with :help render as a description line under
+the heading."
+  (let ((grouped (make-hash-table :test 'equal))
+        (order '()))
+    ;; Partition items by section key
+    (dolist (entry items)
+      (let* ((path (car entry))
+             (type (cadr entry))
+             (item (caddr entry))
+             (key (cond
+                   (path (string-join path " / "))
+                   ((eq type :option) :options)
+                   ((eq type :command) :commands)
+                   (t :commands))))
+        (unless (gethash key grouped)
+          (push key order)
+          ;; (description options commands)
+          (puthash key (list nil nil nil) grouped))
+        (let ((bucket (gethash key grouped)))
+          (pcase type
+            (:group (unless (car bucket)
+                      (setcar bucket (clime-help--first-line
+                                      (clime-node-help item)))))
+            (:option (push item (cadr bucket)))
+            (:command (push item (caddr bucket)))))))
+    (setq order (nreverse order))
+    ;; Render sections
+    (let ((sections '()))
+      (dolist (key order)
+        (let* ((bucket (gethash key grouped))
+               (desc (car bucket))
+               (opts (nreverse (cadr bucket)))
+               (cmds (nreverse (caddr bucket)))
+               (rows (append (mapcar #'clime-help--option-row opts)
+                             (mapcar (lambda (cmd)
+                                       (cons (clime-node-name cmd)
+                                             (clime-help--first-line
+                                              (or (clime-node-help cmd) ""))))
+                                     cmds)))
+               (header (cond
+                        ((eq key :options) "Options:")
+                        ((eq key :commands) "Commands:")
+                        (t (format "%s:" key))))
+               (parts (list header)))
+          (when desc
+            (push (concat clime-help--indent desc "\n") parts))
+          (push (clime-help--format-table rows) parts)
+          (push (string-join (nreverse parts) "\n") sections)))
+      (when sections
+        (string-join (nreverse sections) "\n\n")))))
+
+(defun clime-help--collect-ancestor-options (node)
+  "Collect all options from ancestors of NODE.
+Walk the parent chain, gathering each ancestor's non-hidden options.
+Returns a flat list of `clime-option' structs, deduped by flag set."
+  (let ((parent (clime-node-parent node))
+        (seen-flags (make-hash-table :test 'equal))
+        (result '()))
+    ;; Mark current node's flags as seen (so we don't duplicate)
+    (dolist (opt (clime-node-options node))
+      (dolist (flag (clime-option-flags opt))
+        (puthash flag t seen-flags)))
+    ;; Walk ancestors
+    (while parent
+      (dolist (opt (clime-node-options parent))
+        (unless (or (clime-option-hidden opt)
+                    (cl-some (lambda (flag) (gethash flag seen-flags))
+                             (clime-option-flags opt)))
+          (dolist (flag (clime-option-flags opt))
+            (puthash flag t seen-flags))
+          (push opt result)))
+      (setq parent (clime-node-parent parent)))
+    (nreverse result)))
 
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
@@ -198,16 +307,30 @@ Default groups are replaced by their children (inlined at parent level)."
     (let ((args-section (clime-help--format-arguments (clime-node-args node))))
       (when args-section
         (push args-section sections)))
-    ;; Options
-    (let ((opts-section (clime-help--format-options (clime-node-options node))))
-      (when opts-section
-        (push opts-section sections)))
-    ;; Commands (for groups), inlining default groups
-    (when (clime-group-only-p node)
-      (let ((cmds-section (clime-help--format-commands
-                           (clime-help--effective-children node))))
-        (when cmds-section
-          (push cmds-section sections))))
+    ;; Options + Commands (unified sections with interleaved categories)
+    (if (clime-group-only-p node)
+        (let ((unified (clime-help--format-sections
+                        (clime-help--collect-items node))))
+          (when unified
+            (push unified sections)))
+      ;; Leaf commands: options only, no children
+      (let ((opts-section (clime-help--format-options (clime-node-options node))))
+        (when opts-section
+          (push opts-section sections))))
+    ;; Global Options (inherited from ancestors)
+    (let* ((ancestor-opts (clime-help--collect-ancestor-options node))
+           (global-section (when ancestor-opts
+                             (let ((rows (mapcar
+                                          (lambda (opt)
+                                            (cons (clime-help--format-option-flags opt)
+                                                  (clime-help--append-choices
+                                                   (clime-option-help opt)
+                                                   (clime-option-choices opt))))
+                                          ancestor-opts)))
+                               (concat "Global Options:\n"
+                                       (clime-help--format-table rows))))))
+      (when global-section
+        (push global-section sections)))
     ;; Epilog
     (let ((epilog (clime-node-epilog node)))
       (when (and epilog (not (string-empty-p epilog)))
