@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (0.2.0)
+
+### Added
+
+- Ancestor option propagation: options from any ancestor (app, group) are
+  now available to all descendant commands, with a "Global Options:" section
+  in help output
+- Two-pass parse with `:setup` hook: app-level initialization runs after
+  pass-1 (argv parsed) but before pass-2 (dynamic choices validated, env/defaults applied).
+  Enables config loading that influences lazy `:choices` and `:default` functions.
+- `clime-params-plist`: convert context params to keyword plist, eliminating
+  `clime-let` + plist reconstruction boilerplate
+- `clime-parse-finalize`: public API for explicit pass-2 control
+
+### Changed
+
+- Renamed `:group` option slot to `:category` (avoids confusion with `clime-group`)
+- Static `:choices` (literal lists) validated in pass 1; dynamic `:choices`
+  (functions) deferred to pass 2
+
 ## 0.1.1 — 2026-03-09
 
 ### Added

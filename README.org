@@ -95,6 +95,9 @@ So ~./myapp.el hello world~ just works from your shell.
 - Invocable groups (group with its own handler)
 - Inline groups (~:inline t~) --- promote children to parent level
 - Lazy choices (~:choices~ accepts a function)
+- Ancestor option propagation --- group options available to all descendants
+- Setup hook (~:setup~) with two-pass parse for config loading
+- ~clime-params-plist~ --- convert context params to keyword plist
 - Single-file distribution via ~bundle~ command
 
 ** Options
@@ -423,6 +426,81 @@ Group related options under a heading in ~--help~ output:
 These appear under a "Filter:" section in help instead of the
 default "Options:" section.
 
+** Ancestor option propagation
+
+Options declared at any level are automatically available to all
+descendants.  A ~--verbose~ flag on the app or on a group can be used
+from any child command:
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+
+  (clime-option verbose ("-v" "--verbose") :count t
+    :help "Increase verbosity")
+
+  (clime-group repo
+    :help "Manage repositories"
+    (clime-option registry ("--registry") :help "Registry URL")
+
+    (clime-command add
+      :help "Add a repo"
+      (clime-arg name :help "Repo name")
+      ;; Handler can access verbose (from app) and registry (from group)
+      (clime-handler (ctx)
+        (clime-let ctx (name verbose registry)
+          (format "Adding %s (verbose=%s, registry=%s)" name verbose registry))))))
+#+end_src
+
+In ~--help~, inherited options appear in a separate "Global Options:"
+section.
+
+** Setup hook
+
+The ~:setup~ hook runs after pass-1 parsing (all values extracted from
+argv) but before pass-2 finalization (dynamic ~:choices~ validation,
+env vars, defaults).  This lets apps load configuration that influences
+dynamic option values:
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+  :env-prefix "MYAPP"
+  :setup (lambda (app result)
+           (let ((dir (plist-get (clime-parse-result-params result) 'config-dir)))
+             (my-load-config (or dir "~/.myapp"))))
+
+  (clime-option config-dir ("--config-dir")
+    :help "Config directory")
+
+  (clime-option level ("--level")
+    :help "Log level"
+    :choices #'my-configured-levels)  ; resolved after setup
+
+  (clime-command run
+    :help "Run the app"
+    (clime-handler (ctx) "running")))
+#+end_src
+
+Static ~:choices~ (literal lists) are validated immediately in pass 1.
+Dynamic ~:choices~ (functions) are deferred to pass 2 after the setup
+hook has run.
+
+** ~clime-params-plist~
+
+Convert context params to a keyword plist, useful for passing parsed
+values to other functions:
+
+#+begin_src emacs-lisp
+(clime-handler (ctx)
+  ;; All params as keyword plist
+  (my-function (clime-params-plist ctx))
+  ;; => (:verbose 3 :package "foo" :force t)
+
+  ;; Selected params only (nil values omitted)
+  (my-other-function (clime-params-plist ctx 'package 'force)))
+#+end_src
+
 ** Stdin
 
 Use ~-~ as an argument value to read from stdin:
@@ -455,10 +533,10 @@ listings, and shown in full in detailed command help.
 
 | Macro            | Purpose                            | Key arguments                                                             |
 |------------------+------------------------------------+---------------------------------------------------------------------------|
-| ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~              |
+| ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~, ~:setup~   |
 | ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:epilog~                                |
 | ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:inline~, ~:epilog~                     |
-| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:env~   |
+| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:env~, ~:category~ |
 | ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:default~, ~:help~            |
 | ~clime-handler~  | Attach a handler to a command      | ~(ctx)~ --- receives the parse context                                   |
 | ~clime-let~      | Destructure context in a handler   | ~ctx (var1 var2 ...)~ --- binds option/arg values                        |
