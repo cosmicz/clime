@@ -59,7 +59,7 @@ to the widest entry plus `clime-help--min-gap'."
   "Build the usage line for NODE at PATH."
   (let* ((path-str (string-join path " "))
          (has-options (not (null (clime-node-options node))))
-         (has-children (and (clime-group-only-p node)
+         (has-children (and (clime-branch-p node)
                             (clime-group-children node)))
          (args (clime-node-args node))
          (parts (list (format "Usage: %s" path-str))))
@@ -308,7 +308,7 @@ Returns a flat list of `clime-option' structs, deduped by flag set."
       (when args-section
         (push args-section sections)))
     ;; Options + Commands (unified sections with interleaved categories)
-    (if (clime-group-only-p node)
+    (if (clime-branch-p node)
         (let ((unified (clime-help--format-sections
                         (clime-help--collect-items node))))
           (when unified

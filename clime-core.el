@@ -125,11 +125,25 @@ ARGS is a plist of slot values."
   "A branch node (subcommand group) in the CLI tree."
   (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups."))
 
-(defun clime--set-children-parent (node)
-  "Set the :parent of each child in NODE's children alist to NODE."
+(defun clime--set-direct-parents (node)
+  "Set the :parent of each direct child in NODE's children alist to NODE."
   (when (clime-group-p node)
     (dolist (entry (clime-group-children node))
       (setf (clime-node-parent (cdr entry)) node))))
+
+(defun clime--set-parent-refs-1 (node)
+  "Recursively set parent refs for children of NODE."
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (let ((child (cdr entry)))
+        (setf (clime-node-parent child) node)
+        (clime--set-parent-refs-1 child)))))
+
+(defun clime--set-parent-refs (node)
+  "Recursively set parent refs for children of NODE.
+Also runs ancestor collision checks after parent refs are established."
+  (clime--set-parent-refs-1 node)
+  (clime-check-ancestor-collisions node))
 
 (defun clime-make-group (&rest args)
   "Create a `clime-group' with validation.
@@ -138,14 +152,15 @@ ARGS is a plist of slot values."
   (unless (plist-get args :name)
     (error "clime-make-group: :name is required"))
   (let ((group (apply #'clime-group--create args)))
-    (clime--set-children-parent group)
+    (clime--set-direct-parents group)
     group))
 
-(defun clime-group-only-p (node)
-  "Return non-nil if NODE is a group but not a command.
-True for groups and apps, false for commands."
+(defun clime-branch-p (node)
+  "Return non-nil if NODE is a branch (group or app, not a command)."
   (and (clime-group-p node)
        (not (clime-command-p node))))
+
+(define-obsolete-function-alias 'clime-group-only-p #'clime-branch-p "0.3.0")
 
 ;;; ─── App ────────────────────────────────────────────────────────────────
 
@@ -179,7 +194,7 @@ ARGS is a plist of slot values."
       (setq args (plist-put args :options
                             (append (plist-get args :options) (list opt))))))
   (let ((app (apply #'clime-app--create args)))
-    (clime--set-children-parent app)
+    (clime--set-direct-parents app)
     app))
 
 ;;; ─── Context ────────────────────────────────────────────────────────────
@@ -313,7 +328,7 @@ NODE is the current group, DEPTH tracks recursion level."
         (when (or (null match-p) (funcall match-p :option opt))
           (push (list :option opt node) items))))
     ;; Walk children
-    (when (clime-group-only-p node)
+    (when (clime-branch-p node)
       (dolist (entry (clime-group-children node))
         (let ((child (cdr entry)))
           (cond
@@ -334,16 +349,23 @@ NODE is the current group, DEPTH tracks recursion level."
                 (push (list :command child) items))))))))
     (nreverse items)))
 
+(defun clime-node-ancestors (node)
+  "Return list of ancestor nodes from NODE's parent to root."
+  (let ((parent (clime-node-parent node))
+        (ancestors '()))
+    (while parent
+      (push parent ancestors)
+      (setq parent (clime-node-parent parent)))
+    (nreverse ancestors)))
+
 (defun clime-node-all-ancestor-flags (node)
   "Collect all option flags from ancestors of NODE.
 Walk the parent chain, collecting each ancestor's option flags into a flat list."
-  (let ((parent (clime-node-parent node))
-        (flags '()))
-    (while parent
-      (dolist (opt (clime-node-options parent))
-        (setq flags (append (clime-option-flags opt) flags)))
-      (setq parent (clime-node-parent parent)))
-    flags))
+  (cl-mapcan (lambda (ancestor)
+               (cl-mapcan (lambda (opt)
+                            (copy-sequence (clime-option-flags opt)))
+                          (clime-node-options ancestor)))
+             (clime-node-ancestors node)))
 
 ;;; ─── Collision Checks ──────────────────────────────────────────────────
 
@@ -367,7 +389,7 @@ Sibling collisions are allowed."
     ;; Build merged flag owners for children
     (let ((merged (append (mapcar (lambda (f) (cons f name)) local-flags)
                           ancestor-flag-owners)))
-      (when (clime-group-only-p node)
+      (when (clime-branch-p node)
         (dolist (entry (clime-group-children node))
           (clime-check-ancestor-collisions (cdr entry) merged path))))))
 

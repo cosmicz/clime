@@ -403,7 +403,7 @@ This enables a setup hook to run between passes."
         (progn
     (while (< i len)
       (let* ((token (nth i argv))
-             (child-path (and (clime-group-only-p current-node)
+             (child-path (and (clime-branch-p current-node)
                               (clime--required-args-satisfied-p current-node params)
                               (clime-group-find-child-path current-node token)))
              (child (car (last child-path))))
@@ -422,7 +422,7 @@ This enables a setup hook to run between passes."
                 (j (1+ i)))
             (while (< j len)
               (let* ((next (nth j argv))
-                     (found (and (clime-group-only-p help-node)
+                     (found (and (clime-branch-p help-node)
                                  (clime-group-find-child-path help-node next))))
                 (if found
                     (progn
@@ -516,7 +516,7 @@ This enables a setup hook to run between passes."
 
     ;; Post-parse: if we ended on a group (not a leaf command), check
     ;; if it has an invoke handler, otherwise it's missing a subcommand
-    (when (and (clime-group-only-p current-node)
+    (when (and (clime-branch-p current-node)
                (not (clime-app-p current-node))
                (clime-group-children current-node)
                (not (clime-node-handler current-node)))
@@ -545,22 +545,6 @@ This enables a setup hook to run between passes."
       (clime-usage-error
        (signal 'clime-usage-error
                (list (cadr err) path))))))
-
-;;; ─── Parent Ref Setup ───────────────────────────────────────────────────
-
-(defun clime--set-parent-refs (node)
-  "Recursively set parent refs for children of NODE.
-Also runs ancestor collision checks after parent refs are established."
-  (clime--set-parent-refs-1 node)
-  (clime-check-ancestor-collisions node))
-
-(defun clime--set-parent-refs-1 (node)
-  "Set parent refs for children of NODE (internal recursive helper)."
-  (when (clime-group-p node)
-    (dolist (entry (clime-group-children node))
-      (let ((child (cdr entry)))
-        (setf (clime-node-parent child) node)
-        (clime--set-parent-refs-1 child)))))
 
 ;;; ─── Pass-2 Finalization ────────────────────────────────────────────────
 
