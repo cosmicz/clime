@@ -17,6 +17,14 @@
 (require 'cl-lib)
 (require 'clime-core)
 
+;;; ─── Utilities ──────────────────────────────────────────────────────────
+
+(defun clime-help--first-line (text)
+  "Return the first line of TEXT, or TEXT if single-line."
+  (if (and text (string-match "\n" text))
+      (substring text 0 (match-beginning 0))
+    text))
+
 ;;; ─── Column Alignment ─────────────────────────────────────────────────
 
 (defconst clime-help--indent "  "
@@ -70,6 +78,23 @@ to the widest entry plus `clime-help--min-gap'."
               parts)))
     (string-join (nreverse parts) " ")))
 
+(defun clime-help--choices-suffix (choices)
+  "Return a choices annotation string, or nil if CHOICES is empty.
+CHOICES may be a list or a function returning a list."
+  (let ((resolved (clime--resolve-value choices)))
+    (when resolved
+      (format "(choices: %s)"
+              (mapconcat (lambda (c) (format "%s" c)) resolved ", ")))))
+
+(defun clime-help--append-choices (help-text choices)
+  "Append choices annotation to HELP-TEXT if CHOICES is non-nil."
+  (let ((suffix (clime-help--choices-suffix choices)))
+    (if suffix
+        (if (and help-text (not (string-empty-p help-text)))
+            (concat help-text " " suffix)
+          suffix)
+      (or help-text ""))))
+
 (defun clime-help--format-arguments (args)
   "Format the Arguments section for ARGS list."
   (let ((visible (cl-remove-if #'null args)))
@@ -77,7 +102,9 @@ to the widest entry plus `clime-help--min-gap'."
       (let ((rows (mapcar
                    (lambda (arg)
                      (let ((name (format "<%s>" (clime-arg-name arg)))
-                           (help (or (clime-arg-help arg) "")))
+                           (help (clime-help--append-choices
+                                  (clime-arg-help arg)
+                                  (clime-arg-choices arg))))
                        (cons name help)))
                    visible)))
         (concat "Arguments:\n" (clime-help--format-table rows))))))
@@ -124,11 +151,24 @@ Respects :group labels and :hidden flags."
                    (rows (mapcar
                           (lambda (opt)
                             (cons (clime-help--format-option-flags opt)
-                                  (or (clime-option-help opt) "")))
+                                  (clime-help--append-choices
+                                   (clime-option-help opt)
+                                   (clime-option-choices opt))))
                           opts))
                    (header (if (string-empty-p grp) "Options:" (format "%s:" grp))))
               (push (concat header "\n" (clime-help--format-table rows)) sections)))
           (string-join (nreverse sections) "\n\n"))))))
+
+(defun clime-help--effective-children (node)
+  "Return the effective children alist for NODE.
+Default groups are replaced by their children (inlined at parent level)."
+  (cl-mapcan (lambda (entry)
+               (let ((child (cdr entry)))
+                 (if (and (clime-group-p child)
+                          (clime-node-inline child))
+                     (copy-sequence (clime-group-children child))
+                   (list entry))))
+             (clime-group-children node)))
 
 (defun clime-help--format-commands (children)
   "Format the Commands section for CHILDREN alist."
@@ -140,7 +180,8 @@ Respects :group labels and :hidden flags."
       (let ((rows (mapcar
                    (lambda (entry)
                      (cons (car entry)
-                           (or (clime-node-help (cdr entry)) "")))
+                           (clime-help--first-line
+                            (or (clime-node-help (cdr entry)) ""))))
                    visible)))
         (concat "Commands:\n" (clime-help--format-table rows))))))
 
@@ -161,11 +202,16 @@ Respects :group labels and :hidden flags."
     (let ((opts-section (clime-help--format-options (clime-node-options node))))
       (when opts-section
         (push opts-section sections)))
-    ;; Commands (for groups)
+    ;; Commands (for groups), inlining default groups
     (when (clime-group-only-p node)
-      (let ((cmds-section (clime-help--format-commands (clime-group-children node))))
+      (let ((cmds-section (clime-help--format-commands
+                           (clime-help--effective-children node))))
         (when cmds-section
           (push cmds-section sections))))
+    ;; Epilog
+    (let ((epilog (clime-node-epilog node)))
+      (when (and epilog (not (string-empty-p epilog)))
+        (push epilog sections)))
     (concat (string-join (nreverse sections) "\n\n") "\n")))
 
 (defun clime-format-version (app)

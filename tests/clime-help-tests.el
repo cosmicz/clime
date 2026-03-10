@@ -255,5 +255,128 @@
     (should (string-match-p "<dst>" help))
     (should (string-match-p "Destination" help))))
 
+;;; ─── Multiline Help ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/multiline-help-first-line-in-listing ()
+  "Commands listing shows only the first line of multiline help."
+  (let* ((cmd (clime-make-command :name "deploy"
+                                  :help "Deploy the application\nUses rsync under the hood."
+                                  :handler #'ignore))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "deploy" cmd))))
+         (help (clime-format-help app '("t"))))
+    ;; First line appears in the Commands listing
+    (should (string-match-p "Deploy the application" help))
+    ;; Second line does NOT appear in the listing
+    (should-not (string-match-p "rsync" help))))
+
+(ert-deftest clime-test-help/multiline-help-full-in-detail ()
+  "Detailed command help shows the full multiline help text."
+  (let* ((cmd (clime-make-command :name "deploy"
+                                  :help "Deploy the application\nUses rsync under the hood."
+                                  :handler #'ignore))
+         (help (clime-format-help cmd '("t" "deploy"))))
+    (should (string-match-p "Deploy the application" help))
+    (should (string-match-p "rsync" help))))
+
+;;; ─── Epilog ──────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/epilog-appears-after-sections ()
+  "Epilog text appears at the end of help output."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show things"
+                                  :epilog "Examples:\n  app show 123"))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "Examples:" help))
+    (should (string-match-p "app show 123" help))
+    ;; Epilog should be after the description
+    (should (< (string-match "Show things" help)
+               (string-match "Examples:" help)))))
+
+(ert-deftest clime-test-help/no-epilog-unchanged ()
+  "Help output without epilog is unchanged."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show things"))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should-not (string-match-p "Examples:" help))))
+
+(ert-deftest clime-test-help/app-epilog ()
+  "App-level epilog appears in app help."
+  (let* ((app (clime-make-app :name "t" :version "1"
+                              :help "Test app"
+                              :epilog "See https://example.com for docs."))
+         (help (clime-format-help app '("t"))))
+    (should (string-match-p "https://example.com" help))))
+
+;;; ─── Choices in Help ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/choices-shown-in-help ()
+  "Option with :choices shows allowed values in help text."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices '("json" "table" "csv")
+                                  :help "Output format"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "choices: json, table, csv" help))))
+
+(ert-deftest clime-test-help/choices-arg-shown-in-help ()
+  "Positional arg with :choices shows allowed values in help text."
+  (let* ((arg (clime-make-arg :name 'action
+                               :choices '("start" "stop")
+                               :help "Service action"))
+         (cmd (clime-make-command :name "svc" :handler #'ignore
+                                  :args (list arg)))
+         (help (clime-format-help cmd '("app" "svc"))))
+    (should (string-match-p "choices: start, stop" help))))
+
+(ert-deftest clime-test-help/default-group-inlined ()
+  "Default group's children appear at parent level in help."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :help "Add a thing"))
+         (rm-cmd (clime-make-command :name "remove" :handler #'ignore
+                                      :help "Remove a thing"))
+         (grp (clime-make-group :name "repo" :inline t
+                                :help "Manage repos"
+                                :children (list (cons "add" add-cmd)
+                                                (cons "remove" rm-cmd))))
+         (info-cmd (clime-make-command :name "info" :handler #'ignore
+                                        :help "Show info"))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "repo" grp)
+                                              (cons "info" info-cmd))))
+         (help (clime-format-help app '("myapp"))))
+    ;; Default group's children should appear at top level
+    (should (string-match-p "add" help))
+    (should (string-match-p "remove" help))
+    (should (string-match-p "info" help))
+    ;; The group name itself should not appear as a command
+    (should-not (string-match-p "repo" help))))
+
+(ert-deftest clime-test-help/inline-group-hidden-child ()
+  "Hidden children in an inline group stay hidden in parent help."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :help "Add a thing"))
+         (secret (clime-make-command :name "secret" :handler #'ignore
+                                      :help "Secret cmd" :hidden t))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "add" add-cmd)
+                                                (cons "secret" secret))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "repo" grp))))
+         (help (clime-format-help app '("myapp"))))
+    (should (string-match-p "add" help))
+    (should-not (string-match-p "secret" help))))
+
+(ert-deftest clime-test-help/choices-function-shown-in-help ()
+  "Option with :choices as a function resolves and shows values in help."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices (lambda () '("json" "table"))
+                                  :help "Output format"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "choices: json, table" help))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

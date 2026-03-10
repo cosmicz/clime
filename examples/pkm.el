@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; exec emacs --batch -Q -L "$(dirname "$0")/.." -l "$0" -- "$@" # -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")/.." --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; pkm.el --- Example clime app: a mock package manager  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -44,7 +44,7 @@
 ;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- --help
 ;;
 ;; The shebang uses a relative -L path since this file lives inside
-;; the clime repo.  For external apps, use `clime-app.el init' which
+;; the clime repo.  For external apps, use `clime-make.el init' which
 ;; generates an absolute path.  See DEVELOPMENT.org for details.
 
 ;;; Code:
@@ -57,6 +57,10 @@
   :version "0.5.0"
   :help "A package manager for Emacs Lisp projects."
   :json-mode t                                  ; [4] auto-injects --json
+  :epilog "Examples:
+  pkm install foo --tag dev
+  pkm -vv search
+  pkm repo add myrepo https://example.com"
 
   ;; ── Root Options ─────────────────────────────────────────────────────
   ;; [1] Count flag — stackable verbosity (-v, -vv, -vvv)
@@ -135,7 +139,8 @@
       :group "Filter")
 
     (clime-option sort ("--sort" "-s")
-      :help "Sort field (name, date, size)"
+      :help "Sort field"
+      :choices '("name" "date" "size")
       :default "name")
 
     (clime-handler (ctx)

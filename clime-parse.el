@@ -105,11 +105,78 @@ FLAG-OR-NAME is used in error messages."
     (_ (signal 'clime-usage-error
                (list (format "Unknown type %s for %s" type flag-or-name))))))
 
+(defun clime--transform-value (value type choices coerce flag-or-name)
+  "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE.
+CHOICES may be a list or a function returning a list.
+FLAG-OR-NAME is used in error messages."
+  (let* ((result (clime--coerce-value value type flag-or-name))
+         (resolved (clime--resolve-value choices)))
+    (when (and resolved (not (member result resolved)))
+      (signal 'clime-usage-error
+              (list (format "Invalid value \"%s\" for %s (choose from: %s)"
+                            result flag-or-name
+                            (mapconcat (lambda (c) (format "%s" c))
+                                       resolved ", ")))))
+    (if coerce (funcall coerce result) result)))
+
+(defun clime--try-consume-option (tok argv i len params option-parsing
+                                      current-node root path)
+  "Try to consume TOK as a known option from ARGV at index I.
+Handles `--', `--help'/`-h', `--flag=value', and single known flags.
+Returns (PARAMS I OPTION-PARSING) if consumed, or nil if TOK is not
+a recognized option.  Signals `clime-help-requested' for help flags.
+LEN is the length of ARGV.  CURRENT-NODE and ROOT define option scope.
+PATH is the command path for help signals."
+  (cond
+   ;; -- disables option parsing
+   ((and option-parsing (string= tok "--"))
+    (list params (1+ i) nil))
+   ;; --help / -h triggers help
+   ((and option-parsing (or (string= tok "--help") (string= tok "-h")))
+    (signal 'clime-help-requested
+            (list :node current-node :path path)))
+   ;; --flag=value syntax with known option
+   ((and option-parsing
+         (clime--option-like-p tok)
+         (clime--split-long-equals tok))
+    (let* ((split (clime--split-long-equals tok))
+           (flag (car split))
+           (value (clime--resolve-stdin-value (cdr split)))
+           (found (clime--find-option-in-scope flag current-node root)))
+      (when found
+        (when (clime-option-boolean-p (car found))
+          (signal 'clime-usage-error
+                  (list (format "Option %s does not take a value" flag))))
+        (list (clime--consume-option (car found) params value)
+              (1+ i)
+              option-parsing))))
+   ;; Known single option
+   ((and option-parsing
+         (clime--option-like-p tok)
+         (clime--find-option-in-scope tok current-node root))
+    (let* ((found (clime--find-option-in-scope tok current-node root))
+           (opt (car found)))
+      (if (clime-option-boolean-p opt)
+          (list (clime--consume-option opt params nil)
+                (1+ i)
+                option-parsing)
+        ;; Value option: consume next token
+        (let ((next-i (1+ i)))
+          (when (>= next-i len)
+            (signal 'clime-usage-error
+                    (list (format "Option %s requires a value" tok))))
+          (list (clime--consume-option opt params
+                                       (clime--resolve-stdin-value (nth next-i argv)))
+                (+ i 2)
+                option-parsing)))))))
+
 (defun clime--consume-option (opt params token-value)
   "Consume option OPT into PARAMS plist, returning updated plist.
 TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
   (let ((name (clime-option-name opt))
-        (type (clime-option-type opt)))
+        (type (clime-option-type opt))
+        (choices (clime-option-choices opt))
+        (coerce (clime-option-coerce opt)))
     (cond
      ;; Count option: increment
      ((clime-option-count opt)
@@ -120,13 +187,15 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
       (plist-put params name t))
      ;; Multiple: append to list
      ((clime-option-multiple opt)
-      (let* ((coerced (clime--coerce-value token-value type (car (clime-option-flags opt))))
+      (let* ((val (clime--transform-value token-value type choices coerce
+                                          (car (clime-option-flags opt))))
              (current (plist-get params name)))
-        (plist-put params name (append current (list coerced)))))
+        (plist-put params name (append current (list val)))))
      ;; Normal value option
      (t
       (plist-put params name
-                 (clime--coerce-value token-value type (car (clime-option-flags opt))))))))
+                 (clime--transform-value token-value type choices coerce
+                                         (car (clime-option-flags opt))))))))
 
 (defun clime--required-args-satisfied-p (node params)
   "Return non-nil if all required positional args of NODE have values in PARAMS."
@@ -229,21 +298,27 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
            ((clime-option-boolean-p opt)
             (when (clime--parse-boolean-env value env-var)
               (setq params (plist-put params name t))))
-           ;; Multiple option: split on comma, coerce each
+           ;; Multiple option: split on comma, transform each
            ((clime-option-multiple opt)
-            (let ((type (clime-option-type opt)))
+            (let ((type (clime-option-type opt))
+                  (choices (clime-option-choices opt))
+                  (coerce (clime-option-coerce opt)))
               (setq params
                     (plist-put params name
                                (mapcar (lambda (v)
-                                         (clime--coerce-value
-                                          (string-trim v) type env-var))
+                                         (clime--transform-value
+                                          (string-trim v) type choices
+                                          coerce env-var))
                                        (split-string value "," t))))))
            ;; Normal value option
            (t
             (setq params
                   (plist-put params name
-                             (clime--coerce-value
-                              value (clime-option-type opt) env-var)))))))))
+                             (clime--transform-value
+                              value (clime-option-type opt)
+                              (clime-option-choices opt)
+                              (clime-option-coerce opt)
+                              env-var)))))))))
   params)
 
 (defun clime--apply-defaults (nodes params)
@@ -256,18 +331,14 @@ NODES is a list of nodes whose params to process.  Returns updated PARAMS."
           (let ((default (clime-option-default opt)))
             (when default
               (setq params (plist-put params name
-                                      (if (functionp default)
-                                          (funcall default)
-                                        default))))))))
+                                      (clime--resolve-value default))))))))
     (dolist (arg (clime-node-args node))
       (let ((name (clime-arg-name arg)))
         (unless (plist-member params name)
           (let ((default (clime-arg-default arg)))
             (when default
               (setq params (plist-put params name
-                                      (if (functionp default)
-                                          (funcall default)
-                                        default)))))))))
+                                      (clime--resolve-value default)))))))))
   params)
 
 (defun clime--check-required (nodes params path)
@@ -308,6 +379,8 @@ Signal `clime-help-requested' for --help/-h/--version."
         (clime--stdin-app app))
     ;; Set parent refs for direct children (if not already set)
     (clime--set-parent-refs app)
+    (condition-case err
+        (progn
     (while (< i len)
       (let* ((token (nth i argv))
              (child (and (clime-group-only-p current-node)
@@ -322,8 +395,22 @@ Signal `clime-help-requested' for --help/-h/--version."
          ;; 2. Help/version intercept
          ((and option-parsing
                (or (string= token "--help") (string= token "-h")))
-          (signal 'clime-help-requested
-                  (list :node current-node :path path)))
+          ;; Look ahead: resolve remaining tokens as subcommand path
+          (let ((help-node current-node)
+                (help-path (copy-sequence path))
+                (j (1+ i)))
+            (while (< j len)
+              (let* ((next (nth j argv))
+                     (child (and (clime-group-only-p help-node)
+                                 (clime-group-find-child help-node next))))
+                (if child
+                    (progn
+                      (setq help-node child)
+                      (setq help-path (append help-path (list (clime-node-name child))))
+                      (cl-incf j))
+                  (setq j len))))  ;; stop on non-command token
+            (signal 'clime-help-requested
+                    (list :node help-node :path help-path))))
 
          ((and option-parsing
                (string= token "--version")
@@ -332,52 +419,50 @@ Signal `clime-help-requested' for --help/-h/--version."
           (signal 'clime-help-requested
                   (list :node root :path path :version t)))
 
-         ;; 3. Option-like token
+         ;; 3. Rest arg pending — delegate to rest collector
+         ;; (which handles known options internally)
+         ((let ((args (clime-node-args current-node)))
+            (and (< arg-index (length args))
+                 (eq (clime-arg-nargs (nth arg-index args)) :rest)))
+          (let ((arg-spec (nth arg-index (clime-node-args current-node)))
+                (rest-values '()))
+            (while (< i len)
+              (let* ((tok (nth i argv))
+                     (consumed (clime--try-consume-option
+                                tok argv i len params option-parsing
+                                current-node root path)))
+                (if consumed
+                    (setq params (nth 0 consumed)
+                          i (nth 1 consumed)
+                          option-parsing (nth 2 consumed))
+                  ;; Not a known option: collect as rest value
+                  (push (clime--resolve-stdin-value tok) rest-values)
+                  (cl-incf i))))
+            (setq params (plist-put params (clime-arg-name arg-spec)
+                                   (nreverse rest-values)))))
+
+         ;; 4. Option-like token
          ((and option-parsing (clime--option-like-p token))
-          ;; Try --name=value split
-          (if-let* ((split (clime--split-long-equals token)))
-              ;; --name=value form
-              (let* ((flag (car split))
-                     (value (clime--resolve-stdin-value (cdr split)))
-                     (found (clime--find-option-in-scope flag current-node root)))
-                  (unless found
-                    (signal 'clime-usage-error
-                            (list (format "Unknown option %s for %s"
-                                          flag (string-join path " ")))))
-                  (when (clime-option-boolean-p (car found))
-                    (signal 'clime-usage-error
-                            (list (format "Option %s does not take a value" flag))))
-                  (setq params (clime--consume-option (car found) params value))
-                  (cl-incf i))
-              ;; Try short bundle expansion
+          (let ((consumed (clime--try-consume-option
+                           token argv i len params option-parsing
+                           current-node root path)))
+            (if consumed
+                (setq params (nth 0 consumed)
+                      i (nth 1 consumed)
+                      option-parsing (nth 2 consumed))
+              ;; Not a known option — try short bundle, then error
               (if-let* ((bundle (clime--expand-short-bundle token current-node root)))
-                  ;; Expanded bundle: process each flag
                   (progn
                     (dolist (flag bundle)
                       (let ((found (clime--find-option-in-scope flag current-node root)))
                         (setq params (clime--consume-option (car found) params nil))))
                     (cl-incf i))
-                ;; Single flag
-                (let ((found (clime--find-option-in-scope token current-node root)))
-                  (unless found
-                    (signal 'clime-usage-error
-                            (list (format "Unknown option %s for %s"
-                                          token (string-join path " ")))))
-                  (let ((opt (car found)))
-                    (if (clime-option-boolean-p opt)
-                        ;; Boolean: no value consumed
-                        (progn
-                          (setq params (clime--consume-option opt params nil))
-                          (cl-incf i))
-                      ;; Value option: consume next token
-                      (cl-incf i)
-                      (when (>= i len)
-                        (signal 'clime-usage-error
-                                (list (format "Option %s requires a value"
-                                              token))))
-                      (setq params (clime--consume-option opt params
-                                                          (clime--resolve-stdin-value (nth i argv))))
-                      (cl-incf i)))))))
+                ;; Unknown option error (includes --flag=value with unknown flag)
+                (let ((split (clime--split-long-equals token)))
+                  (signal 'clime-usage-error
+                          (list (format "Unknown option %s for %s"
+                                        (if split (car split) token)
+                                        (string-join path " ")))))))))
 
          ;; 4. Try group descent
          (child
@@ -387,32 +472,20 @@ Signal `clime-help-requested' for --help/-h/--version."
           (setq arg-index 0)
           (cl-incf i))
 
-         ;; 5. Positional arg
+         ;; 5. Positional arg (non-rest)
          (t
           (let ((args (clime-node-args current-node)))
             (if (< arg-index (length args))
                 (let ((arg-spec (nth arg-index args)))
-                  (if (eq (clime-arg-nargs arg-spec) :rest)
-                      ;; Rest arg: collect remaining non-option tokens
-                      (let ((rest-values '()))
-                        (while (< i len)
-                          (let ((tok (nth i argv)))
-                            (if (and option-parsing (string= tok "--"))
-                                (progn
-                                  (setq option-parsing nil)
-                                  (cl-incf i))
-                              (push (clime--resolve-stdin-value tok) rest-values)
-                              (cl-incf i))))
-                        (setq params (plist-put params (clime-arg-name arg-spec)
-                                               (nreverse rest-values))))
-                    ;; Normal positional
-                    (let ((coerced (clime--coerce-value
-                                    (clime--resolve-stdin-value token)
-                                    (clime-arg-type arg-spec)
-                                    (format "<%s>" (clime-arg-name arg-spec)))))
-                      (setq params (plist-put params (clime-arg-name arg-spec) coerced)))
-                    (cl-incf arg-index)
-                    (cl-incf i)))
+                  (let ((coerced (clime--transform-value
+                                  (clime--resolve-stdin-value token)
+                                  (clime-arg-type arg-spec)
+                                  (clime-arg-choices arg-spec)
+                                  (clime-arg-coerce arg-spec)
+                                  (format "<%s>" (clime-arg-name arg-spec)))))
+                    (setq params (plist-put params (clime-arg-name arg-spec) coerced)))
+                  (cl-incf arg-index)
+                  (cl-incf i))
               ;; No more arg specs
               (signal 'clime-usage-error
                       (list (format "Unexpected argument \"%s\" for %s"
@@ -424,9 +497,8 @@ Signal `clime-help-requested' for --help/-h/--version."
                (not (clime-app-p current-node))
                (clime-group-children current-node)
                (not (clime-node-handler current-node)))
-      (signal 'clime-usage-error
-              (list (format "Missing subcommand for %s"
-                            (string-join path " ")))))
+      (signal 'clime-help-requested
+              (list :node current-node :path path)))
 
     ;; If we're still at root with children and no subcommand was given
     (when (and (clime-app-p current-node)
@@ -446,7 +518,11 @@ Signal `clime-help-requested' for --help/-h/--version."
      :command (if (clime-command-p current-node) current-node nil)
      :node current-node
      :path path
-     :params params)))
+     :params params))
+      ;; Enrich usage errors with the current parse path for hints
+      (clime-usage-error
+       (signal 'clime-usage-error
+               (list (cadr err) path))))))
 
 ;;; ─── Parent Ref Setup ───────────────────────────────────────────────────
 

@@ -149,11 +149,10 @@
 
 (ert-deftest clime-test-run/error-formatter-slot ()
   "Rebinding clime-format-error changes error output."
-  (let* ((captured nil)
-         (clime-format-error (lambda (msg) (setq captured msg))))
+  (let* ((captured '())
+         (clime-format-error (lambda (msg) (push msg captured))))
     (clime-run clime-test--run-app '("echo"))  ;; missing arg
-    (should (stringp captured))
-    (should (string-match-p "Missing" captured))))
+    (should (cl-some (lambda (m) (string-match-p "Missing" m)) captured))))
 
 ;;; ─── Output Protocol ───────────────────────────────────────────────────
 
@@ -271,6 +270,64 @@
         (should (equal clime-test--run-output "hi"))
         ;; command-line-args-left should be cleared
         (should (null command-line-args-left))))))
+
+;;; ─── Help Before Subcommand ─────────────────────────────────────────
+
+(ert-deftest clime-test-run/help-before-subcommand ()
+  "--help install shows install help, same as install --help."
+  (clime-test-with-run-output
+    (let ((code (clime-run clime-test--run-app '("--help" "echo"))))
+      (should (= code 0))
+      (should (string-match-p "Echo a message" clime-test--run-output)))))
+
+(ert-deftest clime-test-run/help-before-group-subcommand ()
+  "--help group cmd descends into group then command."
+  (let* ((cmd (clime-make-command :name "add" :handler #'ignore
+                                  :help "Add a dep"))
+         (grp (clime-make-group :name "dep"
+                                :children (list (cons "add" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "dep" grp)))))
+    (clime-test-with-run-output
+      (let ((code (clime-run app '("--help" "dep" "add"))))
+        (should (= code 0))
+        (should (string-match-p "Add a dep" clime-test--run-output))
+        (should (string-match-p "Usage: t dep add" clime-test--run-output))))))
+
+;;; ─── Missing Subcommand Shows Help ──────────────────────────────────
+
+(ert-deftest clime-test-run/missing-subcommand-shows-help ()
+  "Group without handler shows help when no subcommand given."
+  (let* ((cmd (clime-make-command :name "add" :handler #'ignore))
+         (grp (clime-make-group :name "dep"
+                                :children (list (cons "add" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "dep" grp)))))
+    (clime-test-with-run-output
+      (let ((code (clime-run app '("dep"))))
+        (should (= code 0))
+        (should (string-match-p "Usage: t dep" clime-test--run-output))
+        (should (string-match-p "Commands:" clime-test--run-output))))))
+
+;;; ─── Usage Error Hint ──────────────────────────────────────────────
+
+(ert-deftest clime-test-run/usage-error-shows-help-hint ()
+  "Usage errors include a 'Try ... --help' hint."
+  (let ((msgs (clime-test-with-messages
+                (clime-run clime-test--run-app '("echo")))))
+    (should (cl-some (lambda (m) (string-match-p "Try.*--help" m)) msgs))))
+
+(ert-deftest clime-test-run/usage-error-hint-includes-path ()
+  "Usage error hint includes the correct command path."
+  (let* ((cmd (clime-make-command :name "add" :handler #'ignore
+                                  :args (list (clime-make-arg :name 'id))))
+         (grp (clime-make-group :name "dep"
+                                :children (list (cons "add" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "dep" grp)))))
+    (let ((msgs (clime-test-with-messages
+                  (clime-run app '("dep" "add")))))
+      (should (cl-some (lambda (m) (string-match-p "t dep add --help" m)) msgs)))))
 
 (provide 'clime-run-tests)
 ;;; clime-run-tests.el ends here
