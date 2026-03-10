@@ -13,6 +13,10 @@
 - `clime-params-plist`: convert context params to keyword plist, eliminating
   `clime-let` + plist reconstruction boilerplate
 - `clime-parse-finalize`: public API for explicit pass-2 control
+- `:separator` slot on options: split a single value into a list
+  (e.g. `--tags=a,b,c` with `:separator ","` yields `("a" "b" "c")`)
+- `:category` slot on commands, groups, and options: group items under
+  named sections in help output (e.g. `Admin:`, `I/O:`)
 
 - `init --self-dir` and `init --rel-load-path` now resolve symlinks at runtime
   via `realpath`, so relative load paths work correctly when the script is
@@ -25,6 +29,8 @@
 - `init` refuses to downgrade a newer shebang format version (use `--force`
   to override); detects and upgrades legacy `clime:X.Y.Z` tags automatically
 - Renamed `:group` option slot to `:category` (avoids confusion with `clime-group`)
+- Help renderer rewritten as a collect-and-render pipeline, improving inline
+  group handling and enabling category-based section grouping
 - Static `:choices` (literal lists) validated in pass 1; dynamic `:choices`
   (functions) deferred to pass 2
 - `bundle --main` now takes a file path (was a symbol name); the main file's
