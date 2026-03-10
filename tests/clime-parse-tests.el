@@ -1193,13 +1193,15 @@
     (should (equal (clime-parse-result-path result)
                    '("t" "repo" "add")))))
 
-;;; ─── :validate Slot ──────────────────────────────────────────────────
+;;; ─── :conform Slot ──────────────────────────────────────────────────
 
-(ert-deftest clime-test-parse/validate-option-pass ()
-  "Option :validate that succeeds does not error."
+(ert-deftest clime-test-parse/conform-option-pass ()
+  "Option :conform returning value keeps it unchanged."
   (let* ((opt (clime-make-option :name 'id :flags '("--id")
-                                  :validate (lambda (v) (unless (string-match-p "^[0-9]+$" v)
-                                                          (error "Must be numeric")))))
+                                  :conform (lambda (v)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"
@@ -1208,11 +1210,13 @@
     (should (equal (plist-get (clime-parse-result-params result) 'id)
                    "42"))))
 
-(ert-deftest clime-test-parse/validate-option-fail ()
-  "Option :validate that signals error produces clime-usage-error."
+(ert-deftest clime-test-parse/conform-option-fail ()
+  "Option :conform that signals error produces clime-usage-error."
   (let* ((opt (clime-make-option :name 'id :flags '("--id")
-                                  :validate (lambda (v) (unless (string-match-p "^[0-9]+$" v)
-                                                          (error "Must be numeric")))))
+                                  :conform (lambda (v)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"
@@ -1220,11 +1224,23 @@
     (should-error (clime-parse app '("show" "--id" "abc"))
                   :type 'clime-usage-error)))
 
-(ert-deftest clime-test-parse/validate-nil-skipped ()
-  "Option :validate is skipped when value is nil (not supplied)."
+(ert-deftest clime-test-parse/conform-transforms-value ()
+  "Option :conform return value replaces the param."
+  (let* ((opt (clime-make-option :name 'status :flags '("--status")
+                                  :conform #'upcase))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "list" cmd))))
+         (result (clime-parse app '("list" "--status" "todo"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'status)
+                   "TODO"))))
+
+(ert-deftest clime-test-parse/conform-nil-skipped ()
+  "Option :conform is skipped when value is nil (not supplied)."
   (let* ((called nil)
          (opt (clime-make-option :name 'id :flags '("--id")
-                                  :validate (lambda (_v) (setq called t))))
+                                  :conform (lambda (_v) (setq called t))))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"
@@ -1232,11 +1248,13 @@
     (clime-parse app '("show"))
     (should-not called)))
 
-(ert-deftest clime-test-parse/validate-arg ()
-  "Arg :validate that signals error produces clime-usage-error."
+(ert-deftest clime-test-parse/conform-arg ()
+  "Arg :conform that signals error produces clime-usage-error."
   (let* ((arg (clime-make-arg :name 'file :required t
-                               :validate (lambda (v) (unless (string-suffix-p ".el" v)
-                                                       (error "Must be an .el file")))))
+                               :conform (lambda (v)
+                                          (unless (string-suffix-p ".el" v)
+                                            (error "Must be an .el file"))
+                                          v)))
          (cmd (clime-make-command :name "load" :handler #'ignore
                                   :args (list arg)))
          (app (clime-make-app :name "t" :version "1"
@@ -1244,32 +1262,46 @@
     (should-error (clime-parse app '("load" "foo.py"))
                   :type 'clime-usage-error)))
 
-(ert-deftest clime-test-parse/validate-after-choices ()
-  "Option :validate runs after dynamic :choices validation."
+(ert-deftest clime-test-parse/conform-arg-transforms ()
+  "Arg :conform return value replaces the param."
+  (let* ((arg (clime-make-arg :name 'name :required t
+                               :conform #'downcase))
+         (cmd (clime-make-command :name "greet" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "greet" cmd))))
+         (result (clime-parse app '("greet" "WORLD"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name)
+                   "world"))))
+
+(ert-deftest clime-test-parse/conform-after-choices ()
+  "Option :conform runs after dynamic :choices validation."
   (let* ((order '())
          (opt (clime-make-option :name 'fmt :flags '("--fmt")
                                   :choices (lambda ()
                                              (push 'choices order)
                                              '("json" "csv"))
-                                  :validate (lambda (_v) (push 'validate order))))
+                                  :conform (lambda (v)
+                                             (push 'conform order)
+                                             v)))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"
                               :children (list (cons "show" cmd)))))
     (clime-parse app '("show" "--fmt" "json"))
-    (should (equal (nreverse order) '(choices validate)))))
+    (should (equal (nreverse order) '(choices conform)))))
 
-(ert-deftest clime-test-parse/validate-multiple-option ()
-  "Option :validate receives the full list for :multiple options."
-  (let* ((received nil)
-         (opt (clime-make-option :name 'tag :flags '("--tag") :multiple t
-                                  :validate (lambda (v) (setq received v))))
+(ert-deftest clime-test-parse/conform-multiple-option ()
+  "Option :conform receives the full list for :multiple options."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag") :multiple t
+                                  :conform (lambda (vs) (mapcar #'upcase vs))))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "show" cmd)))))
-    (clime-parse app '("show" "--tag" "a" "--tag" "b"))
-    (should (equal received '("a" "b")))))
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--tag" "a" "--tag" "b"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("A" "B")))))
 
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here
