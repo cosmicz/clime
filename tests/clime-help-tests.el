@@ -328,12 +328,12 @@
          (app (clime-make-app :name "t" :version "1"
                               :children (list (cons "admin" grp))))
          (help (clime-format-help app '("t"))))
-    ;; Option composes: Admin / Auth
-    (should (string-match-p "^Admin / Auth:" help))
-    (should (string-match-p "--token" help))
-    ;; Command inherits: Admin
+    ;; Top-level: Admin heading
     (should (string-match-p "^Admin:" help))
-    (should (string-match-p "status" help))))
+    (should (string-match-p "status" help))
+    ;; Option sub-category indented with scope annotation
+    (should (string-match-p "^  Auth (status):" help))
+    (should (string-match-p "--token" help))))
 
 ;; 13. Nested inline groups → paths compose
 (ert-deftest clime-test-help/cat-13-nested-inline-compose ()
@@ -355,7 +355,7 @@
          (app (clime-make-app :name "t" :version "1"
                               :children (list (cons "admin" admin-grp))))
          (help (clime-format-help app '("t"))))
-    (should (string-match-p "^Admin / Config:" help))
+    (should (string-match-p "^  Config:" help))
     (should (string-match-p "^Admin:" help))
     (should (string-match-p "get" help))
     (should (string-match-p "set" help))
@@ -471,13 +471,14 @@
                               :children (list (cons "admin1" admin-a)
                                               (cons "admin2" admin-b))))
          (help (clime-format-help app '("t"))))
-    ;; Both get and set under single "Admin / Config:" heading
-    (should (string-match-p "^Admin / Config:" help))
+    ;; Both get and set under single "Config:" sub-heading within "Admin:"
+    (should (string-match-p "^Admin:" help))
+    (should (string-match-p "^  Config:" help))
     (should (string-match-p "get" help))
     (should (string-match-p "set" help))
-    ;; Only one such heading
+    ;; Only one Config: sub-heading
     (should (= 1 (let ((count 0) (start 0))
-                   (while (string-match "^Admin / Config:" help start)
+                   (while (string-match "^  Config:" help start)
                      (cl-incf count)
                      (setq start (match-end 0)))
                    count)))))
@@ -557,7 +558,8 @@
          (app (clime-make-app :name "t" :version "1"
                               :children (list (cons "admin" l1))))
          (help (clime-format-help app '("t"))))
-    (should (string-match-p "^Admin / Config / Keys:" help))
+    (should (string-match-p "^Admin:" help))
+    (should (string-match-p "^  Config / Keys:" help))
     (should (string-match-p "get" help))))
 
 ;;; ─── Version ──────────────────────────────────────────────────────────
@@ -794,6 +796,83 @@
                                   :options (list opt)))
          (help (clime-format-help cmd '("app" "show"))))
     (should (string-match-p "choices: json, table" help))))
+
+;;; ─── Nested Category Sections ───────────────────────────────────────────
+
+(ert-deftest clime-test-help/nested-categories-merged ()
+  "Options with sub-categories and commands with parent category merge
+into one section with indented sub-headings."
+  (let* ((sect-opt (clime-make-option :name 'design :flags '("--design")
+                                       :help "Set Design section"
+                                       :category "Sections"))
+         (note-opt (clime-make-option :name 'note :flags '("--note")
+                                      :help "Append a note"
+                                      :category "Notes"))
+         (mutate (clime-make-group :name "mutate" :inline t
+                                   :category "Lifecycle"
+                                   :options (list sect-opt note-opt)
+                                   :children (list
+                                              (cons "update"
+                                                    (clime-make-command
+                                                     :name "update"
+                                                     :handler #'ignore
+                                                     :help "Update fields"))
+                                              (cons "close"
+                                                    (clime-make-command
+                                                     :name "close"
+                                                     :handler #'ignore
+                                                     :help "Close bead")))))
+         (claim (clime-make-command :name "claim" :handler #'ignore
+                                    :help "Claim a bead"
+                                    :category "Lifecycle"))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "mutate" mutate)
+                                              (cons "claim" claim)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help app '("t"))))
+      ;; Single "Lifecycle:" heading (not "Lifecycle / Sections:")
+      (should (string-match-p "^Lifecycle:" help))
+      (should-not (string-match-p "Lifecycle / " help))
+      ;; Commands at standard indent under Lifecycle
+      (should (string-match-p "^  update " help))
+      (should (string-match-p "^  claim " help))
+      ;; Sub-headings indented, with scope annotation
+      (should (string-match-p "^  Sections (update, close):" help))
+      (should (string-match-p "^  Notes (update, close):" help))
+      ;; Options double-indented under sub-headings
+      (should (string-match-p "^    --design " help))
+      (should (string-match-p "^    --note " help)))))
+
+(ert-deftest clime-test-help/flat-category-no-nesting ()
+  "Category with no sub-categories renders flat (no sub-headings)."
+  (let* ((cmd-a (clime-make-command :name "init" :handler #'ignore
+                                     :help "Initialize" :category "Admin"))
+         (cmd-b (clime-make-command :name "setup" :handler #'ignore
+                                    :help "Setup wizard" :category "Admin"))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "init" cmd-a)
+                                              (cons "setup" cmd-b)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help app '("t"))))
+      ;; Single flat "Admin:" section
+      (should (string-match-p "^Admin:" help))
+      ;; Commands at standard indent
+      (should (string-match-p "^  init " help))
+      (should (string-match-p "^  setup " help)))))
+
+(ert-deftest clime-test-help/uncategorized-still-standard ()
+  "Uncategorized options go to 'Options:', commands to 'Commands:'."
+  (let* ((opt (clime-make-option :name 'json :flags '("--json")
+                                  :nargs 0 :help "JSON output"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show details"))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "show" cmd)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help app '("t"))))
+      (should (string-match-p "^Options:" help))
+      (should (string-match-p "^Commands:" help)))))
 
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

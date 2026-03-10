@@ -173,12 +173,16 @@ values.  Returns a list of category strings, outermost first."
 
 (defun clime-help--collect-items (node)
   "Collect help items from NODE using `clime-node-collect'.
-Returns flat list of (CATEGORY-PATH TYPE ITEM) where:
+Returns flat list of (CATEGORY-PATH TYPE ITEM SCOPE) where:
   CATEGORY-PATH — list of category strings (outermost first), or nil.
   TYPE          — :option, :command, or :group.
   ITEM          — the struct.
+  SCOPE         — list of command name strings (scope annotation), or nil.
 
-Options on uncategorized inline groups with no own :category are skipped."
+Options on uncategorized inline groups with no own :category are skipped.
+SCOPE is set for options that have a sub-category from an inline group,
+listing the group's command children to indicate which commands the
+options apply to."
   (let ((raw (clime-node-collect node))
         (items '()))
     (dolist (entry raw)
@@ -189,22 +193,29 @@ Options on uncategorized inline groups with no own :category are skipped."
            ;; Emit group if it has :help (for section descriptions)
            (let ((path (clime-help--category-path item node)))
              (when (and path (clime-node-help item))
-               (push (list path :group item) items))))
+               (push (list path :group item nil) items))))
           (:option
            (let* ((owner (caddr entry))
                   (path (clime-help--category-path owner node))
                   (own-cat (clime-option-category item))
-                  (full-path (if own-cat (append path (list own-cat)) path)))
+                  (full-path (if own-cat (append path (list own-cat)) path))
+                  ;; Scope: when option has sub-category and owner is an
+                  ;; inline group (not the root), collect children names
+                  (scope (when (and own-cat
+                                    (clime-group-p owner)
+                                    (clime-node-inline owner)
+                                    (not (eq owner node)))
+                           (mapcar #'car (clime-group-children owner)))))
              ;; Skip options with empty category path (uncategorized on
              ;; uncategorized inline group).  Top-level options (parent = node)
              ;; are always kept.
              (when (or full-path (eq owner node))
-               (push (list full-path :option item) items))))
+               (push (list full-path :option item scope) items))))
           (:command
            (let* ((path (clime-help--category-path (clime-node-parent item) node))
                   (own-cat (clime-node-category item))
                   (full-path (if own-cat (append path (list own-cat)) path)))
-             (push (list full-path :command item) items))))))
+             (push (list full-path :command item nil) items))))))
     (nreverse items)))
 
 (defun clime-help--option-row (opt)
@@ -214,59 +225,108 @@ Options on uncategorized inline groups with no own :category are skipped."
          (clime-option-help opt)
          (clime-option-choices opt))))
 
+(defun clime-help--indent-lines (str prefix)
+  "Prepend PREFIX to each line of STR."
+  (mapconcat (lambda (line) (concat prefix line))
+             (split-string str "\n")
+             "\n"))
+
+(defun clime-help--command-row (cmd)
+  "Format CMD as a (left . help) table row."
+  (cons (clime-node-name cmd)
+        (clime-help--first-line (or (clime-node-help cmd) ""))))
+
 (defun clime-help--format-sections (items)
-  "Format ITEMS into interleaved category sections.
-ITEMS is a flat list of (CATEGORY-PATH TYPE ITEM) from
-`clime-help--collect-items'.  Groups by category path.
-Uncategorized options use \"Options:\", uncategorized commands
-use \"Commands:\".  Sections appear in first-occurrence order.
-:group items with :help render as a description line under
-the heading."
-  (let ((grouped (make-hash-table :test 'equal))
-        (order '()))
-    ;; Partition items by section key
+  "Format ITEMS into nested category sections.
+ITEMS is a flat list of (CATEGORY-PATH TYPE ITEM SCOPE) from
+`clime-help--collect-items'.  Groups by top-level category (first
+path element), then by sub-category (remaining path).  Uncategorized
+options use \"Options:\", uncategorized commands use \"Commands:\".
+Sub-categories render as indented sub-headings with scope annotations
+when SCOPE is present."
+  (let ((top-groups (make-hash-table :test 'equal))
+        (top-order '()))
+    ;; ── Partition into two-level groups ──────────────────────────────
+    ;; Each top-group is a hash: sub-key → (desc opts cmds scope)
+    ;; sub-key nil = root items in that category.
     (dolist (entry items)
       (let* ((path (car entry))
              (type (cadr entry))
              (item (caddr entry))
-             (key (cond
-                   (path (string-join path " / "))
-                   ((eq type :option) :options)
-                   ((eq type :command) :commands)
-                   (t :commands))))
-        (unless (gethash key grouped)
-          (push key order)
-          ;; (description options commands)
-          (puthash key (list nil nil nil) grouped))
-        (let ((bucket (gethash key grouped)))
-          (pcase type
-            (:group (unless (car bucket)
-                      (setcar bucket (clime-help--first-line
-                                      (clime-node-help item)))))
-            (:option (push item (cadr bucket)))
-            (:command (push item (caddr bucket)))))))
-    (setq order (nreverse order))
-    ;; Render sections
+             (scope (cadddr entry))
+             (top-key (cond
+                       ((and path (car path)) (car path))
+                       ((eq type :option) :options)
+                       ((eq type :command) :commands)
+                       (t :commands)))
+             (sub-key (when (and path (cdr path))
+                        (string-join (cdr path) " / "))))
+        ;; Ensure top-group exists
+        (unless (gethash top-key top-groups)
+          (push top-key top-order)
+          ;; (sub-order . sub-hash)
+          (puthash top-key (cons '() (make-hash-table :test 'equal))
+                   top-groups))
+        (let* ((tg (gethash top-key top-groups))
+               (sub-hash (cdr tg)))
+          ;; Ensure sub-group bucket exists
+          (unless (gethash sub-key sub-hash)
+            ;; nil (root items) always first in sub-order
+            (if (null sub-key)
+                (setcar tg (cons nil (car tg)))
+              (setcar tg (append (car tg) (list sub-key))))
+            ;; (desc opts cmds scope)
+            (puthash sub-key (list nil nil nil nil) sub-hash))
+          (let ((bucket (gethash sub-key sub-hash)))
+            (pcase type
+              (:group (unless (car bucket)
+                        (setcar bucket (clime-help--first-line
+                                        (clime-node-help item)))))
+              (:option
+               (push item (cadr bucket))
+               (when (and scope (not (cadddr bucket)))
+                 (setcar (cdddr bucket) scope)))
+              (:command (push item (caddr bucket))))))))
+    (setq top-order (nreverse top-order))
+    ;; ── Render ───────────────────────────────────────────────────────
     (let ((sections '()))
-      (dolist (key order)
-        (let* ((bucket (gethash key grouped))
-               (desc (car bucket))
-               (opts (nreverse (cadr bucket)))
-               (cmds (nreverse (caddr bucket)))
-               (rows (append (mapcar #'clime-help--option-row opts)
-                             (mapcar (lambda (cmd)
-                                       (cons (clime-node-name cmd)
-                                             (clime-help--first-line
-                                              (or (clime-node-help cmd) ""))))
-                                     cmds)))
+      (dolist (top-key top-order)
+        (let* ((tg (gethash top-key top-groups))
+               (sub-order (car tg))
+               (sub-hash (cdr tg))
                (header (cond
-                        ((eq key :options) "Options:")
-                        ((eq key :commands) "Commands:")
-                        (t (format "%s:" key))))
+                        ((eq top-key :options) "Options:")
+                        ((eq top-key :commands) "Commands:")
+                        (t (format "%s:" top-key))))
                (parts (list header)))
-          (when desc
-            (push (concat clime-help--indent desc "\n") parts))
-          (push (clime-help--format-table rows) parts)
+          (dolist (sub-key sub-order)
+            (let* ((bucket (gethash sub-key sub-hash))
+                   (desc (car bucket))
+                   (opts (nreverse (cadr bucket)))
+                   (cmds (nreverse (caddr bucket)))
+                   (scope (cadddr bucket))
+                   (rows (append (mapcar #'clime-help--option-row opts)
+                                 (mapcar #'clime-help--command-row cmds))))
+              (if (null sub-key)
+                  ;; Root items: standard indent
+                  (progn
+                    (when desc
+                      (push (concat clime-help--indent desc "\n") parts))
+                    (push (clime-help--format-table rows) parts))
+                ;; Sub-section: indented heading + double-indented table
+                (let* ((scope-str (if scope
+                                      (format " (%s)" (string-join scope ", "))
+                                    ""))
+                       (sub-header (format "\n%s%s%s:"
+                                           clime-help--indent sub-key scope-str))
+                       (table (clime-help--indent-lines
+                               (clime-help--format-table rows)
+                               clime-help--indent)))
+                  (push sub-header parts)
+                  (when desc
+                    (push (concat clime-help--indent clime-help--indent desc)
+                          parts))
+                  (push table parts)))))
           (push (string-join (nreverse parts) "\n") sections)))
       (when sections
         (string-join (nreverse sections) "\n\n")))))
