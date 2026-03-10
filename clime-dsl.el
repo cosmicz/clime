@@ -191,7 +191,7 @@ Child forms:
   (let* ((name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      body
-                     '(:version :env-prefix :help :doc :json-mode :epilog)))
+                     '(:version :env-prefix :help :doc :json-mode :epilog :setup)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -208,6 +208,8 @@ Child forms:
             `(:json-mode ,(plist-get keywords :json-mode)))
         ,@(when (plist-get keywords :epilog)
             `(:epilog ,(plist-get keywords :epilog)))
+        ,@(when (plist-get keywords :setup)
+            `(:setup ,(plist-get keywords :setup)))
         ,@(when (plist-get classified :options)
             `(:options (list ,@(plist-get classified :options))))
         ,@(when (plist-get classified :args)

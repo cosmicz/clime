@@ -146,7 +146,8 @@ True for groups and apps, false for commands."
   (version nil :type (or string null) :documentation "Application version string.")
   (env-prefix nil :type (or string null) :documentation "Prefix for auto-derived env var names.")
   (json-mode nil :type boolean :documentation "Whether --json is a built-in root option.")
-  (argv0 nil :type (or string null) :documentation "Program name for usage output (set from CLIME_ARGV0)."))
+  (argv0 nil :type (or string null) :documentation "Program name for usage output (set from CLIME_ARGV0).")
+  (setup nil :type (or function null) :documentation "Hook called after pass-1 parse, before dynamic validation and handler."))
 
 (defun clime-make-app (&rest args)
   "Create a `clime-app' with validation.

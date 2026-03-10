@@ -31,7 +31,9 @@
   (command nil :documentation "Resolved leaf command, or nil for group.")
   (node nil :documentation "Terminal node where parsing ended.")
   (path nil :type list :documentation "List of node names from root to command.")
-  (params nil :type list :documentation "Plist of (param-name value) for all scopes."))
+  (params nil :type list :documentation "Plist of (param-name value) for all scopes.")
+  (visited-nodes nil :type list :documentation "Nodes visited during parse (for finalization).")
+  (finalized nil :type boolean :documentation "Non-nil after pass-2 finalization."))
 
 ;;; ─── Internal Helpers ───────────────────────────────────────────────────
 
@@ -111,9 +113,13 @@ FLAG-OR-NAME is used in error messages."
 (defun clime--transform-value (value type choices coerce flag-or-name)
   "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE.
 CHOICES may be a list or a function returning a list.
+Dynamic choices (functions) are skipped here and deferred to
+`clime-parse-finalize' (pass 2), enabling a setup hook to
+configure state before validation.
 FLAG-OR-NAME is used in error messages."
   (let* ((result (clime--coerce-value value type flag-or-name))
-         (resolved (clime--resolve-value choices)))
+         ;; Only validate static choices in pass 1; defer dynamic (functionp)
+         (resolved (and choices (not (functionp choices)) choices)))
     (when (and resolved (not (member result resolved)))
       (signal 'clime-usage-error
               (list (format "Invalid value \"%s\" for %s (choose from: %s)"
@@ -365,11 +371,15 @@ PATH is the command path for error messages.  Signals `clime-usage-error'."
 
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
-(defun clime-parse (app argv)
+(defun clime-parse (app argv &optional skip-finalize)
   "Parse ARGV against APP command tree.
 Return a `clime-parse-result' on success.
 Signal `clime-usage-error' on parse failures.
-Signal `clime-help-requested' for --help/-h/--version."
+Signal `clime-help-requested' for --help/-h/--version.
+
+When SKIP-FINALIZE is non-nil, return an unfinalized result (pass 1 only).
+The caller must call `clime-parse-finalize' to complete pass 2.
+This enables a setup hook to run between passes."
   (let ((current-node app)
         (root app)
         (option-parsing t)
@@ -511,17 +521,16 @@ Signal `clime-help-requested' for --help/-h/--version."
       (signal 'clime-help-requested
               (list :node current-node :path path)))
 
-    ;; Apply env vars, then defaults, then check required
-    (setq params (clime--apply-env visited-nodes params root))
-    (setq params (clime--apply-defaults visited-nodes params))
-    (clime--check-required visited-nodes params path)
-
-    ;; Build result
-    (clime-parse-result--create
-     :command (if (clime-command-p current-node) current-node nil)
-     :node current-node
-     :path path
-     :params params))
+    ;; Build pass-1 result
+    (let ((result (clime-parse-result--create
+                   :command (if (clime-command-p current-node) current-node nil)
+                   :node current-node
+                   :path path
+                   :params params
+                   :visited-nodes visited-nodes)))
+      (if skip-finalize
+          result
+        (clime-parse-finalize result))))
       ;; Enrich usage errors with the current parse path for hints
       (clime-usage-error
        (signal 'clime-usage-error
@@ -542,6 +551,60 @@ Also runs ancestor collision checks after parent refs are established."
       (let ((child (cdr entry)))
         (setf (clime-node-parent child) node)
         (clime--set-parent-refs-1 child)))))
+
+;;; ─── Pass-2 Finalization ────────────────────────────────────────────────
+
+(defun clime--validate-dynamic-choices (nodes params)
+  "Validate PARAMS against dynamic (function) :choices in NODES.
+Only checks options and args whose :choices slot is a function,
+since static choices were already validated in pass 1."
+  (dolist (node nodes)
+    (dolist (opt (clime-node-options node))
+      (let ((choices (clime-option-choices opt)))
+        (when (functionp choices)
+          (let ((val (plist-get params (clime-option-name opt)))
+                (resolved (funcall choices)))
+            (when (and val resolved)
+              (let ((vals (if (clime-option-multiple opt) val (list val))))
+                (dolist (v vals)
+                  (unless (member v resolved)
+                    (signal 'clime-usage-error
+                            (list (format "Invalid value \"%s\" for %s (choose from: %s)"
+                                          v (car (clime-option-flags opt))
+                                          (mapconcat (lambda (c) (format "%s" c))
+                                                     resolved ", "))))))))))))
+    (dolist (arg (clime-node-args node))
+      (let ((choices (clime-arg-choices arg)))
+        (when (functionp choices)
+          (let ((val (plist-get params (clime-arg-name arg)))
+                (resolved (funcall choices)))
+            (when (and val resolved (not (member val resolved)))
+              (signal 'clime-usage-error
+                      (list (format "Invalid value \"%s\" for <%s> (choose from: %s)"
+                                    val (clime-arg-name arg)
+                                    (mapconcat (lambda (c) (format "%s" c))
+                                               resolved ", ")))))))))))
+
+(defun clime-parse-finalize (result)
+  "Finalize RESULT from pass-1 parse (pass 2).
+Validates dynamic choices, applies env vars, applies defaults,
+and checks required params.  Returns the updated RESULT."
+  (when (clime-parse-result-finalized result)
+    (error "clime-parse-finalize: result already finalized"))
+  (let* ((visited-nodes (clime-parse-result-visited-nodes result))
+         (params (clime-parse-result-params result))
+         (path (clime-parse-result-path result))
+         (root (cl-find-if #'clime-app-p visited-nodes)))
+    ;; Validate dynamic choices (functions resolved now, after setup)
+    (clime--validate-dynamic-choices visited-nodes params)
+    ;; Apply env vars, then defaults, then check required
+    (setq params (clime--apply-env visited-nodes params root))
+    (setq params (clime--apply-defaults visited-nodes params))
+    (clime--check-required visited-nodes params path)
+    ;; Update and mark finalized
+    (setf (clime-parse-result-params result) params)
+    (setf (clime-parse-result-finalized result) t)
+    result))
 
 (provide 'clime-parse)
 ;;; clime-parse.el ends here
