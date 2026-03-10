@@ -95,6 +95,7 @@ ARGS is a plist of slot values."
   (args nil :type list :documentation "Ordered list of `clime-arg' structs.")
   (parent nil :documentation "Parent node ref, or nil for root.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
+  (category nil :type (or string null) :documentation "Help display category label.")
   (inline nil :type boolean :documentation "If non-nil, promote children to parent level for dispatch and help.")
   (handler nil :type (or function null) :documentation "Handler function, called with context.")
   (epilog nil :type (or string null) :documentation "Free-form text appended after auto-generated help."))
@@ -247,6 +248,33 @@ Return the child node, or nil if not found."
                                 (clime-node-inline child))
                        (clime-group-find-child child name))))
                  children))))
+
+(defun clime-group-find-child-path (group name)
+  "Find a child node in GROUP by NAME, returning the full descent path.
+Like `clime-group-find-child', but returns a list of all nodes traversed
+when descending through inline groups.  Returns nil if not found.
+For direct children, returns a single-element list.
+For inline group lookups, includes the inline group(s) and the leaf."
+  (let ((children (clime-group-children group)))
+    (or
+     ;; Direct match by name
+     (let ((entry (assoc name children)))
+       (when entry (list (cdr entry))))
+     ;; Match by alias
+     (cl-some (lambda (entry)
+                (let ((child (cdr entry)))
+                  (when (member name (clime-node-aliases child))
+                    (list child))))
+              children)
+     ;; Fall through to inline group's children
+     (cl-some (lambda (entry)
+                (let ((child (cdr entry)))
+                  (when (and (clime-group-p child)
+                             (clime-node-inline child))
+                    (let ((sub-path (clime-group-find-child-path child name)))
+                      (when sub-path
+                        (cons child sub-path))))))
+              children))))
 
 (defun clime-node-all-ancestor-flags (node)
   "Collect all option flags from ancestors of NODE.

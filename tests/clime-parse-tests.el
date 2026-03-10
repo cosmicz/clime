@@ -1167,5 +1167,31 @@
     (should (equal (plist-get (clime-parse-result-params result) 'name)
                    "myrepo"))))
 
+;;; ─── Inline Group Path ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/inline-group-path-includes-group ()
+  "Parse path includes inline group name when dispatching through it."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "add" add-cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "repo" grp))))
+         (result (clime-parse app '("add" "myrepo"))))
+    (should (equal (clime-parse-result-path result)
+                   '("t" "repo" "add")))))
+
+(ert-deftest clime-test-parse/inline-group-direct-path ()
+  "Direct dispatch through group name also includes it in path."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "add" add-cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "repo" grp))))
+         (result (clime-parse app '("repo" "add" "myrepo"))))
+    (should (equal (clime-parse-result-path result)
+                   '("t" "repo" "add")))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

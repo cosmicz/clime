@@ -403,9 +403,10 @@ This enables a setup hook to run between passes."
         (progn
     (while (< i len)
       (let* ((token (nth i argv))
-             (child (and (clime-group-only-p current-node)
-                         (clime--required-args-satisfied-p current-node params)
-                         (clime-group-find-child current-node token))))
+             (child-path (and (clime-group-only-p current-node)
+                              (clime--required-args-satisfied-p current-node params)
+                              (clime-group-find-child-path current-node token)))
+             (child (car (last child-path))))
         (cond
          ;; 1. End of options
          ((string= token "--")
@@ -421,12 +422,13 @@ This enables a setup hook to run between passes."
                 (j (1+ i)))
             (while (< j len)
               (let* ((next (nth j argv))
-                     (child (and (clime-group-only-p help-node)
-                                 (clime-group-find-child help-node next))))
-                (if child
+                     (found (and (clime-group-only-p help-node)
+                                 (clime-group-find-child-path help-node next))))
+                (if found
                     (progn
-                      (setq help-node child)
-                      (setq help-path (append help-path (list (clime-node-name child))))
+                      (dolist (node found)
+                        (setq help-node node)
+                        (setq help-path (append help-path (list (clime-node-name node)))))
                       (cl-incf j))
                   (setq j len))))  ;; stop on non-command token
             (signal 'clime-help-requested
@@ -484,11 +486,12 @@ This enables a setup hook to run between passes."
                                         (if split (car split) token)
                                         (string-join path " ")))))))))
 
-         ;; 4. Try group descent
+         ;; 4. Try group descent (child-path includes inline groups)
          (child
-          (setq current-node child)
-          (setq path (append path (list (clime-node-name child))))
-          (push child visited-nodes)
+          (dolist (node child-path)
+            (setq current-node node)
+            (setq path (append path (list (clime-node-name node))))
+            (push node visited-nodes))
           (setq arg-index 0)
           (cl-incf i))
 
