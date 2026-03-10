@@ -988,5 +988,18 @@
     (should-error (clime-parse app '("add" "foo" "https://example.com"))
                   :type 'clime-usage-error)))
 
+(ert-deftest clime-test-parse/inline-group-child-alias ()
+  "Inline group child commands are found by alias at parent level."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :aliases '("a")
+                                       :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "add" add-cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "repo" grp))))
+         (result (clime-parse app '("a" "myrepo"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name)
+                   "myrepo"))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

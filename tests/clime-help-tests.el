@@ -353,6 +353,21 @@
     ;; The group name itself should not appear as a command
     (should-not (string-match-p "repo" help))))
 
+(ert-deftest clime-test-help/inline-group-hidden-child ()
+  "Hidden children in an inline group stay hidden in parent help."
+  (let* ((add-cmd (clime-make-command :name "add" :handler #'ignore
+                                       :help "Add a thing"))
+         (secret (clime-make-command :name "secret" :handler #'ignore
+                                      :help "Secret cmd" :hidden t))
+         (grp (clime-make-group :name "repo" :inline t
+                                :children (list (cons "add" add-cmd)
+                                                (cons "secret" secret))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "repo" grp))))
+         (help (clime-format-help app '("myapp"))))
+    (should (string-match-p "add" help))
+    (should-not (string-match-p "secret" help))))
+
 (ert-deftest clime-test-help/choices-function-shown-in-help ()
   "Option with :choices as a function resolves and shows values in help."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")

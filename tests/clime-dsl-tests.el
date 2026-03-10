@@ -101,6 +101,24 @@
     (should (cdr (assoc "add" (clime-group-children dep))))
     (should (cdr (assoc "remove" (clime-group-children dep))))))
 
+;;; ─── Inline Groups ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/inline-group ()
+  "clime-group with :inline t sets the inline slot."
+  (eval '(clime-app clime-test--dsl-inline
+           :version "1"
+           (clime-group repo
+             :inline t
+             :help "Manage repos"
+             (clime-command add
+               :help "Add repo"
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((app clime-test--dsl-inline)
+         (grp (cdr (assoc "repo" (clime-group-children app)))))
+    (should (clime-group-p grp))
+    (should (clime-node-inline grp))))
+
 ;;; ─── Nested Groups ─────────────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/nested-groups ()
