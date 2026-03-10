@@ -16,6 +16,10 @@
 
 ### Changed
 
+- Shebang tag changed from `# clime:X.Y.Z` to `# clime-sh!:vN`, separating
+  the shebang format version from the library version
+- `init` refuses to downgrade a newer shebang format version (use `--force`
+  to override); detects and upgrades legacy `clime:X.Y.Z` tags automatically
 - Renamed `:group` option slot to `:category` (avoids confusion with `clime-group`)
 - Static `:choices` (literal lists) validated in pass 1; dynamic `:choices`
   (functions) deferred to pass 2

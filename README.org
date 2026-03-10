@@ -72,7 +72,7 @@ both shell script and Elisp:
     (condition-case nil \
       (while t(eval(read(current-buffer))t)) \
       (end-of-file nil)))" \
-  -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+  -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 #+end_src
 
 Line 2 is both a shell no-op (~":"~) and the Emacs invocation.  It uses
@@ -81,9 +81,9 @@ the ~":"~ prefix on line 2 prevents Emacs from recognizing the ~-*-~
 cookie during normal file loading.  The cookie is still useful: editors
 use it to detect the major mode when opening the file for editing.
 
-The ~# clime:VERSION~ tag lets ~init~ detect and update existing
-shebangs.  ~CLIME_ARGV0~ preserves the original script name for usage
-output.
+The ~# clime-sh!:vN~ tag lets ~init~ detect and update existing
+shebangs without clobbering newer formats.  ~CLIME_ARGV0~ preserves
+the original script name for usage output.
 
 So ~./myapp.el hello world~ just works from your shell.
 
@@ -564,27 +564,88 @@ See =examples/pkm.el= for a comprehensive demo covering all major features.
 
 * Bundling & Distribution
 
-~clime-make.el~ provides two commands for distribution:
+~clime-make.el~ provides two commands: ~init~ (make a script
+executable) and ~bundle~ (combine files into one).
 
-*~bundle~* --- concatenate source files into a single =.el=:
+** Making a script executable (~init~)
+
+For a single-file app that lives alongside clime:
+
+#+begin_src bash
+./clime-make.el init myapp.el
+./myapp.el --help
+#+end_src
+
+~init~ prepends a polyglot shebang, sets the executable bit, and adds
+~-L~ flags so Emacs can find clime at runtime.
+
+Common options:
+
+#+begin_src bash
+# Script in a subdirectory that needs the parent on the load path
+./clime-make.el init -R .. examples/myapp.el
+
+# Script's own dir on the load path (for local requires)
+./clime-make.el init --self-dir myapp.el
+
+# Bundled/vendored app that doesn't need the clime load path
+./clime-make.el init --standalone --self-dir dist/myapp.el
+
+# Set env vars in the shebang
+./clime-make.el init --env CLIME_MAIN_APP=myapp dist/myapp.el
+#+end_src
+
+Re-running ~init~ on a file that already has a clime shebang updates
+it in place.  ~init~ refuses to overwrite a non-clime shebang (use
+~--force~) or to downgrade a newer shebang format version.
+
+** Building a single-file distribution (~bundle~)
+
+For multi-file projects, ~bundle~ concatenates source files into one:
+
+#+begin_src bash
+./clime-make.el bundle -o dist/myapp.el \
+    --provide myapp \
+    src/myapp-core.el src/myapp-commands.el src/myapp.el
+#+end_src
+
+The output provides the feature (~'myapp~) and can be used as a
+library via ~(require 'myapp)~.
+
+*** Adding an entrypoint (~--main~)
+
+To make the bundle also work as a standalone CLI, pass ~--main~:
 
 #+begin_src bash
 ./clime-make.el bundle -o dist/myapp.el \
     --provide myapp --main myapp-main.el \
     src/myapp-core.el src/myapp-commands.el src/myapp.el
+
+./clime-make.el init --standalone --self-dir \
+    --env CLIME_MAIN_APP=myapp dist/myapp.el
 #+end_src
 
-With ~--main FILE~, the bundle includes a guarded entrypoint: the main
-file's code is wrapped in ~clime-main-script-p~ and placed inside an
-=;;; Entrypoint:= section.  This makes the bundle work as both a library
-(~require 'myapp~) and a standalone CLI.
+The main file is a short script --- it requires the app and runs it:
 
-** Entrypoint markers
+#+begin_src emacs-lisp
+;;; myapp-main.el --- Entrypoint for myapp  -*- lexical-binding: t; -*-
+;;; Code:
+(require 'myapp)
+(clime-run-batch myapp)
+;;; myapp-main.el ends here
+#+end_src
 
-Source files passed to ~bundle~ may contain an =;;; Entrypoint:= marker
-separating library code from entrypoint code:
+Its code is wrapped in a ~clime-main-script-p~ guard inside the
+bundle, so it only executes when ~CLIME_MAIN_APP~ matches the feature
+name --- not when loaded as a library.  The ~--main~ file must /not/
+contain an =;;; Entrypoint:= marker.
 
-#+begin_src elisp
+*** Entrypoint markers in source files
+
+Source files can contain an =;;; Entrypoint:= section that separates
+library code from standalone entrypoint code:
+
+#+begin_src emacs-lisp
 ;;; myapp.el --- My app  -*- lexical-binding: t; -*-
 ;;; Code:
 (require 'clime)
@@ -596,38 +657,39 @@ separating library code from entrypoint code:
 #+end_src
 
 The bundler extracts only the library section (=;;; Code:= to
-=;;; Entrypoint:=), stripping the entrypoint automatically.  Files
-without the marker are extracted up to =;;; ... ends here= as before.
+=;;; Entrypoint:=), stripping the entrypoint automatically.  This lets
+each source file run standalone during development while bundling
+cleanly.  Files without the marker are extracted up to
+=;;; ... ends here= as usual.
 
-If a source file contains ~(clime-run-batch ...)~ in its library section
-(above the =;;; Entrypoint:= marker or without one), ~bundle~ signals an
-error --- move it below the marker.
+If ~(clime-run-batch ...)~ appears in a source file's library section
+(above the marker or without one), ~bundle~ signals an error --- move
+it below =;;; Entrypoint:=.
 
-The ~--main~ file must /not/ contain an =;;; Entrypoint:= marker (it is
-a plain script whose entire code section becomes the guarded entry).
+*** Typical project layout
 
-*~init~* --- add a shebang to make any =.el= file executable:
+#+begin_example
+myapp/
+  vendor/clime/          # clime source (git clone or submodule)
+  src/
+    myapp-core.el        # library code
+    myapp-commands.el    # commands
+    myapp.el             # app definition + (provide 'myapp)
+  myapp-main.el          # standalone entrypoint
+  dist/
+    myapp.el             # bundled output (single file)
+  Makefile
+#+end_example
 
-#+begin_src bash
-./clime-make.el init --env CLIME_MAIN_APP=myapp dist/myapp.el
-#+end_src
+A minimal Makefile:
 
-For dual-use bundles, pass ~--env CLIME_MAIN_APP=<feature>~ so the
-entry point only activates when run directly (not when loaded as a
-library).  The value must match the ~--provide~ feature name.
+#+begin_src makefile
+CLIME := vendor/clime/clime-make.el
+SRCS  := src/myapp-core.el src/myapp-commands.el src/myapp.el
 
-~init~ supports runtime load-path options for scripts that live
-alongside their dependencies:
-
-#+begin_src bash
-# Add script's own directory to load path
-./clime-make.el init --self-dir myapp.el
-
-# Add a path relative to the script's directory
-./clime-make.el init -R .. examples/myapp.el
-
-# Standalone (no clime load path)
-./clime-make.el init --standalone --self-dir myapp.el
+dist/myapp.el: $(SRCS) myapp-main.el
+	$(CLIME) bundle -o $@ --provide myapp --main myapp-main.el $(SRCS)
+	$(CLIME) init --standalone --self-dir --env CLIME_MAIN_APP=myapp $@
 #+end_src
 
 * Installation

@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$(dirname "$0")" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -44,9 +44,14 @@ Signals `clime-usage-error' on the first invalid entry."
               (list (format "invalid --env value %S (expected NAME=VALUE with safe characters)" e))))))
 
 
+(defconst clime-make--shebang-version "1"
+  "Shebang format version, independent of `clime-version'.
+Bumped when the polyglot launcher structure changes.")
+
 (defconst clime-make--shebang-tag-re
-  "# clime:[0-9]+\\.[0-9]+\\.[0-9]+"
-  "Regexp matching the clime version tag in a shebang line 2.")
+  "# clime\\(?:-sh!:v[0-9]+\\|:[0-9]+\\.[0-9]+\\.[0-9]+\\)"
+  "Regexp matching a clime shebang tag (old or new format) in line 2.
+Matches both the legacy `# clime:X.Y.Z' and current `# clime-sh!:vN'.")
 
 (defun clime-make--clime-shebang-p (file)
   "Return non-nil if FILE starts with a clime-tagged shebang."
@@ -58,13 +63,29 @@ Signals `clime-usage-error' on the first invalid entry."
          (let ((line2 (buffer-substring (point) (line-end-position))))
            (string-match-p clime-make--shebang-tag-re line2)))))
 
+(defun clime-make--shebang-file-version (file)
+  "Return the shebang format version from FILE, or nil.
+Returns an integer for `clime-sh!:vN' tags, 0 for legacy `clime:X.Y.Z' tags,
+or nil if FILE has no clime shebang."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 512)
+    (goto-char (point-min))
+    (when (looking-at "#!")
+      (forward-line 1)
+      (let ((line2 (buffer-substring (point) (line-end-position))))
+        (cond
+         ((string-match "# clime-sh!:v\\([0-9]+\\)" line2)
+          (string-to-number (match-string 1 line2)))
+         ((string-match-p "# clime:[0-9]+\\.[0-9]+\\.[0-9]+" line2)
+          0))))))
+
 (defun clime-make--make-shebang (env-vars load-paths)
   "Build a two-line polyglot shebang string.
 ENV-VARS is a list of \"NAME=VALUE\" strings.
 LOAD-PATHS is a string of formatted -L flags (may be empty).
 Always includes CLIME_ARGV0=\"$0\" so usage output shows the
 executable name rather than the DSL symbol.
-Embeds a clime:VERSION tag for detection and update support.
+Embeds a clime-sh!:vN tag for detection and update support.
 
 Uses --eval with a read/eval loop instead of -l to force
 `lexical-binding' to t.  The standard polyglot (\":\" on line 2)
@@ -82,13 +103,16 @@ the lexical flag."
                      "(condition-case nil"
                      "(while t(eval(read(current-buffer))t))"
                      "(end-of-file nil)))\"")))
-    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s %s -- \"$@\" # clime:%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
-            env-prefix load-paths eval-form clime-version)))
+    (format "#!/bin/sh\n\":\"; %sexec emacs --batch -Q%s %s -- \"$@\" # clime-sh!:v%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
+            env-prefix load-paths eval-form clime-make--shebang-version)))
 
 (defun clime-make--write-shebang (target env-vars load-paths force)
   "Write a shebang to TARGET file, handling existing headers.
 ENV-VARS and LOAD-PATHS are passed to `clime-make--make-shebang'.
-If TARGET has a clime-tagged shebang, replace it (return \"updated\").
+If TARGET has a clime-tagged shebang with a newer format version,
+signal an error (use FORCE to override).
+If TARGET has a clime-tagged shebang at same or older version,
+replace it (return \"updated\").
 If TARGET has a non-clime shebang and FORCE is non-nil, replace it.
 If TARGET has a non-clime shebang and FORCE is nil, signal an error.
 If TARGET has no shebang, prepend one (return \"done\")."
@@ -100,17 +124,33 @@ If TARGET has no shebang, prepend one (return \"done\")."
       (cond
        ;; Existing shebang
        ((looking-at "#!")
-        (if (or (clime-make--clime-shebang-p target) force)
-            (progn
-              ;; Delete the two shebang lines
-              (forward-line 2)
-              (delete-region (point-min) (point))
-              (goto-char (point-min))
-              (insert shebang)
-              (setq action "updated"))
-          (signal 'clime-usage-error
-                  (list (format "%s already has a shebang line (use --force to replace)"
-                                (file-name-nondirectory target))))))
+        (let ((file-ver (clime-make--shebang-file-version target))
+              (our-ver (string-to-number clime-make--shebang-version)))
+          (cond
+           ;; Newer clime shebang — refuse unless forced
+           ((and file-ver (> file-ver our-ver) (not force))
+            (signal 'clime-usage-error
+                    (list (format "%s has a newer shebang format (v%d > v%d); use --force to downgrade"
+                                  (file-name-nondirectory target) file-ver our-ver))))
+           ;; Clime shebang (same, older, or forced newer) — replace 2 lines
+           (file-ver
+            (forward-line 2)
+            (delete-region (point-min) (point))
+            (goto-char (point-min))
+            (insert shebang)
+            (setq action "updated"))
+           ;; Non-clime shebang with force — replace only the #! line
+           (force
+            (forward-line 1)
+            (delete-region (point-min) (point))
+            (goto-char (point-min))
+            (insert shebang)
+            (setq action "updated"))
+           ;; Non-clime shebang, no force
+           (t
+            (signal 'clime-usage-error
+                    (list (format "%s already has a shebang line (use --force to replace)"
+                                  (file-name-nondirectory target))))))))
        ;; No shebang: prepend
        (t
         (insert shebang)

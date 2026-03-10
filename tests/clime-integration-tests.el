@@ -151,7 +151,7 @@ process environment."
         (insert-file-contents app-file)
         (let ((line2 (progn (forward-line 1)
                             (buffer-substring (point) (line-end-position)))))
-          (should (string-match-p "# clime:[0-9]+\\.[0-9]+\\.[0-9]+" line2)))))))
+          (should (string-match-p "# clime-sh!:v[0-9]+" line2)))))))
 
 (ert-deftest clime-test-integration/init-updates-clime-shebang ()
   "clime-make.el init replaces an existing clime-tagged shebang."
@@ -169,6 +169,69 @@ process environment."
       (let ((result (clime-test--run-script app-file '("hello" "world"))))
         (should (= 0 (car result)))
         (should (equal "Hello, world!" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-skips-same-version-shebang ()
+  "clime-make.el init is idempotent: re-running on same version preserves content."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; First init
+      (clime-test--run-script clime-make (list "init" app-file))
+      (let ((after-first (with-temp-buffer
+                           (insert-file-contents app-file)
+                           (buffer-string))))
+        ;; Second init
+        (clime-test--run-script clime-make (list "init" app-file))
+        (let ((after-second (with-temp-buffer
+                              (insert-file-contents app-file)
+                              (buffer-string))))
+          (should (equal after-first after-second)))))))
+
+(ert-deftest clime-test-integration/init-rejects-newer-shebang-version ()
+  "clime-make.el init refuses to downgrade a newer shebang version."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; Manually prepend a future-version shebang
+      (let ((original (with-temp-buffer
+                        (insert-file-contents app-file)
+                        (buffer-string))))
+        (with-temp-file app-file
+          (insert "#!/bin/sh\n\":\"; exec emacs --batch -Q -- \"$@\" # clime-sh!:v999 -*- lexical-binding: t; -*-\n")
+          (insert original)))
+      ;; Init should refuse (exit non-zero)
+      (let ((result (clime-test--run-script clime-make (list "init" app-file))))
+        (should (/= 0 (car result)))
+        (should (string-match-p "newer" (cdr result))))
+      ;; --force should override
+      (let ((result (clime-test--run-script clime-make (list "init" "--force" app-file))))
+        (should (= 0 (car result)))))))
+
+(ert-deftest clime-test-integration/init-updates-legacy-shebang ()
+  "clime-make.el init detects and replaces a legacy clime:X.Y.Z shebang."
+  (clime-test-with-temp-dir
+    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+           (app-file (expand-file-name "test-app.el")))
+      (clime-test--write-app-source app-file)
+      ;; Manually prepend a legacy-format shebang
+      (let ((original (with-temp-buffer
+                        (insert-file-contents app-file)
+                        (buffer-string))))
+        (with-temp-file app-file
+          (insert "#!/bin/sh\n\":\"; exec emacs --batch -Q -- \"$@\" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-\n")
+          (insert original)))
+      ;; Init should detect the old tag and update it
+      (let ((result (clime-test--run-script clime-make (list "init" app-file))))
+        (should (= 0 (car result)))
+        (should (string-match-p "updated" (cdr result))))
+      ;; New shebang should have the new tag format
+      (with-temp-buffer
+        (insert-file-contents app-file)
+        (forward-line 1)
+        (let ((line2 (buffer-substring (point) (line-end-position))))
+          (should (string-match-p "# clime-sh!:v[0-9]+" line2)))))))
 
 (ert-deftest clime-test-integration/init-update-changes-options ()
   "clime-make.el init update replaces shebang with new options."
@@ -232,7 +295,7 @@ process environment."
         (should (string-prefix-p "#!/bin/sh" (buffer-string)))
         (let ((line2 (progn (forward-line 1)
                             (buffer-substring (point) (line-end-position)))))
-          (should (string-match-p "# clime:" line2)))))))
+          (should (string-match-p "# clime-sh!:v[0-9]+" line2)))))))
 
 (ert-deftest clime-test-integration/init-rejects-missing-file ()
   "clime-make.el init errors on a nonexistent file."
