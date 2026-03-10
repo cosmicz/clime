@@ -57,18 +57,33 @@ path/to/clime-make.el init greet.el
 
 ** How the shebang works
 
-~clime-make.el init~ prepends a polyglot header that's valid as both
-shell script and Elisp.  It uses a read/eval loop with explicit
-~lexical-binding~ to work around Emacs not recognizing the cookie on
-polyglot lines:
+~clime-make.el init~ prepends a two-line polyglot header that's valid as
+both shell script and Elisp:
 
 #+begin_src bash
 #!/bin/sh
-":"; exec emacs --batch -Q -L "/path/to/clime" \
+":"; CLIME_ARGV0="$0" exec emacs --batch -Q \
+  -L "$(dirname "$0")" \
   --eval "(setq load-file-name \"$0\")" \
-  --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" \
-  -- "$@"
+  --eval "(with-temp-buffer \
+    (insert-file-contents load-file-name) \
+    (setq lexical-binding t) \
+    (goto-char(point-min)) \
+    (condition-case nil \
+      (while t(eval(read(current-buffer))t)) \
+      (end-of-file nil)))" \
+  -- "$@" # clime:0.1.1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 #+end_src
+
+Line 2 is both a shell no-op (~":"~) and the Emacs invocation.  It uses
+a read/eval loop that explicitly sets ~lexical-binding~ to ~t~, since
+the ~":"~ prefix on line 2 prevents Emacs from recognizing the ~-*-~
+cookie during normal file loading.  The cookie is still useful: editors
+use it to detect the major mode when opening the file for editing.
+
+The ~# clime:VERSION~ tag lets ~init~ detect and update existing
+shebangs.  ~CLIME_ARGV0~ preserves the original script name for usage
+output.
 
 So ~./myapp.el hello world~ just works from your shell.
 
@@ -555,12 +570,41 @@ See =examples/pkm.el= for a comprehensive demo covering all major features.
 
 #+begin_src bash
 ./clime-make.el bundle -o dist/myapp.el \
-    --provide myapp --main myapp \
+    --provide myapp --main myapp-main.el \
     src/myapp-core.el src/myapp-commands.el src/myapp.el
 #+end_src
 
-With ~--main~, the bundle works as both a library (~require 'myapp~)
-and a standalone CLI.
+With ~--main FILE~, the bundle includes a guarded entrypoint: the main
+file's code is wrapped in ~clime-main-script-p~ and placed inside an
+=;;; Entrypoint:= section.  This makes the bundle work as both a library
+(~require 'myapp~) and a standalone CLI.
+
+** Entrypoint markers
+
+Source files passed to ~bundle~ may contain an =;;; Entrypoint:= marker
+separating library code from entrypoint code:
+
+#+begin_src elisp
+;;; myapp.el --- My app  -*- lexical-binding: t; -*-
+;;; Code:
+(require 'clime)
+(clime-app myapp :version "1.0" ...)
+(provide 'myapp)
+;;; Entrypoint:
+(clime-run-batch myapp)
+;;; myapp.el ends here
+#+end_src
+
+The bundler extracts only the library section (=;;; Code:= to
+=;;; Entrypoint:=), stripping the entrypoint automatically.  Files
+without the marker are extracted up to =;;; ... ends here= as before.
+
+If a source file contains ~(clime-run-batch ...)~ in its library section
+(above the =;;; Entrypoint:= marker or without one), ~bundle~ signals an
+error --- move it below the marker.
+
+The ~--main~ file must /not/ contain an =;;; Entrypoint:= marker (it is
+a plain script whose entire code section becomes the guarded entry).
 
 *~init~* --- add a shebang to make any =.el= file executable:
 
@@ -568,8 +612,9 @@ and a standalone CLI.
 ./clime-make.el init --env CLIME_MAIN_APP=myapp dist/myapp.el
 #+end_src
 
-For dual-use bundles, pass ~--env CLIME_MAIN_APP=<app>~ so the entry
-point only activates when run directly (not when loaded as a library).
+For dual-use bundles, pass ~--env CLIME_MAIN_APP=<feature>~ so the
+entry point only activates when run directly (not when loaded as a
+library).  The value must match the ~--provide~ feature name.
 
 ~init~ supports runtime load-path options for scripts that live
 alongside their dependencies:

@@ -342,8 +342,9 @@ FEATURE is the provide symbol, CODE is the body between markers."
           ;; No shebang (bundle never adds shebang)
           (should-not (string-prefix-p "#!" content)))))))
 
-(ert-deftest clime-test-integration/bundle-strips-run-batch ()
-  "clime bundle strips (clime-run-batch ...) from extracted code."
+(ert-deftest clime-test-integration/bundle-rejects-run-batch-in-library ()
+  "clime bundle errors when source has (clime-run-batch ...) in library section.
+Users must move it below ;;; Entrypoint: marker."
   (clime-test-with-temp-dir
     (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
@@ -353,29 +354,32 @@ FEATURE is the provide symbol, CODE is the body between markers."
                      clime-make
                      (list "bundle" "-o" out
                            (expand-file-name "app.el")))))
-        (should (= 0 (car result))))
-      (with-temp-buffer
-        (insert-file-contents out)
-        (should (string-match-p "defvar myapp" (buffer-string)))
-        (should-not (string-match-p "clime-run-batch" (buffer-string)))))))
+        (should (= 2 (car result)))
+        (should (string-match-p "clime-run-batch.*Entrypoint" (cdr result)))))))
 
 (ert-deftest clime-test-integration/bundle-main-guard ()
-  "clime bundle --main adds guarded entry point."
+  "clime bundle --main FILE adds guarded entry point from file."
   (clime-test-with-temp-dir
     (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
       (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
+      ;; Main file — plain script, no ;;; Entrypoint: marker
+      (clime-test--write-module "app-main.el" 'myapp-main
+                                "(require 'myapp)\n(clime-run-batch myapp)")
       (let ((result (clime-test--run-script
                      clime-make
-                     (list "bundle" "-o" out "--main" "myapp"
+                     (list "bundle" "-o" out
+                           "--main" (expand-file-name "app-main.el")
                            (expand-file-name "app.el")))))
         (should (= 0 (car result))))
       (with-temp-buffer
         (insert-file-contents out)
         (let ((content (buffer-string)))
-          ;; Has guarded entry point
-          (should (string-match-p "clime-main-script-p 'myapp" content))
+          ;; Has guarded entry point using provide feature
+          (should (string-match-p "clime-main-script-p 'bundle" content))
           (should (string-match-p "clime-run-batch myapp" content))
+          ;; Has ;;; Entrypoint: marker
+          (should (string-match-p "^;;; Entrypoint:" content))
           ;; No shebang (that's init's job)
           (should-not (string-prefix-p "#!" content)))))))
 
@@ -410,18 +414,36 @@ FEATURE is the provide symbol, CODE is the body between markers."
         (insert-file-contents out)
         (should (string-match-p "My awesome tool" (buffer-string)))))))
 
-(ert-deftest clime-test-integration/bundle-rejects-unsafe-main ()
-  "clime bundle --main rejects values that aren't valid symbol names."
+(ert-deftest clime-test-integration/bundle-rejects-missing-main ()
+  "clime bundle --main errors when the main file doesn't exist."
   (clime-test-with-temp-dir
     (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (out (expand-file-name "bundle.el")))
       (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
       (let ((result (clime-test--run-script
                      clime-make
-                     (list "bundle" "-o" out "--main" "foo bar"
+                     (list "bundle" "-o" out
+                           "--main" (expand-file-name "nonexistent.el")
                            (expand-file-name "app.el")))))
         (should (= 2 (car result)))
-        (should (string-match-p "invalid --main" (cdr result)))))))
+        (should (string-match-p "does not exist" (cdr result)))))))
+
+(ert-deftest clime-test-integration/bundle-rejects-main-with-entry-marker ()
+  "clime bundle --main rejects files that contain ;;; Entrypoint: marker."
+  (clime-test-with-temp-dir
+    (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (out (expand-file-name "bundle.el")))
+      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
+      (clime-test--write-module-with-entry "bad-main.el" 'myapp
+                                           "(require 'myapp)"
+                                           "(clime-run-batch myapp)")
+      (let ((result (clime-test--run-script
+                     clime-make
+                     (list "bundle" "-o" out
+                           "--main" (expand-file-name "bad-main.el")
+                           (expand-file-name "app.el")))))
+        (should (= 2 (car result)))
+        (should (string-match-p "Entrypoint" (cdr result)))))))
 
 (ert-deftest clime-test-integration/bundle-rejects-missing-source ()
   "clime bundle errors when a source file doesn't exist."
@@ -459,6 +481,44 @@ FEATURE is the provide symbol, CODE is the body between markers."
                            (expand-file-name "app.el")))))
         (should (= 0 (car result))))
       (should (file-exists-p out)))))
+
+;;; ─── Entrypoint Section Markers ─────────────────────────────────────────
+
+(defun clime-test--write-module-with-entry (file-path feature lib-code entry-code)
+  "Write an Elisp module with an ;;; Entrypoint: section to FILE-PATH.
+FEATURE is the provide symbol, LIB-CODE is the library body,
+ENTRY-CODE is the entrypoint body after the Entrypoint marker."
+  (with-temp-file file-path
+    (insert (format ";;; %s --- test module  -*- lexical-binding: t; -*-\n"
+                    (file-name-nondirectory file-path))
+            ";;; Code:\n"
+            lib-code "\n"
+            (format "(provide '%s)\n" feature)
+            ";;; Entrypoint:\n"
+            entry-code "\n"
+            (format ";;; %s ends here\n"
+                    (file-name-nondirectory file-path)))))
+
+(ert-deftest clime-test-integration/bundle-strips-entry-section ()
+  "clime bundle strips ;;; Entrypoint: section from source files."
+  (clime-test-with-temp-dir
+    (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (out (expand-file-name "bundle.el")))
+      (clime-test--write-module-with-entry "app.el" 'myapp
+                                           "(defvar myapp nil)"
+                                           "(clime-run-batch myapp)")
+      (let ((result (clime-test--run-script
+                     clime-make
+                     (list "bundle" "-o" out
+                           (expand-file-name "app.el")))))
+        (should (= 0 (car result))))
+      (with-temp-buffer
+        (insert-file-contents out)
+        (let ((content (buffer-string)))
+          ;; Library code present
+          (should (string-match-p "defvar myapp" content))
+          ;; Entrypoint code stripped
+          (should-not (string-match-p "clime-run-batch" content)))))))
 
 ;;; ─── Example App ────────────────────────────────────────────────────────
 

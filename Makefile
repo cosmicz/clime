@@ -45,10 +45,10 @@ DIST_SRCS = clime-settings.el clime-core.el clime-parse.el \
 
 dist:
 	@./clime-make.el bundle -o $(DIST_DIR)/clime.el \
-		--provide clime --main clime-make \
+		--provide clime --main clime-make-main.el \
 		--description "Declarative CLI framework for Emacs Lisp" \
 		$(DIST_SRCS)
-	@./clime-make.el init --standalone --env CLIME_MAIN_APP=clime-make \
+	@./clime-make.el init --standalone --env CLIME_MAIN_APP=clime \
 		$(DIST_DIR)/clime.el
 
 init:

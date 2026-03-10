@@ -19,6 +19,13 @@
 - Renamed `:group` option slot to `:category` (avoids confusion with `clime-group`)
 - Static `:choices` (literal lists) validated in pass 1; dynamic `:choices`
   (functions) deferred to pass 2
+- `bundle --main` now takes a file path (was a symbol name); the main file's
+  code is wrapped in a `clime-main-script-p` guard and placed in an
+  `;;; Entrypoint:` section
+- `bundle` strips `;;; Entrypoint:` sections from source files instead of
+  using regex to remove `(clime-run-batch ...)` forms
+- `bundle` errors if source files contain `(clime-run-batch ...)` in their
+  library section (must be below `;;; Entrypoint:` marker)
 
 ## 0.1.1 — 2026-03-09
 

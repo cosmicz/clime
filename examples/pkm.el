@@ -234,9 +234,7 @@
                 (or verbose 0)
                 (if internal-trace "on" "off"))))))
 
-;; ─── Batch Entry Point ───────────────────────────────────────────────────
-
-(clime-run-batch pkm)
-
 (provide 'pkm)
+;;; Entrypoint:
+(clime-run-batch pkm)
 ;;; pkm.el ends here
