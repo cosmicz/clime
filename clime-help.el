@@ -132,14 +132,14 @@ Appends repeat indicator for :count and :multiple options."
 
 (defun clime-help--format-options (options)
   "Format the Options section for OPTIONS list.
-Respects :group labels and :hidden flags."
+Respects :category labels and :hidden flags."
   (let ((visible (cl-remove-if #'clime-option-hidden options)))
     (when visible
       (let ((grouped (make-hash-table :test 'equal))
             (group-order '()))
         ;; Partition by group label
         (dolist (opt visible)
-          (let ((grp (or (clime-option-group opt) "")))
+          (let ((grp (or (clime-option-category opt) "")))
             (unless (gethash grp grouped)
               (push grp group-order))
             (push opt (gethash grp grouped))))

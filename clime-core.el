@@ -34,7 +34,7 @@
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
   (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
-  (group nil :type (or string null) :documentation "Help display group label.")
+  (category nil :type (or string null) :documentation "Help display category label.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help."))
 
 (defun clime-make-option (&rest args)
@@ -164,7 +164,7 @@ ARGS is a plist of slot values."
                                   :flags '("--json")
                                   :nargs 0
                                   :help "Output as JSON"
-                                  :group "Output")))
+                                  :category "Output")))
       (setq args (plist-put args :options
                             (append (plist-get args :options) (list opt))))))
   (apply #'clime-app--create args))

@@ -132,11 +132,11 @@
 
     (clime-option author ("--author" "-a")
       :help "Filter by author"
-      :group "Filter")
+      :category "Filter")
 
     (clime-option since ("--since")
       :help "Only packages installed after DATE"
-      :group "Filter")
+      :category "Filter")
 
     (clime-option sort ("--sort" "-s")
       :help "Sort field"

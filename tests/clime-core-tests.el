@@ -42,12 +42,12 @@
                                 :env "APP_PRIORITY"
                                 :count nil
                                 :multiple nil
-                                :group "Workflow"
+                                :category "Workflow"
                                 :hidden nil)))
     (should (clime-option-p opt))
     (should (eq (clime-option-name opt) 'priority))
     (should (equal (clime-option-env opt) "APP_PRIORITY"))
-    (should (equal (clime-option-group opt) "Workflow"))
+    (should (equal (clime-option-category opt) "Workflow"))
     (should (= (clime-option-nargs opt) 1))))
 
 (ert-deftest clime-test-make-option/requires-name ()

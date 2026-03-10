@@ -413,11 +413,11 @@ Group related options under a heading in ~--help~ output:
 #+begin_src emacs-lisp
 (clime-option author ("--author" "-a")
   :help "Filter by author"
-  :group "Filter")
+  :category "Filter")
 
 (clime-option since ("--since")
   :help "Only after DATE"
-  :group "Filter")
+  :category "Filter")
 #+end_src
 
 These appear under a "Filter:" section in help instead of the

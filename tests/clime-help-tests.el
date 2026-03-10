@@ -165,13 +165,13 @@
 ;;; ─── Option Groups ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-help/option-groups ()
-  "Options with :group label are clustered under group header."
+  "Options with :category label are clustered under group header."
   (let* ((opt-a (clime-make-option :name 'verbose :flags '("--verbose")
                                     :count t :help "Verbosity"))
          (opt-b (clime-make-option :name 'to :flags '("--to")
-                                    :help "Target" :group "Workflow"))
+                                    :help "Target" :category "Workflow"))
          (opt-c (clime-make-option :name 'from :flags '("--from")
-                                    :help "Source" :group "Workflow"))
+                                    :help "Source" :category "Workflow"))
          (cmd (clime-make-command :name "x" :handler #'ignore
                                   :options (list opt-a opt-b opt-c)))
          (help (clime-format-help cmd '("app" "x"))))
