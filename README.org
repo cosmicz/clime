@@ -105,7 +105,7 @@ So ~./myapp.el hello world~ just works from your shell.
 - Stdin via ~-~ sentinel
 - JSON output mode (~:json-mode t~)
 - Epilog text for extra help content
-- Option groups in help output
+- Category sections in help output (options, commands, inline groups)
 - Rest args (~:nargs :rest~)
 - Invocable groups (group with its own handler)
 - Inline groups (~:inline t~) --- promote children to parent level
@@ -424,9 +424,13 @@ When ~--json~ is set, handler return values are encoded as JSON:
 ./myapp.el show --json 123
 #+end_src
 
-** Option groups in help
+** Categories in help
 
-Group related options under a heading in ~--help~ output:
+Use ~:category~ on options, commands, or inline groups to organize
+~--help~ into named sections.  Items sharing a category appear under
+one heading; uncategorized items fall back to "Options:" or "Commands:".
+
+Options with ~:category~:
 
 #+begin_src emacs-lisp
 (clime-option author ("--author" "-a")
@@ -438,8 +442,49 @@ Group related options under a heading in ~--help~ output:
   :category "Filter")
 #+end_src
 
-These appear under a "Filter:" section in help instead of the
-default "Options:" section.
+These appear under a "Filter:" section instead of "Options:".
+
+Commands with ~:category~:
+
+#+begin_src emacs-lisp
+(clime-command search
+  :help "Search items" :category "Filter")
+(clime-command list
+  :help "List items" :category "Filter")
+(clime-command show
+  :help "Show details")   ;; uncategorized → "Commands:"
+#+end_src
+
+Options and commands with the same ~:category~ share a section.
+
+Inline groups with ~:category~ apply it to all their children and
+options:
+
+#+begin_src emacs-lisp
+(clime-group admin
+  :inline t :category "Admin"
+  :help "Administrative commands"
+
+  (clime-option admin-token ("--admin-token")
+    :help "Admin API token")
+
+  (clime-command status
+    :help "Show system status"))
+#+end_src
+
+This renders as:
+
+#+begin_example
+Admin:
+  Administrative commands
+
+  --admin-token VALUE    Admin API token
+  status                 Show system status
+#+end_example
+
+Nested inline groups compose category paths --- an inner group with
+~:category "Config"~ inside an outer ~:category "Admin"~ produces
+"Admin / Config:" in help.
 
 ** Ancestor option propagation
 
@@ -549,8 +594,8 @@ listings, and shown in full in detailed command help.
 | Macro            | Purpose                            | Key arguments                                                             |
 |------------------+------------------------------------+---------------------------------------------------------------------------|
 | ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~, ~:setup~   |
-| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:epilog~                                |
-| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:inline~, ~:epilog~                     |
+| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:epilog~, ~:category~                   |
+| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:inline~, ~:epilog~, ~:category~        |
 | ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:env~, ~:category~ |
 | ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:default~, ~:help~            |
 | ~clime-handler~  | Attach a handler to a command      | ~(ctx)~ --- receives the parse context                                   |

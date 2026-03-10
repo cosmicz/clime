@@ -31,6 +31,8 @@
 ;;  14.  Group handler           config (shows all) / config set|get
 ;;  15.  Hidden command          debug
 ;;  16.  Context destructuring   clime-let macro in handlers
+;;  17.  Command categories      search/list under "Discovery"
+;;  18.  Inline group category   admin inline group with option + command
 ;;
 ;; Run it (this file is directly executable via the shebang header):
 ;;   chmod +x examples/pkm.el
@@ -106,10 +108,11 @@
                 (if tags (format " tags=%s" (string-join tags ",")) "")))))
 
   ;; ── search ───────────────────────────────────────────────────────────
-  ;; [10] Optional positional arg, [6] symbol alias
+  ;; [10] Optional positional arg, [6] symbol alias, [17] command category
   (clime-command search
     :help "Search the package registry"
     :aliases (s)
+    :category "Discovery"
 
     (clime-arg query :required nil
       :help "Search query (omit to list all)")
@@ -125,10 +128,11 @@
           (format "Listing all packages (limit %s)" limit)))))
 
   ;; ── list ─────────────────────────────────────────────────────────────
-  ;; [11] Option groups in help, [6] symbol alias
+  ;; [11] Option groups in help, [6] symbol alias, [17] command category
   (clime-command list
     :help "List installed packages"
     :aliases (ls)
+    :category "Discovery"
 
     (clime-option author ("--author" "-a")
       :help "Filter by author"
@@ -221,6 +225,21 @@
       (clime-handler (ctx)
         (clime-let ctx (key value)
           (format "Set %s = %s" key value)))))
+
+  ;; ── admin (inline group with category) ──────────────────────────────
+  ;; [18] Inline group with :category — option and command share a section
+  (clime-group admin
+    :inline t
+    :category "Admin"
+    :help "Administrative operations"
+
+    (clime-option admin-token ("--admin-token")
+      :help "Admin API token")
+
+    (clime-command gc
+      :help "Run garbage collection on cache"
+      (clime-handler (_ctx)
+        "Garbage collecting cache...")))
 
   ;; ── debug (hidden) ───────────────────────────────────────────────────
   ;; [15] Hidden command — not shown in help, but still callable

@@ -289,6 +289,200 @@
   (let ((grp (clime-make-group :name "x")))
     (should-not (clime-group-find-child grp "nope"))))
 
+;;; ─── Parent Setting at Construction ──────────────────────────────────────
+
+(ert-deftest clime-test-parent/group-sets-children-parent ()
+  "clime-make-group sets :parent on each child."
+  (let* ((cmd (clime-make-command :name "add" :handler #'ignore))
+         (grp (clime-make-group :name "repo"
+                                :children (list (cons "add" cmd)))))
+    (should (eq (clime-node-parent cmd) grp))))
+
+(ert-deftest clime-test-parent/app-sets-children-parent ()
+  "clime-make-app sets :parent on each child."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should (eq (clime-node-parent cmd) app))))
+
+(ert-deftest clime-test-parent/nested-groups ()
+  "Nested groups set parents at each level."
+  (let* ((cmd (clime-make-command :name "get" :handler #'ignore))
+         (inner (clime-make-group :name "config"
+                                  :children (list (cons "get" cmd))))
+         (outer (clime-make-app :name "t" :version "1"
+                                :children (list (cons "config" inner)))))
+    (should (eq (clime-node-parent cmd) inner))
+    (should (eq (clime-node-parent inner) outer))))
+
+(ert-deftest clime-test-parent/inline-group-sets-parent ()
+  "Inline group children also get parent set."
+  (let* ((cmd (clime-make-command :name "search" :handler #'ignore))
+         (grp (clime-make-group :name "filter" :inline t
+                                :children (list (cons "search" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "filter" grp)))))
+    (should (eq (clime-node-parent cmd) grp))
+    (should (eq (clime-node-parent grp) app))))
+
+;;; ─── Group Child Path Lookup ─────────────────────────────────────────────
+
+(ert-deftest clime-test-group-find-child-path/direct ()
+  "Direct child returns single-element path."
+  (let* ((cmd (clime-make-command :name "add" :handler #'ignore))
+         (grp (clime-make-group :name "dep"
+                                :children (list (cons "add" cmd)))))
+    (should (equal (clime-group-find-child-path grp "add") (list cmd)))))
+
+(ert-deftest clime-test-group-find-child-path/alias ()
+  "Alias match returns single-element path."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                   :aliases '("get")))
+         (grp (clime-make-group :name "x"
+                                :children (list (cons "show" cmd)))))
+    (should (equal (clime-group-find-child-path grp "get") (list cmd)))))
+
+(ert-deftest clime-test-group-find-child-path/inline-group ()
+  "Inline group descent returns full path including the inline group."
+  (let* ((cmd (clime-make-command :name "add" :handler #'ignore))
+         (inner (clime-make-group :name "repo" :inline t
+                                  :children (list (cons "add" cmd))))
+         (outer (clime-make-group :name "app"
+                                  :children (list (cons "repo" inner)))))
+    (should (equal (clime-group-find-child-path outer "add")
+                   (list inner cmd)))))
+
+(ert-deftest clime-test-group-find-child-path/nested-inline ()
+  "Nested inline groups return full descent path."
+  (let* ((cmd (clime-make-command :name "get" :handler #'ignore))
+         (config (clime-make-group :name "config" :inline t
+                                   :children (list (cons "get" cmd))))
+         (admin (clime-make-group :name "admin" :inline t
+                                  :children (list (cons "config" config))))
+         (app (clime-make-group :name "app"
+                                :children (list (cons "admin" admin)))))
+    (should (equal (clime-group-find-child-path app "get")
+                   (list admin config cmd)))))
+
+(ert-deftest clime-test-group-find-child-path/not-found ()
+  "Return nil for unknown child."
+  (let ((grp (clime-make-group :name "x")))
+    (should-not (clime-group-find-child-path grp "nope"))))
+
+;;; ─── Node Collect ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-collect/basic-options-and-commands ()
+  "Collect returns options and commands from a simple group."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")
+                                  :count t))
+         (cmd (clime-make-command :name "show" :handler #'ignore))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "show" cmd))))
+         (items (clime-node-collect app)))
+    ;; Option with owner-node
+    (should (= 2 (length items)))
+    (should (eq :option (caar items)))
+    (should (eq opt (cadar items)))
+    (should (eq app (caddar items)))
+    ;; Command
+    (should (eq :command (caadr items)))
+    (should (eq cmd (cadadr items)))))
+
+(ert-deftest clime-test-collect/inline-group-recurse ()
+  "Collect descends into inline groups by default."
+  (let* ((cmd (clime-make-command :name "search" :handler #'ignore))
+         (grp (clime-make-group :name "filter" :inline t
+                                :children (list (cons "search" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "filter" grp))))
+         (items (clime-node-collect app)))
+    ;; Should emit :group then :command (not the group as a :command)
+    (should (cl-some (lambda (i) (and (eq (car i) :group) (eq (cadr i) grp)))
+                     items))
+    (should (cl-some (lambda (i) (and (eq (car i) :command) (eq (cadr i) cmd)))
+                     items))))
+
+(ert-deftest clime-test-collect/non-inline-group-not-recursed ()
+  "Collect does not descend into non-inline groups."
+  (let* ((cmd (clime-make-command :name "get" :handler #'ignore))
+         (sub (clime-make-group :name "config"
+                                :children (list (cons "get" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "config" sub))))
+         (items (clime-node-collect app)))
+    ;; sub emitted as :command (leaf from app's perspective)
+    (should (= 1 (length items)))
+    (should (eq :command (caar items)))
+    (should (eq sub (cadar items)))))
+
+(ert-deftest clime-test-collect/hidden-option-excluded ()
+  "Hidden options are excluded from collect."
+  (let* ((opt (clime-make-option :name 'debug :flags '("--debug")
+                                  :nargs 0 :hidden t))
+         (cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "run" cmd))))
+         (items (clime-node-collect app)))
+    (should (= 1 (length items)))
+    (should (eq :command (caar items)))))
+
+(ert-deftest clime-test-collect/hidden-child-excluded ()
+  "Hidden children are excluded from collect."
+  (let* ((cmd (clime-make-command :name "internal" :handler #'ignore
+                                   :hidden t))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "internal" cmd))))
+         (items (clime-node-collect app)))
+    (should (null items))))
+
+(ert-deftest clime-test-collect/inline-group-options ()
+  "Options on inline groups are collected with correct owner-node."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                  :help "A token"))
+         (grp (clime-make-group :name "admin" :inline t
+                                :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "admin" grp))))
+         (items (clime-node-collect app)))
+    (should (cl-some (lambda (i) (and (eq (car i) :option)
+                                      (eq (cadr i) opt)
+                                      (eq (caddr i) grp)))
+                     items))))
+
+(ert-deftest clime-test-collect/match-p-filters ()
+  "Collect with :match-p filters items."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")
+                                  :count t))
+         (cmd (clime-make-command :name "show" :handler #'ignore))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "show" cmd))))
+         (items (clime-node-collect app
+                  :match-p (lambda (type _item) (eq type :command)))))
+    (should (= 1 (length items)))
+    (should (eq :command (caar items)))))
+
+(ert-deftest clime-test-collect/max-depth-limits-recursion ()
+  "Collect with :max-depth stops at specified depth."
+  (let* ((cmd (clime-make-command :name "get" :handler #'ignore))
+         (inner (clime-make-group :name "config" :inline t
+                                   :children (list (cons "get" cmd))))
+         (outer (clime-make-group :name "admin" :inline t
+                                   :children (list (cons "config" inner))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "admin" outer))))
+         (items (clime-node-collect app :max-depth 1)))
+    ;; Depth 0 = app level, recurses into outer (depth 1), but NOT inner
+    ;; So inner appears as :command, not recursed
+    (should (cl-some (lambda (i) (and (eq (car i) :group) (eq (cadr i) outer)))
+                     items))
+    (should (cl-some (lambda (i) (and (eq (car i) :command) (eq (cadr i) inner)))
+                     items))
+    ;; cmd should NOT appear (it's inside inner which wasn't recursed)
+    (should-not (cl-some (lambda (i) (eq (cadr i) cmd)) items))))
+
 ;;; ─── Ancestor Flag Collection ───────────────────────────────────────────
 
 (ert-deftest clime-test-node-all-ancestor-flags/no-parent ()

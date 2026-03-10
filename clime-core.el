@@ -125,13 +125,21 @@ ARGS is a plist of slot values."
   "A branch node (subcommand group) in the CLI tree."
   (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups."))
 
+(defun clime--set-children-parent (node)
+  "Set the :parent of each child in NODE's children alist to NODE."
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (setf (clime-node-parent (cdr entry)) node))))
+
 (defun clime-make-group (&rest args)
   "Create a `clime-group' with validation.
 Required keyword arg: :name (string).
 ARGS is a plist of slot values."
   (unless (plist-get args :name)
     (error "clime-make-group: :name is required"))
-  (apply #'clime-group--create args))
+  (let ((group (apply #'clime-group--create args)))
+    (clime--set-children-parent group)
+    group))
 
 (defun clime-group-only-p (node)
   "Return non-nil if NODE is a group but not a command.
@@ -170,7 +178,9 @@ ARGS is a plist of slot values."
                                   :category "Output")))
       (setq args (plist-put args :options
                             (append (plist-get args :options) (list opt))))))
-  (apply #'clime-app--create args))
+  (let ((app (apply #'clime-app--create args)))
+    (clime--set-children-parent app)
+    app))
 
 ;;; ─── Context ────────────────────────────────────────────────────────────
 
@@ -275,6 +285,54 @@ For inline group lookups, includes the inline group(s) and the leaf."
                       (when sub-path
                         (cons child sub-path))))))
               children))))
+
+(defun clime-node-collect (node &rest args)
+  "Collect items from NODE's subtree into a flat list.
+Each item is (TYPE ITEM ...) where TYPE is :option, :command, or :group.
+For :option items, the owning node is included: (:option OPT OWNER-NODE).
+
+Keyword ARGS:
+  :recurse-p — predicate on child node; which groups to descend into.
+               Default: `clime-node-inline'.
+  :match-p   — predicate on (TYPE ITEM); which items to include.
+               Default: include all non-hidden.
+  :max-depth — integer recursion limit, nil for unlimited."
+  (let ((recurse-p (or (plist-get args :recurse-p) #'clime-node-inline))
+        (match-p (plist-get args :match-p))
+        (max-depth (plist-get args :max-depth)))
+    (clime-node-collect--1 node recurse-p match-p max-depth 0)))
+
+(defun clime-node-collect--1 (node recurse-p match-p max-depth depth)
+  "Internal recursive collector for `clime-node-collect'.
+NODE is the current group, DEPTH tracks recursion level."
+  (let ((items '())
+        (at-depth-limit (and max-depth (>= depth max-depth))))
+    ;; Collect options from this node (with owning node ref)
+    (dolist (opt (clime-node-options node))
+      (unless (clime-option-hidden opt)
+        (when (or (null match-p) (funcall match-p :option opt))
+          (push (list :option opt node) items))))
+    ;; Walk children
+    (when (clime-group-only-p node)
+      (dolist (entry (clime-group-children node))
+        (let ((child (cdr entry)))
+          (cond
+           ;; Recurse into matching groups (unless at depth limit)
+           ((and (not at-depth-limit)
+                 (clime-group-p child)
+                 (funcall recurse-p child))
+            (when (or (null match-p) (funcall match-p :group child))
+              (push (list :group child) items))
+            (let ((sub (clime-node-collect--1 child recurse-p match-p
+                                              max-depth (1+ depth))))
+              (setq items (nconc (nreverse items) sub))
+              (setq items (nreverse items))))
+           ;; Non-inline group or command child
+           (t
+            (unless (clime-node-hidden child)
+              (when (or (null match-p) (funcall match-p :command child))
+                (push (list :command child) items))))))))
+    (nreverse items)))
 
 (defun clime-node-all-ancestor-flags (node)
   "Collect all option flags from ancestors of NODE.
