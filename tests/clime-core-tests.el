@@ -625,5 +625,32 @@
   (require 'clime)
   (should (string-match-p "^[0-9]+\\.[0-9]+\\.[0-9]" clime-version)))
 
+;;; ─── Merge Template ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-merge-template/overrides-win ()
+  "Explicit overrides take precedence over template values."
+  (let ((tpl '(:type string :help "Template help" :required t)))
+    (should (equal (clime--merge-template tpl :help "Override" :required nil)
+                   '(:type string :help "Override" :required nil)))))
+
+(ert-deftest clime-test-merge-template/template-preserved ()
+  "Template values carry through when not overridden."
+  (let ((tpl '(:type integer :conform identity)))
+    (let ((result (clime--merge-template tpl :name 'id :flags '("--id"))))
+      (should (eq (plist-get result :type) 'integer))
+      (should (eq (plist-get result :conform) 'identity))
+      (should (eq (plist-get result :name) 'id)))))
+
+(ert-deftest clime-test-merge-template/empty-template ()
+  "Empty template just returns overrides."
+  (should (equal (clime--merge-template '() :name 'x :flags '("--x"))
+                 '(:name x :flags ("--x")))))
+
+(ert-deftest clime-test-merge-template/no-mutation ()
+  "Merge does not mutate the original template."
+  (let ((tpl (list :type 'string :help "orig")))
+    (clime--merge-template tpl :help "changed")
+    (should (equal (plist-get tpl :help) "orig"))))
+
 (provide 'clime-core-tests)
 ;;; clime-core-tests.el ends here

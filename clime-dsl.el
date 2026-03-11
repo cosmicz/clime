@@ -71,15 +71,48 @@ Returns a plist (:options :args :children :handler)."
           :children (nreverse children)
           :handler handler)))
 
+;;; ─── Option Templates ──────────────────────────────────────────────────
+
+;;;###autoload
+(defmacro clime-defopt (name &rest plist)
+  "Define NAME as a reusable option template.
+Expands to (defvar clime--opt-NAME PLIST).
+PLIST contains default option slot values (evaluated at load time).
+Must not contain :name or :flags (those are per-instance).
+Supports DSL shorthands: :flag t normalizes to :nargs 0,
+:separator implies :multiple t."
+  (declare (indent 1))
+  (let ((var-sym (intern (format "clime--opt-%s" name))))
+    ;; Validate: reject per-instance slots
+    (when (plist-member plist :name)
+      (error "clime-defopt %s: :name is per-instance, not allowed in templates" name))
+    (when (plist-member plist :flags)
+      (error "clime-defopt %s: :flags is per-instance, not allowed in templates" name))
+    ;; Normalize :flag t → :nargs 0
+    (when (plist-get plist :flag)
+      (setq plist (plist-put (cl-copy-list plist) :nargs 0))
+      (cl-remf plist :flag))
+    ;; :separator implies :multiple t
+    (when (and (plist-get plist :separator)
+               (not (plist-member plist :multiple)))
+      (setq plist (plist-put (cl-copy-list plist) :multiple t)))
+    `(defvar ,var-sym (list ,@plist))))
+
 ;;; ─── Form Builders ──────────────────────────────────────────────────────
 
 (defun clime--build-option (args)
   "Build a `clime-option' constructor form from DSL ARGS.
 ARGS is (NAME FLAGS &rest PLIST).
-Supports :flag t as shorthand for :nargs 0 (boolean flag)."
+Supports :flag t as shorthand for :nargs 0 (boolean flag).
+Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defopt' template."
   (let* ((name (car args))
          (flags (cadr args))
-         (plist (cddr args)))
+         (plist (cddr args))
+         (from-name (plist-get plist :from)))
+    ;; Strip :from from plist (not a real slot)
+    (when from-name
+      (setq plist (cl-copy-list plist))
+      (cl-remf plist :from))
     ;; :flag t → :nargs 0 (DSL-only shorthand, not a real slot)
     (when (plist-get plist :flag)
       (setq plist (plist-put (cl-copy-list plist) :nargs 0))
@@ -88,7 +121,12 @@ Supports :flag t as shorthand for :nargs 0 (boolean flag)."
     (when (and (plist-get plist :separator)
                (not (plist-member plist :multiple)))
       (setq plist (plist-put (cl-copy-list plist) :multiple t)))
-    `(clime-make-option :name ',name :flags ',flags ,@plist)))
+    (if from-name
+        (let ((template-sym (intern (format "clime--opt-%s" from-name))))
+          `(apply #'clime-make-option
+                  (clime--merge-template ,template-sym
+                                         :name ',name :flags ',flags ,@plist)))
+      `(clime-make-option :name ',name :flags ',flags ,@plist))))
 
 (defun clime--build-arg (args)
   "Build a `clime-arg' constructor form from DSL ARGS.

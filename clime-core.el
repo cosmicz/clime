@@ -51,6 +51,14 @@ ARGS is a plist of slot values."
       (error "clime-make-option: :flags must be a non-empty list of strings"))
     (apply #'clime-option--create args)))
 
+(defun clime--merge-template (template &rest overrides)
+  "Merge option TEMPLATE plist with OVERRIDES plist.
+OVERRIDES take precedence over TEMPLATE values."
+  (let ((result (copy-sequence template)))
+    (cl-loop for (key val) on overrides by #'cddr
+             do (setq result (plist-put result key val)))
+    result))
+
 (defun clime-option-boolean-p (option)
   "Return non-nil if OPTION is a boolean/count flag (consumes no value)."
   (or (clime-option-count option)

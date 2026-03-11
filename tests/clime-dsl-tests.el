@@ -511,5 +511,156 @@
          t)
    :type 'error))
 
+;;; ─── clime-defopt: Option Templates ────────────────────────────────────
+
+(ert-deftest clime-test-dsl/defopt-basic ()
+  "clime-defopt creates a clime--opt-NAME variable holding option slot defaults."
+  (eval '(clime-defopt test-basic
+           :type 'string
+           :conform #'identity
+           :help "A basic template")
+        t)
+  (should (listp clime--opt-test-basic))
+  (should (eq (plist-get clime--opt-test-basic :type) 'string))
+  (should (functionp (plist-get clime--opt-test-basic :conform)))
+  (should (equal (plist-get clime--opt-test-basic :help) "A basic template")))
+
+(ert-deftest clime-test-dsl/defopt-flag-shorthand ()
+  "clime-defopt normalizes :flag t to :nargs 0."
+  (eval '(clime-defopt test-flag
+           :flag t
+           :help "A boolean template")
+        t)
+  (should (eql (plist-get clime--opt-test-flag :nargs) 0))
+  (should-not (plist-member clime--opt-test-flag :flag)))
+
+(ert-deftest clime-test-dsl/defopt-separator-implies-multiple ()
+  "clime-defopt normalizes :separator to imply :multiple t."
+  (eval '(clime-defopt test-sep
+           :separator ",")
+        t)
+  (should (eq (plist-get clime--opt-test-sep :multiple) t))
+  (should (equal (plist-get clime--opt-test-sep :separator) ",")))
+
+(ert-deftest clime-test-dsl/defopt-rejects-name ()
+  "clime-defopt errors if :name is included."
+  (should-error
+   (eval '(clime-defopt test-bad-name
+            :name 'foo
+            :help "Bad")
+         t)
+   :type 'error))
+
+(ert-deftest clime-test-dsl/defopt-rejects-flags ()
+  "clime-defopt errors if :flags is included."
+  (should-error
+   (eval '(clime-defopt test-bad-flags
+            :flags '("--foo")
+            :help "Bad")
+         t)
+   :type 'error))
+
+;;; ─── :from in clime-option ────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/from-basic ()
+  ":from inherits template defaults into an option."
+  (eval '(progn
+           (clime-defopt test-id
+             :type 'string
+             :conform #'identity
+             :help "A verified ID")
+           (clime-app clime-test--from-basic
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-option id ("--id") :from test-id)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--from-basic))))
+         (opt (car (clime-command-options cmd))))
+    (should (eq (clime-option-name opt) 'id))
+    (should (equal (clime-option-flags opt) '("--id")))
+    (should (eq (clime-option-type opt) 'string))
+    (should (functionp (clime-option-conform opt)))
+    (should (equal (clime-option-help opt) "A verified ID"))))
+
+(ert-deftest clime-test-dsl/from-override ()
+  ":from values are overridden by explicit slot values."
+  (eval '(progn
+           (clime-defopt test-ovr
+             :type 'string
+             :help "Template help"
+             :required t)
+           (clime-app clime-test--from-override
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-option id ("--id") :from test-ovr
+                 :help "Overridden help" :required nil)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--from-override))))
+         (opt (car (clime-command-options cmd))))
+    (should (equal (clime-option-help opt) "Overridden help"))
+    (should-not (clime-option-required opt))
+    ;; Non-overridden slot inherits from template
+    (should (eq (clime-option-type opt) 'string))))
+
+(ert-deftest clime-test-dsl/from-multiple-commands ()
+  "Multiple commands can share the same template."
+  (eval '(progn
+           (clime-defopt test-shared
+             :type 'string
+             :conform #'identity)
+           (clime-app clime-test--from-shared
+             :version "1"
+             (clime-command copy
+               :help "Copy"
+               (clime-option src ("--src") :from test-shared :multiple t)
+               (clime-option dst ("--dst") :from test-shared)
+               (clime-handler (ctx) nil))
+             (clime-command move
+               :help "Move"
+               (clime-option src ("--src") :from test-shared)
+               (clime-option dst ("--dst") :from test-shared)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((copy (cdr (assoc "copy" (clime-group-children clime-test--from-shared))))
+         (move (cdr (assoc "move" (clime-group-children clime-test--from-shared))))
+         (copy-src (cl-find-if (lambda (o) (eq (clime-option-name o) 'src))
+                               (clime-command-options copy)))
+         (copy-dst (cl-find-if (lambda (o) (eq (clime-option-name o) 'dst))
+                               (clime-command-options copy)))
+         (move-src (cl-find-if (lambda (o) (eq (clime-option-name o) 'src))
+                               (clime-command-options move))))
+    ;; copy --src has :multiple from override
+    (should (clime-option-multiple copy-src))
+    ;; copy --dst does not
+    (should-not (clime-option-multiple copy-dst))
+    ;; move --src does not
+    (should-not (clime-option-multiple move-src))
+    ;; All share the conform from template
+    (should (functionp (clime-option-conform copy-src)))
+    (should (functionp (clime-option-conform move-src)))))
+
+(ert-deftest clime-test-dsl/from-parse-integration ()
+  ":from options parse correctly end-to-end."
+  (eval '(progn
+           (clime-defopt test-parse
+             :type 'string
+             :help "An ID param")
+           (clime-app clime-test--from-parse
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-option id ("--id" "-i") :from test-parse)
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((result (clime-parse clime-test--from-parse '("show" "--id" "abc"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "abc")))
+  ;; Short flag works too
+  (let ((result (clime-parse clime-test--from-parse '("show" "-i" "xyz"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "xyz"))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here
