@@ -605,18 +605,18 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
          (should (string-match-p ";;; Entrypoint:" content))
          (should (string-match-p "clime-run-batch test-app" content)))))))
 
-;;; ─── Setup Command (scaffold + init) ───────────────────────────────
-;;; setup is the impure composite: detects clime-app, runs scaffold,
+;;; ─── Quickstart Command (scaffold + init) ──────────────────────────
+;;; quickstart is the impure composite: detects clime-app, runs scaffold,
 ;;; then runs init with auto CLIME_MAIN_APP.
 
-(ert-deftest clime-test-integration/setup-scaffolds-and-inits ()
-  "setup composes scaffold + init: adds entrypoint and shebang."
+(ert-deftest clime-test-integration/quickstart-scaffolds-and-inits ()
+  "quickstart composes scaffold + init: adds entrypoint and shebang."
   (clime-test-with-temp-dir
    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (let ((result (clime-test--run-script clime-make
-                                           (list "setup" app-file))))
+                                           (list "quickstart" app-file))))
        (should (= 0 (car result))))
      (with-temp-buffer
        (insert-file-contents app-file)
@@ -627,30 +627,30 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
          (should (string-match-p ";;; Entrypoint:" content))
          (should (string-match-p "clime-main-script-p 'test-app" content))
          (should (string-match-p "clime-run-batch test-app" content))
-         ;; Has auto CLIME_MAIN_APP in shebang (setup auto-detects)
+         ;; Has auto CLIME_MAIN_APP in shebang (quickstart auto-detects)
          (should (string-match-p "CLIME_MAIN_APP=test-app" content)))))))
 
-(ert-deftest clime-test-integration/setup-auto-clime-main-app ()
-  "setup auto-adds CLIME_MAIN_APP env var to the shebang."
+(ert-deftest clime-test-integration/quickstart-auto-clime-main-app ()
+  "quickstart auto-adds CLIME_MAIN_APP env var to the shebang."
   (clime-test-with-temp-dir
    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
-     (clime-test--run-script clime-make (list "setup" app-file))
+     (clime-test--run-script clime-make (list "quickstart" app-file))
      (with-temp-buffer
        (insert-file-contents app-file)
        (let ((line2 (progn (forward-line 1)
                            (buffer-substring (point) (line-end-position)))))
          (should (string-match-p "CLIME_MAIN_APP=test-app" line2)))))))
 
-(ert-deftest clime-test-integration/setup-explicit-env-overrides-auto ()
-  "Explicit -e CLIME_MAIN_APP=custom wins over setup's auto-detection."
+(ert-deftest clime-test-integration/quickstart-explicit-env-overrides-auto ()
+  "Explicit -e CLIME_MAIN_APP=custom wins over quickstart's auto-detection."
   (clime-test-with-temp-dir
    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (clime-test--run-script clime-make
-                             (list "setup" "-e" "CLIME_MAIN_APP=custom" app-file))
+                             (list "quickstart" "-e" "CLIME_MAIN_APP=custom" app-file))
      (with-temp-buffer
        (insert-file-contents app-file)
        (let ((line2 (progn (forward-line 1)
@@ -658,15 +658,15 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
          (should (string-match-p "CLIME_MAIN_APP=custom" line2))
          (should-not (string-match-p "CLIME_MAIN_APP=test-app" line2)))))))
 
-(ert-deftest clime-test-integration/setup-forwards-init-flags ()
-  "setup forwards flags like --self-dir and -e to init."
+(ert-deftest clime-test-integration/quickstart-forwards-init-flags ()
+  "quickstart forwards flags like --self-dir and -e to init."
   (clime-test-with-temp-dir
    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (let ((result (clime-test--run-script
                     clime-make
-                    (list "setup" "--self-dir" "-e" "MY_VAR=hello" app-file))))
+                    (list "quickstart" "--self-dir" "-e" "MY_VAR=hello" app-file))))
        (should (= 0 (car result))))
      (with-temp-buffer
        (insert-file-contents app-file)
@@ -678,14 +678,14 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
          ;; Has entrypoint
          (should (string-match-p ";;; Entrypoint:" content)))))))
 
-(ert-deftest clime-test-integration/setup-works-end-to-end ()
-  "setup produces a file that runs correctly as a script."
+(ert-deftest clime-test-integration/quickstart-works-end-to-end ()
+  "quickstart produces a file that runs correctly as a script."
   (clime-test-with-temp-dir
    (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (let ((result (clime-test--run-script clime-make
-                                           (list "setup" app-file))))
+                                           (list "quickstart" app-file))))
        (should (= 0 (car result))))
      ;; Run the app
      (let ((result (clime-test--run-script app-file '("hello" "world"))))

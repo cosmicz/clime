@@ -29,7 +29,7 @@
   `;;; Entrypoint:` boilerplate with `clime-main-script-p` guard.  Uses
   `(provide 'FEATURE)` for the guard symbol when present, falls back to the
   app symbol.
-- `setup` command: composes `scaffold` + `init` in one shot.  Auto-detects
+- `quickstart` command: composes `scaffold` + `init` in one shot.  Auto-detects
   `CLIME_MAIN_APP` from the `clime-app` form (explicit `-e` overrides).
   Accepts all of `init`'s flags (`--self-dir`, `-R`, `--standalone`, etc.).
 

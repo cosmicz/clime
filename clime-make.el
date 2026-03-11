@@ -15,13 +15,13 @@
 ;;   `init'      — add shebang to an Elisp file
 ;;   `bundle'    — concatenate multiple source files into a single distributable
 ;;   `scaffold'  — insert ;;; Entrypoint: boilerplate into an Elisp file
-;;   `setup'     — scaffold + init in one shot (auto CLIME_MAIN_APP)
+;;   `quickstart' — scaffold + init in one shot (auto CLIME_MAIN_APP)
 ;;
 ;; Usage:
 ;;   ./clime-make.el init myapp.el
 ;;   ./clime-make.el init myapp.el -L ./lib
 ;;   ./clime-make.el scaffold myapp.el
-;;   ./clime-make.el setup myapp.el --self-dir
+;;   ./clime-make.el quickstart myapp.el --self-dir
 ;;   ./clime-make.el bundle -o bundle.el --provide mylib src/*.el
 ;;   ./clime-make.el --help
 
@@ -346,22 +346,30 @@ CTX is the clime context."
           (goto-char (point-min))
           (if (re-search-forward "^;;; Entrypoint:" nil t)
               (format "skipped: %s already has ;;; Entrypoint: section" target)
-            ;; Build entrypoint text
-            (let ((entry (format ";;; Entrypoint:\n(when (clime-main-script-p '%s)\n  (clime-run-batch %s))\n"
-                                 feature app-sym)))
-              (goto-char (point-max))
-              (if (re-search-backward "^;;; .* ends here" nil t)
-                  (progn
-                    (goto-char (line-beginning-position))
-                    (insert entry))
+            ;; Check for unguarded clime-run-batch in the file
+            (goto-char (point-min))
+            (let ((has-bare-run-batch
+                   (re-search-forward "^(clime-run-batch " nil t)))
+              ;; Build entrypoint text
+              (let ((entry (format ";;; Entrypoint:\n(when (clime-main-script-p '%s)\n  (clime-run-batch %s))\n"
+                                   feature app-sym)))
                 (goto-char (point-max))
-                (unless (bolp) (insert "\n"))
-                (insert entry))
-              (write-region nil nil target))
-            (format "done: added entrypoint to %s" target)))))))
+                (if (re-search-backward "^;;; .* ends here" nil t)
+                    (progn
+                      (goto-char (line-beginning-position))
+                      (insert entry))
+                  (goto-char (point-max))
+                  (unless (bolp) (insert "\n"))
+                  (insert entry))
+                (write-region nil nil target))
+              (let ((msg (format "done: added entrypoint to %s" target)))
+                (if has-bare-run-batch
+                    (format "%s\nwarning: %s has (clime-run-batch ...) outside ;;; Entrypoint: section — it will run unconditionally alongside the guarded entrypoint"
+                            msg (file-name-nondirectory file))
+                  msg)))))))))
 
-(defun clime-make--setup-handler (ctx)
-  "Handle the `setup' command: scaffold + init with auto CLIME_MAIN_APP.
+(defun clime-make--quickstart-handler (ctx)
+  "Handle the `quickstart' command: scaffold + init with auto CLIME_MAIN_APP.
 CTX is the clime context."
   (clime-let ctx (file env)
     (let* ((target (expand-file-name file))
@@ -441,9 +449,9 @@ CTX is the clime context."
 
     (clime-handler (ctx) (clime-make--scaffold-handler ctx)))
 
-  ;; ── setup ──────────────────────────────────────────────────────────
+  ;; ── quickstart ──────────────────────────────────────────────────────
   (clime-command
-   setup
+   quickstart
    :help "Scaffold entrypoint + add shebang (scaffold + init)"
 
    (clime-arg file :help "The .el file to set up")
@@ -466,7 +474,7 @@ CTX is the clime context."
    (clime-option env ("--env" "-e") :multiple t
                  :help "Set environment variable in shebang (NAME=VALUE)")
 
-   (clime-handler (ctx) (clime-make--setup-handler ctx))))
+   (clime-handler (ctx) (clime-make--quickstart-handler ctx))))
 
 (provide 'clime-make)
 ;;; Entrypoint:

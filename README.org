@@ -38,16 +38,14 @@ Write an Elisp file using the clime DSL:
       (clime-let ctx (name)
         (format "Goodbye, %s!" name)))))
 
-(clime-run-batch greet)
-
 (provide 'greet)
 ;;; greet.el ends here
 #+end_src
 
-Initialize it with a shebang and run it:
+Run ~quickstart~ to add the entrypoint boilerplate and shebang:
 
 #+begin_src bash
-path/to/clime-make.el init greet.el
+path/to/clime-make.el quickstart greet.el
 
 ./greet.el hello world        # => Hello, world!
 ./greet.el --shout hello world # => HELLO, WORLD!
@@ -686,8 +684,14 @@ See =examples/pkm.el= for a comprehensive demo covering all major features.
 
 * Bundling & Distribution
 
-~clime-make.el~ provides two commands: ~init~ (make a script
-executable) and ~bundle~ (combine files into one).
+~clime-make.el~ provides four commands:
+
+| Command        | Purpose                                          |
+|----------------+--------------------------------------------------|
+| ~init~         | Add polyglot shebang to make a script executable |
+| ~scaffold~     | Insert ~;;; Entrypoint:~ boilerplate              |
+| ~quickstart~   | ~scaffold~ + ~init~ in one shot (auto env vars)  |
+| ~bundle~       | Combine multiple source files into one            |
 
 ** Making a script executable (~init~)
 
@@ -720,6 +724,60 @@ Common options:
 Re-running ~init~ on a file that already has a clime shebang updates
 it in place.  ~init~ refuses to overwrite a non-clime shebang (use
 ~--force~) or to downgrade a newer shebang format version.
+
+** Inserting entrypoint boilerplate (~scaffold~)
+
+~scaffold~ detects the ~clime-app~ symbol in a file and inserts an
+~;;; Entrypoint:~ section with the ~clime-main-script-p~ guard:
+
+#+begin_src bash
+./clime-make.el scaffold myapp.el
+#+end_src
+
+Before:
+
+#+begin_src emacs-lisp
+(clime-app myapp :version "1.0" ...)
+(provide 'myapp)
+;;; myapp.el ends here
+#+end_src
+
+After:
+
+#+begin_src emacs-lisp
+(clime-app myapp :version "1.0" ...)
+(provide 'myapp)
+;;; Entrypoint:
+(when (clime-main-script-p 'myapp)
+  (clime-run-batch myapp))
+;;; myapp.el ends here
+#+end_src
+
+The guard symbol comes from ~(provide 'FEATURE)~ if present, falling
+back to the ~clime-app~ symbol.  If ~;;; Entrypoint:~ already exists,
+~scaffold~ skips without error.  If there is no ~;;; ... ends here~
+marker, the entrypoint is appended at the end.
+
+** One-command quickstart (~quickstart~)
+
+~quickstart~ composes ~scaffold~ + ~init~ and auto-detects
+~CLIME_MAIN_APP~:
+
+#+begin_src bash
+./clime-make.el quickstart myapp.el
+./myapp.el --help
+#+end_src
+
+This is the fastest way to go from a source file to a runnable script.
+~quickstart~ accepts all of ~init~'s flags (~--self-dir~, ~-R~, ~-L~,
+~--standalone~, ~--force~, ~-e~):
+
+#+begin_src bash
+./clime-make.el quickstart --self-dir -e MY_VAR=hello myapp.el
+#+end_src
+
+An explicit ~-e CLIME_MAIN_APP=custom~ overrides the auto-detected
+value.
 
 ** Building a single-file distribution (~bundle~)
 
@@ -826,13 +884,14 @@ git clone https://github.com/cosmicz/clime vendor/clime
 git submodule add https://github.com/cosmicz/clime vendor/clime
 #+end_src
 
-Then initialize your app file:
+Then set up your app file:
 
 #+begin_src bash
-vendor/clime/clime-make.el init myapp.el
+vendor/clime/clime-make.el quickstart myapp.el
 #+end_src
 
-This prepends a polyglot shebang and makes the file executable.
+This inserts the entrypoint boilerplate, prepends a polyglot shebang,
+and makes the file executable.
 
 ** package-vc (Emacs 29+)
 
