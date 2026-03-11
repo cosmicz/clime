@@ -96,28 +96,28 @@
 (ert-deftest clime-test-output/output-text-mode ()
   "clime-output in text mode princ's the data."
   (let ((output (with-output-to-string
-                  (let ((clime--json-mode-p nil))
+                  (let ((clime-output-mode 'text))
                     (clime-output "hello")))))
     (should (equal output "hello"))))
 
 (ert-deftest clime-test-output/output-success-text-mode ()
   "clime-output-success in text mode princ's data as-is."
   (let ((output (with-output-to-string
-                  (let ((clime--json-mode-p nil))
+                  (let ((clime-output-mode 'text))
                     (clime-output-success "done")))))
     (should (equal output "done"))))
 
 (ert-deftest clime-test-output/output-error-text-mode ()
   "clime-output-error in text mode uses message (stderr)."
   (let ((msgs (clime-test-with-messages
-                (let ((clime--json-mode-p nil))
+                (let ((clime-output-mode 'text))
                   (clime-output-error "bad input")))))
     (should (cl-some (lambda (m) (string-match-p "Error: bad input" m)) msgs))))
 
 (ert-deftest clime-test-output/output-list-text-mode ()
   "clime-output-list in text mode prints one item per line."
   (let ((output (with-output-to-string
-                  (let ((clime--json-mode-p nil))
+                  (let ((clime-output-mode 'text))
                     (clime-output-list '("a" "b" "c"))))))
     (should (equal output "a\nb\nc\n"))))
 
@@ -126,14 +126,14 @@
 (ert-deftest clime-test-output/output-json-mode ()
   "clime-output in JSON mode emits JSON + newline."
   (let ((output (with-output-to-string
-                  (let ((clime--json-mode-p t))
+                  (let ((clime-output-mode 'json))
                     (clime-output "hello")))))
     (should (equal output "\"hello\"\n"))))
 
 (ert-deftest clime-test-output/output-success-json-mode ()
   "clime-output-success in JSON mode emits success envelope."
   (let* ((output (with-output-to-string
-                   (let ((clime--json-mode-p t))
+                   (let ((clime-output-mode 'json))
                      (clime-output-success "done"))))
          (parsed (json-read-from-string (string-trim output))))
     (should (equal (cdr (assq 'success parsed)) t))
@@ -142,7 +142,7 @@
 (ert-deftest clime-test-output/output-error-json-mode ()
   "clime-output-error in JSON mode emits error envelope to stdout."
   (let* ((output (with-output-to-string
-                   (let ((clime--json-mode-p t))
+                   (let ((clime-output-mode 'json))
                      (clime-output-error "bad input"))))
          (parsed (json-read-from-string (string-trim output))))
     (should (equal (cdr (assq 'error parsed)) "bad input"))))
@@ -150,7 +150,7 @@
 (ert-deftest clime-test-output/output-list-json-mode ()
   "clime-output-list in JSON mode emits array in success envelope."
   (let* ((output (with-output-to-string
-                   (let ((clime--json-mode-p t))
+                   (let ((clime-output-mode 'json))
                      (clime-output-list '("a" "b" "c")))))
          (parsed (json-read-from-string (string-trim output))))
     (should (equal (cdr (assq 'success parsed)) t))
@@ -159,7 +159,7 @@
 (ert-deftest clime-test-output/output-list-json-vector ()
   "clime-output-list accepts vectors in JSON mode."
   (let* ((output (with-output-to-string
-                   (let ((clime--json-mode-p t))
+                   (let ((clime-output-mode 'json))
                      (clime-output-list ["x" "y"]))))
          (parsed (json-read-from-string (string-trim output))))
     (should (equal (cdr (assq 'data parsed)) ["x" "y"]))))
@@ -169,7 +169,7 @@
 (ert-deftest clime-test-output/ndjson-multiple-calls ()
   "Multiple output calls in JSON mode produce NDJSON."
   (let* ((output (with-output-to-string
-                   (let ((clime--json-mode-p t))
+                   (let ((clime-output-mode 'json))
                      (clime-output "line1")
                      (clime-output "line2"))))
          (lines (split-string (string-trim output) "\n" t)))
@@ -261,32 +261,48 @@
     (should (string-match-p "--json" output))
     (should (string-match-p "Output as JSON" output))))
 
+;;; ─── Output Mode Variable ────────────────────────────────────────────
+
+(ert-deftest clime-test-output/output-mode-defaults-to-text ()
+  "clime-output-mode defaults to text."
+  (should (eq clime-output-mode 'text)))
+
+(ert-deftest clime-test-output/output-mode-json-p-true ()
+  "clime-output-mode-json-p returns non-nil in json mode."
+  (let ((clime-output-mode 'json))
+    (should (clime-output-mode-json-p))))
+
+(ert-deftest clime-test-output/output-mode-json-p-false ()
+  "clime-output-mode-json-p returns nil in text mode."
+  (let ((clime-output-mode 'text))
+    (should-not (clime-output-mode-json-p))))
+
 ;;; ─── Edge Cases ──────────────────────────────────────────────────────
 
 (ert-deftest clime-test-output/output-returns-data ()
   "clime-output returns its data argument for chaining."
   (let ((result (with-output-to-string
-                  (let ((clime--json-mode-p nil))
+                  (let ((clime-output-mode 'text))
                     (should (equal (clime-output "val") "val"))))))
     (should (stringp result))))
 
 (ert-deftest clime-test-output/output-success-returns-data ()
   "clime-output-success returns its data argument."
   (with-output-to-string
-    (let ((clime--json-mode-p t))
+    (let ((clime-output-mode 'json))
       (should (equal (clime-output-success 42) 42)))))
 
 (ert-deftest clime-test-output/output-list-empty-text ()
   "clime-output-list with empty list produces no output in text mode."
   (let ((output (with-output-to-string
-                  (let ((clime--json-mode-p nil))
+                  (let ((clime-output-mode 'text))
                     (clime-output-list '())))))
     (should (equal output ""))))
 
 (ert-deftest clime-test-output/output-list-empty-json ()
   "clime-output-list with empty list produces empty array in JSON mode."
   (let* ((output (with-output-to-string
-                   (let ((clime--json-mode-p t))
+                   (let ((clime-output-mode 'json))
                      (clime-output-list '()))))
          (parsed (json-read-from-string (string-trim output))))
     (should (equal (cdr (assq 'success parsed)) t))

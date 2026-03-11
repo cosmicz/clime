@@ -60,14 +60,15 @@ Rebound to `clime-output-error' in JSON mode.")
 Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error.
 Does NOT call `kill-emacs'; the caller decides what to do with the code.
 
-When APP has :json-mode t and ARGV contains \"--json\", output is
-JSON-encoded.  The --json option is auto-injected into the app."
+When APP has :json-mode t and ARGV contains \"--json\", `clime-output-mode'
+is bound to `json' and output is JSON-encoded.  The --json option is
+auto-injected into the app."
   ;; Reset stdin cache so each invocation reads fresh
   (setq clime--stdin-content nil)
   ;; Pre-parse --json before full parse so even parse errors emit JSON
   (let* ((json-p (and (clime-app-json-mode app)
                       (clime--pre-parse-json-p argv)))
-         (clime--json-mode-p json-p)
+         (clime-output-mode (if json-p 'json 'text))
          (clime-format-error (if json-p
                                  #'clime-output-error
                                clime-format-error)))
@@ -84,7 +85,7 @@ JSON-encoded.  The --json option is auto-injected into the app."
             (when handler
               (let ((retval (funcall handler ctx)))
                 (when retval
-                  (if clime--json-mode-p
+                  (if (clime-output-mode-json-p)
                       (clime-output-success retval)
                     (princ retval)))))
             0))

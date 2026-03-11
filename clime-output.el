@@ -28,9 +28,14 @@
 
 ;;; ─── Mode Variable ────────────────────────────────────────────────────
 
-(defvar clime--json-mode-p nil
-  "Non-nil when --json output mode is active.
-Bound dynamically by `clime-run' based on pre-parse --json detection.")
+(defvar clime-output-mode 'text
+  "Current output mode symbol.
+Bound dynamically by `clime-run' based on pre-parse detection.
+Known values: `text', `json'.")
+
+(defun clime-output-mode-json-p ()
+  "Return non-nil when output mode is JSON."
+  (eq clime-output-mode 'json))
 
 ;;; ─── JSON Encoding ────────────────────────────────────────────────────
 
@@ -52,7 +57,7 @@ conventions (nil→null, vectors→arrays, :json-false→false)."
   "Output DATA in the current mode.
 JSON mode: print JSON-encoded data + newline (NDJSON).
 Text mode: print data as string."
-  (if clime--json-mode-p
+  (if (clime-output-mode-json-p)
       (princ (concat (clime-json-encode data) "\n"))
     (princ (format "%s" data)))
   data)
@@ -61,7 +66,7 @@ Text mode: print data as string."
   "Output DATA as a success result.
 JSON mode: {\"success\": true, \"data\": DATA} + newline.
 Text mode: print data as-is."
-  (if clime--json-mode-p
+  (if (clime-output-mode-json-p)
       (princ (concat (clime-json-encode `((success . t) (data . ,data))) "\n"))
     (princ (format "%s" data)))
   data)
@@ -70,7 +75,7 @@ Text mode: print data as-is."
   "Output MSG as an error.
 JSON mode: {\"error\": MSG} + newline to stdout.
 Text mode: \"Error: MSG\" to stderr."
-  (if clime--json-mode-p
+  (if (clime-output-mode-json-p)
       (princ (concat (clime-json-encode `((error . ,msg))) "\n"))
     (message "Error: %s" msg)))
 
@@ -78,7 +83,7 @@ Text mode: \"Error: MSG\" to stderr."
   "Output ITEMS as a list result.
 JSON mode: {\"success\": true, \"data\": [...]} + newline.
 Text mode: print each item on its own line."
-  (if clime--json-mode-p
+  (if (clime-output-mode-json-p)
       (let ((arr (if (vectorp items) items (vconcat items))))
         (princ (concat (clime-json-encode `((success . t) (data . ,arr))) "\n")))
     (dolist (item items)
