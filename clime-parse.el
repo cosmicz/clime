@@ -401,6 +401,8 @@ This enables a setup hook to run between passes."
         (clime--stdin-app app))
     ;; Set parent refs for direct children (if not already set)
     (clime--set-parent-refs app)
+    ;; Resolve alias-for commands (idempotent)
+    (clime--resolve-aliases app)
     (condition-case err
         (progn
     (while (< i len)

@@ -115,15 +115,18 @@ ARGS is a plist of slot values."
 (cl-defstruct (clime-command (:include clime-node)
                              (:constructor clime-command--create)
                              (:copier nil))
-  "A leaf command in the CLI tree.")
+  "A leaf command in the CLI tree."
+  (alias-for nil :type list :documentation "Path to target command, e.g. (\"agents\" \"start\"). Nil for normal commands."))
 
 (defun clime-make-command (&rest args)
   "Create a `clime-command' with validation.
 Required keyword args: :name (string), :handler (function).
+When :alias-for is set, :handler is not required (copied from target).
 ARGS is a plist of slot values."
   (unless (plist-get args :name)
     (error "clime-make-command: :name is required"))
-  (unless (plist-get args :handler)
+  (unless (or (plist-get args :handler)
+              (plist-get args :alias-for))
     (error "clime-make-command: :handler is required"))
   (apply #'clime-command--create args))
 
@@ -154,6 +157,68 @@ ARGS is a plist of slot values."
 Also runs ancestor collision checks after parent refs are established."
   (clime--set-parent-refs-1 node)
   (clime-check-ancestor-collisions node))
+
+;;; ─── Alias Resolution ───────────────────────────────────────────────────
+
+(defun clime--resolve-alias-1 (cmd app visited)
+  "Resolve a single alias CMD against APP root.
+VISITED is a list of already-visited command names for cycle detection.
+Returns the resolved target command (a `clime-command' without alias-for)."
+  (let ((target-path (clime-command-alias-for cmd)))
+    (unless target-path
+      (error "clime--resolve-alias-1: command %s has no alias-for" (clime-node-name cmd)))
+    (when (member (clime-node-name cmd) visited)
+      (error "Circular alias chain: %s" (string-join (append visited (list (clime-node-name cmd))) " → ")))
+    ;; Walk the path from root
+    (let ((node app))
+      (dolist (step target-path)
+        (let ((child (and (clime-group-p node)
+                          (clime-group-find-child node step))))
+          (unless child
+            (error "Alias %s: target path %s not found at step \"%s\""
+                   (clime-node-name cmd)
+                   (mapconcat #'identity target-path " → ")
+                   step))
+          (setq node child)))
+      ;; Must resolve to a command, not a group
+      (unless (clime-command-p node)
+        (error "Alias %s: target %s is a group, not a command"
+               (clime-node-name cmd)
+               (mapconcat #'identity target-path " → ")))
+      ;; If target is itself an alias, resolve transitively
+      (if (clime-command-alias-for node)
+          (clime--resolve-alias-1 node app (cons (clime-node-name cmd) visited))
+        node))))
+
+(defun clime--resolve-aliases (app)
+  "Resolve all alias-for commands in APP's tree.
+Walk the tree, find commands with non-nil `alias-for', resolve them
+by copying args, options, and handler from the target.  Idempotent."
+  (clime--resolve-aliases-walk app app))
+
+(defun clime--resolve-aliases-walk (node app)
+  "Walk NODE's subtree resolving aliases against APP root."
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (let ((child (cdr entry)))
+        (cond
+         ;; Command with alias-for: resolve it
+         ((and (clime-command-p child)
+               (clime-command-alias-for child))
+          (let ((target (clime--resolve-alias-1 child app nil)))
+            ;; Copy from target, preserving alias's own overrides
+            (setf (clime-node-args child) (clime-node-args target))
+            (setf (clime-node-options child) (clime-node-options target))
+            (setf (clime-node-handler child) (clime-node-handler target))
+            (unless (clime-node-help child)
+              (setf (clime-node-help child) (clime-node-help target)))
+            (unless (clime-node-epilog child)
+              (setf (clime-node-epilog child) (clime-node-epilog target)))
+            ;; Mark as resolved
+            (setf (clime-command-alias-for child) nil)))
+         ;; Group: recurse
+         ((clime-group-p child)
+          (clime--resolve-aliases-walk child app)))))))
 
 (defun clime-make-group (&rest args)
   "Create a `clime-group' with validation.

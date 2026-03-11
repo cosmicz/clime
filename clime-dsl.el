@@ -63,6 +63,7 @@ Returns a plist (:options :args :children :handler)."
           ('clime-option (push (clime--build-option (cdr form)) options))
           ('clime-arg (push (clime--build-arg (cdr form)) args))
           ('clime-command (push (clime--build-command (cdr form)) children))
+          ('clime-alias-for (push (clime--build-alias-for (cdr form)) children))
           ('clime-group (push (clime--build-group (cdr form)) children))
           ('clime-handler (setq handler (clime--build-handler (cdr form))))
           (_ (error "Unknown DSL form: %S" (car form))))))
@@ -201,6 +202,31 @@ ARGS is (NAME &rest BODY)."
             ,@(when (plist-get classified :args)
                 `(:args (list ,@(plist-get classified :args))))))))
 
+(defun clime--build-alias-for (args)
+  "Build a `clime-command' alias-for form from DSL ARGS.
+ARGS is (NAME (PATH...) &rest KEYWORDS).
+PATH is a list of symbols naming the target command path."
+  (let* ((name (car args))
+         (name-str (symbol-name name))
+         (path-form (cadr args))
+         (path-strings (mapcar #'symbol-name path-form))
+         (extracted (clime--extract-keywords
+                     (cddr args)
+                     '(:help :doc :aliases :hidden :category)))
+         (keywords (car extracted)))
+    `(cons ,name-str
+           (clime-make-command
+            :name ,name-str
+            :alias-for ',path-strings
+            ,@(when (plist-get keywords :help)
+                `(:help ,(plist-get keywords :help)))
+            ,@(when (plist-get keywords :aliases)
+                `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
+            ,@(when (plist-get keywords :hidden)
+                `(:hidden ,(plist-get keywords :hidden)))
+            ,@(when (plist-get keywords :category)
+                `(:category ,(plist-get keywords :category)))))))
+
 (defun clime--build-group (args)
   "Build a `clime-group' constructor form from DSL ARGS.
 ARGS is (NAME &rest BODY)."
@@ -292,10 +318,11 @@ Child forms:
 ;; DSL forms are consumed by `clime--classify-body' at macro-expansion
 ;; time — they are not real macros, so we set indent properties directly.
 
-(put 'clime-option  'lisp-indent-function 2) ; name flags &rest plist
-(put 'clime-arg     'lisp-indent-function 1) ; name &rest plist
-(put 'clime-command 'lisp-indent-function 1) ; name &rest body
-(put 'clime-group   'lisp-indent-function 1) ; name &rest body
+(put 'clime-option    'lisp-indent-function 2) ; name flags &rest plist
+(put 'clime-arg       'lisp-indent-function 1) ; name &rest plist
+(put 'clime-command   'lisp-indent-function 1) ; name &rest body
+(put 'clime-alias-for 'lisp-indent-function 2) ; name path &rest keywords
+(put 'clime-group     'lisp-indent-function 1) ; name &rest body
 (put 'clime-handler 'lisp-indent-function 1) ; arglist &rest body
 
 (provide 'clime-dsl)
