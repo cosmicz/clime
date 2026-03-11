@@ -114,6 +114,8 @@ So ~./myapp.el hello world~ just works from your shell.
 - Ancestor option propagation --- group options available to all descendants
 - Setup hook (~:setup~) with two-pass parse for config loading
 - ~clime-params-plist~ --- convert context params to keyword plist
+- Interactive transient UI (~clime-invoke~) --- auto-generated menus from app definitions
+- ~clime-reload~ --- hot-reload all modules during development
 - Single-file distribution via ~bundle~ command
 
 ** Options
@@ -667,6 +669,24 @@ Use ~-~ as an argument value to read from stdin:
 #+begin_src bash
 echo "World" | ./greet.el hello -
 #+end_src
+
+** Interactive UI (~clime-invoke~)
+
+Any ~clime-app~ can be invoked interactively from Emacs via
+~clime-invoke~, which auto-generates a [[https://magit.vc/manual/transient/][transient.el]] menu:
+
+#+begin_src emacs-lisp
+(require 'clime-invoke)
+(clime-invoke my-app)
+#+end_src
+
+Groups become nested transient prefixes (press a key to drill down,
+~q~ to go back).  Options become infixes (switches and value inputs).
+Leaf commands show a "Run" action that collects infix values, prompts
+for positional args, calls ~clime-run~, and displays output in the
+~*clime-output*~ buffer.
+
+Requires the ~transient~ package (ships with Emacs 29+).
 
 ** Help
 

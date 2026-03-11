@@ -9,6 +9,15 @@
   time, eliminating boilerplate when exposing nested commands at a higher
   level.  Supports `:help`, `:aliases`, `:hidden`, `:category` overrides,
   transitive resolution, and circular chain detection.
+- `clime-invoke`: interactive transient.el UI for clime apps.  Auto-generates
+  menus from `clime-app` definitions — groups become nested prefixes, options
+  become infixes, leaf commands get a "Run" action.  Requires the `transient`
+  package (ships with Emacs 29+).
+- `clime-reload`: force-reload all clime modules in dependency order during
+  development, including optional modules (`clime-invoke`, `clime-make`) if
+  already loaded.  Invalidates the invoke prefix cache.
+- `clime-run-batch` is now a no-op in interactive Emacs (previously called
+  `kill-emacs`), with a warning message.
 - Terminal-width-aware help text wrapping: help descriptions, epilog text,
   and table right-columns now wrap at the terminal width.  Auto-detects
   from `COLUMNS` env var (fallback 80, minimum 40).  Override with

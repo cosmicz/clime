@@ -36,6 +36,7 @@ Configure project-specific settings for clean test execution."
 (require 'clime-env-tests)
 (require 'clime-stdin-tests)
 (require 'clime-alias-for-tests)
+(require 'clime-invoke-tests)
 (require 'clime-integration-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────
