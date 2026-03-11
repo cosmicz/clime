@@ -107,6 +107,7 @@ So ~./myapp.el hello world~ just works from your shell.
 - Rest args (~:nargs :rest~)
 - Invocable groups (group with its own handler)
 - Inline groups (~:inline t~) --- promote children to parent level
+- Command aliases for nested paths (~clime-alias-for start (agents start)~)
 - Lazy choices (~:choices~ accepts a function)
 - Value conformers (~:conform~) for pass-2 validation and transformation
 - Parameter templates (~clime-defopt~, ~clime-defarg~) with ~:from~ inheritance
@@ -298,6 +299,31 @@ Commands can have aliases:
 
 Now both ~myapp install foo~ and ~myapp i foo~ work.  Aliases are
 symbols or strings.
+
+** Command aliases for nested paths
+
+Use ~clime-alias-for~ to expose a nested command at a higher level
+without duplicating its definition:
+
+#+begin_src emacs-lisp
+(clime-group agents
+  :help "Manage agents"
+  (clime-command start
+    :help "Start an agent"
+    (clime-arg name :help "Agent name")
+    (clime-option prompt ("--prompt") :help "Initial prompt")
+    (clime-handler (ctx) (do-start ctx))))
+
+(clime-group shortcuts :inline t :category "Shortcuts"
+  (clime-alias-for start (agents start)
+    :help "Start an agent (shortcut)"))
+#+end_src
+
+Now ~myapp start foo~ works identically to ~myapp agents start foo~.
+The alias copies args, options, and handler from the target at init
+time.  You can override ~:help~, ~:aliases~, ~:hidden~, and
+~:category~ on the alias.  When ~:help~ is omitted, it inherits from
+the target.
 
 ** Hidden commands and options
 
@@ -673,6 +699,7 @@ listings, and shown in full in detailed command help.
 | ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~, ~:from~ |
 | ~clime-defopt~   | Define a reusable option template  | Any option slot except ~:name~, ~:flags~                                 |
 | ~clime-defarg~   | Define a reusable arg template     | Any arg slot except ~:name~                                              |
+| ~clime-alias-for~ | Alias for a nested command        | ~:help~, ~:aliases~, ~:hidden~, ~:category~                             |
 | ~clime-handler~  | Attach a handler to a command      | ~(ctx)~ --- receives the parse context                                   |
 | ~clime-let~      | Destructure context in a handler   | ~ctx (var1 var2 ...)~ --- binds option/arg values                        |
 

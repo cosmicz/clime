@@ -34,6 +34,7 @@
 ;;  17.  Command categories      search/list under "Discovery"
 ;;  18.  Inline group category   admin inline group with option + command
 ;;  19.  Parameter template      clime-defopt for shared --force flag
+;;  20.  Command alias           clime-alias-for exposes nested cmd at top level
 ;;
 ;; Run it (this file is directly executable via the shebang header):
 ;;   chmod +x examples/pkm.el
@@ -42,6 +43,7 @@
 ;;   ./examples/pkm.el -vv search
 ;;   ./examples/pkm.el config
 ;;   ./examples/pkm.el repo add myrepo https://example.com
+;;   ./examples/pkm.el add-repo myrepo https://example.com
 ;;
 ;; Or without the shebang:
 ;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- --help
@@ -259,7 +261,16 @@
         (format "App: pkm v%s\nVerbosity: %s\nTrace: %s"
                 (clime-app-version (clime-context-app ctx))
                 (or verbose 0)
-                (if internal-trace "on" "off"))))))
+                (if internal-trace "on" "off")))))
+
+  ;; ── shortcuts (alias-for) ─────────────────────────────────────────────
+  ;; [20] Command alias — expose nested commands at top level without
+  ;; duplicating args, options, or handler
+  (clime-group shortcuts :inline t :category "Shortcuts"
+    (clime-alias-for add-repo (repo add)
+      :help "Add a repository (shortcut)")
+    (clime-alias-for rm-repo (repo remove)
+      :help "Remove a repository (shortcut)")))
 
 (provide 'pkm)
 ;;; Entrypoint:

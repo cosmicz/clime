@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `clime-alias-for` DSL form: declare a command as an alias for a nested
+  command path.  Copies args, options, and handler from the target at init
+  time, eliminating boilerplate when exposing nested commands at a higher
+  level.  Supports `:help`, `:aliases`, `:hidden`, `:category` overrides,
+  transitive resolution, and circular chain detection.
+
 ## 0.2.0 — 2026-03-10
 
 ### Added
