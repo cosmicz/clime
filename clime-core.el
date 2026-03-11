@@ -38,7 +38,8 @@
   (separator nil :type (or string null) :documentation "Split each value by this string; implies :multiple t.")
   (category nil :type (or string null) :documentation "Help display category label.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
-  (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning)."))
+  (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
+  (mutex nil :type (or symbol null) :documentation "Mutex group symbol. Options sharing a mutex are mutually exclusive."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.

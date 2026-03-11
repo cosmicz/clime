@@ -38,6 +38,11 @@
   string (migration hint) or `t` (generic).  Shows "(deprecated)" in help
   output and emits a warning to stderr at runtime.  Combine with `:hidden t`
   for silent deprecation.
+- `:mutex` slot on options: declare mutually exclusive option groups.
+  Options sharing the same `:mutex` symbol (e.g. `:mutex 'output-format`)
+  are validated to be mutually exclusive — at most one may be set per
+  invocation.  Defaults on mutex siblings are suppressed when any member
+  is explicitly set (CLI or env var).
 
 ### Fixed
 

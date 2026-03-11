@@ -344,6 +344,21 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
                               env-var)))))))))
   params)
 
+(defun clime--mutex-sibling-set-p (opt nodes params)
+  "Return non-nil if a mutex sibling of OPT already has a value in PARAMS.
+Searches all options in NODES sharing the same :mutex group symbol."
+  (let ((mx (clime-option-mutex opt)))
+    (when mx
+      (cl-some
+       (lambda (node)
+         (cl-some
+          (lambda (o)
+            (and (not (eq o opt))
+                 (eq (clime-option-mutex o) mx)
+                 (plist-member params (clime-option-name o))))
+          (clime-node-options node)))
+       nodes))))
+
 (defun clime--apply-defaults (nodes params)
   "Apply default values for all options and args in NODES not already in PARAMS.
 NODES is a list of nodes whose params to process.  Returns updated PARAMS."
@@ -352,7 +367,8 @@ NODES is a list of nodes whose params to process.  Returns updated PARAMS."
       (let ((name (clime-option-name opt)))
         (unless (plist-member params name)
           (let ((default (clime-option-default opt)))
-            (when default
+            (when (and default
+                       (not (clime--mutex-sibling-set-p opt nodes params)))
               (setq params (plist-put params name
                                       (clime--resolve-value default))))))))
     (dolist (arg (clime-node-args node))
@@ -382,6 +398,31 @@ PATH is the command path for error messages.  Signals `clime-usage-error'."
                 (list (format "Missing required argument <%s> for %s"
                               (clime-arg-name arg)
                               (string-join path " "))))))))
+
+;;; ─── Mutex Validation ──────────────────────────────────────────────────
+
+(defun clime--check-mutex (nodes params)
+  "Check mutual exclusion constraints across NODES for PARAMS.
+Signal `clime-usage-error' if multiple options in the same mutex group are set."
+  (let ((groups (make-hash-table :test #'eq)))
+    ;; Collect options by mutex group
+    (dolist (node nodes)
+      (dolist (opt (clime-node-options node))
+        (when-let* ((mx (clime-option-mutex opt)))
+          (push opt (gethash mx groups)))))
+    ;; Check each group
+    (maphash
+     (lambda (_group opts)
+       (let ((set-opts (cl-remove-if-not
+                        (lambda (opt)
+                          (plist-member params (clime-option-name opt)))
+                        opts)))
+         (when (> (length set-opts) 1)
+           (signal 'clime-usage-error
+                   (list (format "Options %s are mutually exclusive"
+                                 (mapconcat (lambda (o) (car (clime-option-flags o)))
+                                            set-opts ", ")))))))
+     groups)))
 
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
@@ -646,7 +687,9 @@ defaults, and checks required params.  Returns the updated RESULT."
     ;; Run :conform functions (after env, before defaults — defaults
     ;; are developer-authored and should already be valid)
     (setq params (clime--run-conformers visited-nodes params))
-    ;; Apply defaults, then check required
+    ;; Mutex check (after env+conform, before defaults)
+    (clime--check-mutex visited-nodes params)
+    ;; Apply defaults (mutex-aware: skips defaults when a sibling is set)
     (setq params (clime--apply-defaults visited-nodes params))
     (clime--check-required visited-nodes params display-path)
     ;; Update and mark finalized

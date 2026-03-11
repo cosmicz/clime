@@ -38,6 +38,7 @@ Configure project-specific settings for clean test execution."
 (require 'clime-alias-for-tests)
 (require 'clime-invoke-tests)
 (require 'clime-deprecated-tests)
+(require 'clime-mutex-tests)
 (require 'clime-integration-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────
