@@ -473,8 +473,6 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
             "(provide 'test-app)\n"
             ";;; test-app.el ends here\n")))
 
-;;; ─── Scaffold Command ──────────────────────────────────────────────
-
 (ert-deftest clime-test-integration/scaffold-inserts-entrypoint ()
   "scaffold adds ;;; Entrypoint: section with guard and run-batch."
   (clime-test-with-temp-dir
