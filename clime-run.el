@@ -122,22 +122,27 @@ APP-NAME (a symbol).  When a file is loaded transitively via
 Read argv from `command-line-args-left', strip leading \"--\",
 call `clime-run', then `kill-emacs' with the exit code.
 When CLIME_ARGV0 is set (by the shebang), uses its basename
-as the program name in usage output instead of the DSL symbol."
-  ;; Copy args before clearing.  Use `args' not `argv' — the latter
-  ;; is a defvaralias for `command-line-args-left' and would be
-  ;; clobbered by the setq below under dynamic binding.
-  (let ((args command-line-args-left)
-        (argv0 (getenv "CLIME_ARGV0")))
-    ;; Override usage program name with the executable filename
-    (when (and argv0 (not (string-empty-p argv0)))
-      (setf (clime-app-argv0 app)
-            (file-name-nondirectory argv0)))
-    ;; Strip leading "--" inserted by the shell wrapper
-    (when (and args (string= (car args) "--"))
-      (setq args (cdr args)))
-    ;; Prevent Emacs from processing these args itself
-    (setq command-line-args-left nil)
-    (kill-emacs (clime-run app args))))
+as the program name in usage output instead of the DSL symbol.
+No-op when called from an interactive Emacs session."
+  (unless noninteractive
+    (message "Warning: (clime-run-batch %s) ignored in interactive mode"
+             (clime-node-name app)))
+  (when noninteractive
+    ;; Copy args before clearing.  Use `args' not `argv' — the latter
+    ;; is a defvaralias for `command-line-args-left' and would be
+    ;; clobbered by the setq below under dynamic binding.
+    (let ((args command-line-args-left)
+          (argv0 (getenv "CLIME_ARGV0")))
+      ;; Override usage program name with the executable filename
+      (when (and argv0 (not (string-empty-p argv0)))
+        (setf (clime-app-argv0 app)
+              (file-name-nondirectory argv0)))
+      ;; Strip leading "--" inserted by the shell wrapper
+      (when (and args (string= (car args) "--"))
+        (setq args (cdr args)))
+      ;; Prevent Emacs from processing these args itself
+      (setq command-line-args-left nil)
+      (kill-emacs (clime-run app args)))))
 
 (provide 'clime-run)
 ;;; clime-run.el ends here
