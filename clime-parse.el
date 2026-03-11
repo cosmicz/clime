@@ -183,6 +183,12 @@ PATH is the command path for help signals."
 (defun clime--consume-option (opt params token-value)
   "Consume option OPT into PARAMS plist, returning updated plist.
 TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
+  (let ((dep (clime-option-deprecated opt)))
+    (when dep
+      (let ((flag (car (clime-option-flags opt))))
+        (message "Warning: %s is deprecated%s"
+                 flag
+                 (if (stringp dep) (format ". %s" dep) "")))))
   (let ((name (clime-option-name opt))
         (type (clime-option-type opt))
         (choices (clime-option-choices opt))

@@ -163,6 +163,18 @@ CHOICES may be a list or a function returning a list."
           suffix)
       (or help-text ""))))
 
+(defun clime-help--append-deprecated (help-text deprecated)
+  "Append deprecation annotation to HELP-TEXT if DEPRECATED is non-nil.
+DEPRECATED is a string (migration hint) or t (generic)."
+  (if deprecated
+      (let ((suffix (if (stringp deprecated)
+                        (format "(deprecated: %s)" deprecated)
+                      "(deprecated)")))
+        (if (and help-text (not (string-empty-p help-text)))
+            (concat help-text " " suffix)
+          suffix))
+    (or help-text "")))
+
 (defun clime-help--format-arguments (args &optional width)
   "Format the Arguments section for ARGS list.
 When WIDTH is non-nil, help text is wrapped to fit."
@@ -221,9 +233,11 @@ When WIDTH is non-nil, help text is wrapped to fit."
                    (rows (mapcar
                           (lambda (opt)
                             (cons (clime-help--format-option-flags opt)
-                                  (clime-help--append-choices
-                                   (clime-option-help opt)
-                                   (clime-option-choices opt))))
+                                  (clime-help--append-deprecated
+                                   (clime-help--append-choices
+                                    (clime-option-help opt)
+                                    (clime-option-choices opt))
+                                   (clime-option-deprecated opt))))
                           opts))
                    (header (if (string-empty-p grp) "Options:" (format "%s:" grp))))
               (push (concat header "\n" (clime-help--format-table rows width)) sections)))
@@ -291,9 +305,11 @@ options apply to."
 (defun clime-help--option-row (opt)
   "Format OPT as a (left . help) table row."
   (cons (clime-help--format-option-flags opt)
-        (clime-help--append-choices
-         (clime-option-help opt)
-         (clime-option-choices opt))))
+        (clime-help--append-deprecated
+         (clime-help--append-choices
+          (clime-option-help opt)
+          (clime-option-choices opt))
+         (clime-option-deprecated opt))))
 
 (defun clime-help--indent-lines (str prefix)
   "Prepend PREFIX to each line of STR."
@@ -304,7 +320,9 @@ options apply to."
 (defun clime-help--command-row (cmd)
   "Format CMD as a (left . help) table row."
   (cons (clime-node-name cmd)
-        (clime-help--first-line (or (clime-node-help cmd) ""))))
+        (clime-help--append-deprecated
+         (clime-help--first-line (or (clime-node-help cmd) ""))
+         (clime-node-deprecated cmd))))
 
 (defun clime-help--format-sections (items &optional width)
   "Format ITEMS into nested category sections.
@@ -459,9 +477,11 @@ Returns a flat list of `clime-option' structs, deduped by flag set."
                              (let ((rows (mapcar
                                           (lambda (opt)
                                             (cons (clime-help--format-option-flags opt)
-                                                  (clime-help--append-choices
-                                                   (clime-option-help opt)
-                                                   (clime-option-choices opt))))
+                                                  (clime-help--append-deprecated
+                                                   (clime-help--append-choices
+                                                    (clime-option-help opt)
+                                                    (clime-option-choices opt))
+                                                   (clime-option-deprecated opt))))
                                           ancestor-opts)))
                                (concat "Global Options:\n"
                                        (clime-help--format-table rows width))))))

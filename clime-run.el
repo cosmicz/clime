@@ -82,6 +82,11 @@ auto-injected into the app."
           (let* ((node (clime-parse-result-node result))
                  (handler (clime-node-handler node))
                  (ctx (clime--build-context app result)))
+            (let ((dep (clime-node-deprecated node)))
+              (when dep
+                (message "Warning: %s is deprecated%s"
+                         (clime-node-name node)
+                         (if (stringp dep) (format ". %s" dep) ""))))
             (when handler
               (let ((retval (funcall handler ctx)))
                 (when retval

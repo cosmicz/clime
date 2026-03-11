@@ -342,6 +342,42 @@ keeping it callable:
   :help "Enable tracing" :hidden t)
 #+end_src
 
+** Deprecation warnings
+
+Mark commands or options as ~:deprecated~ to emit a warning when used.
+The value can be ~t~ (generic) or a string (migration hint):
+
+#+begin_src emacs-lisp
+(clime-option old-flag ("--old") :flag t
+  :deprecated "Use --new instead"
+  :help "Legacy option")
+
+(clime-command migrate
+  :deprecated "Use 'upgrade' instead"
+  :help "Old migration path"
+  (clime-handler (ctx) ...))
+#+end_src
+
+Help output shows the deprecation annotation:
+
+#+begin_example
+Options:
+  --old             Legacy option (deprecated: Use --new instead)
+
+Commands:
+  migrate           Old migration path (deprecated: Use 'upgrade' instead)
+#+end_example
+
+At runtime, using a deprecated item prints a warning to stderr:
+
+#+begin_example
+Warning: --old is deprecated. Use --new instead
+Warning: migrate is deprecated. Use 'upgrade' instead
+#+end_example
+
+Combine ~:hidden t~ with ~:deprecated~ for silent deprecation: hidden
+from help but still warns when used.
+
 ** Nested groups
 
 Organize related commands under a group:
@@ -715,10 +751,10 @@ listings, and shown in full in detailed command help.
 | Macro            | Purpose                            | Key arguments                                                             |
 |------------------+------------------------------------+---------------------------------------------------------------------------|
 | ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~, ~:setup~   |
-| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:epilog~, ~:category~                   |
-| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:inline~, ~:epilog~, ~:category~        |
-| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:env~, ~:category~, ~:from~ |
-| ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~, ~:from~ |
+| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:deprecated~, ~:epilog~, ~:category~    |
+| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:deprecated~, ~:inline~, ~:epilog~, ~:category~ |
+| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:env~, ~:category~, ~:deprecated~, ~:from~ |
+| ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~, ~:deprecated~, ~:from~ |
 | ~clime-defopt~   | Define a reusable option template  | Any option slot except ~:name~, ~:flags~                                 |
 | ~clime-defarg~   | Define a reusable arg template     | Any arg slot except ~:name~                                              |
 | ~clime-alias-for~ | Alias for a nested command        | ~:help~, ~:aliases~, ~:hidden~, ~:category~                             |

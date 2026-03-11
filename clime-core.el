@@ -37,7 +37,8 @@
   (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error.")
   (separator nil :type (or string null) :documentation "Split each value by this string; implies :multiple t.")
   (category nil :type (or string null) :documentation "Help display category label.")
-  (hidden nil :type boolean :documentation "If non-nil, omit from help."))
+  (hidden nil :type boolean :documentation "If non-nil, omit from help.")
+  (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning)."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.
@@ -83,7 +84,8 @@ Used for lazy slots like :choices and :default."
   (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
   (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
-  (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error."))
+  (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error.")
+  (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning)."))
 
 (defun clime-make-arg (&rest args)
   "Create a `clime-arg' with validation.
@@ -108,7 +110,8 @@ ARGS is a plist of slot values."
   (category nil :type (or string null) :documentation "Help display category label.")
   (inline nil :type boolean :documentation "If non-nil, promote children to parent level for dispatch and help.")
   (handler nil :type (or function null) :documentation "Handler function, called with context.")
-  (epilog nil :type (or string null) :documentation "Free-form text appended after auto-generated help."))
+  (epilog nil :type (or string null) :documentation "Free-form text appended after auto-generated help.")
+  (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning)."))
 
 ;;; ─── Command ────────────────────────────────────────────────────────────
 

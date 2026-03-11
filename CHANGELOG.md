@@ -34,6 +34,10 @@
   correct Emacs indentation.
 - `clime-main-script-p` guard on `clime-make.el` entrypoint: `(require
   'clime-make)` from interactive Emacs no longer triggers the CLI.
+- `:deprecated` slot on options, args, commands, and groups.  Accepts a
+  string (migration hint) or `t` (generic).  Shows "(deprecated)" in help
+  output and emits a warning to stderr at runtime.  Combine with `:hidden t`
+  for silent deprecation.
 
 ### Fixed
 

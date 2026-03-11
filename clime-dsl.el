@@ -176,7 +176,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :epilog :category)))
+                     '(:help :doc :aliases :hidden :epilog :category :deprecated)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms))
@@ -197,6 +197,8 @@ ARGS is (NAME &rest BODY)."
                 `(:epilog ,(plist-get keywords :epilog)))
             ,@(when (plist-get keywords :category)
                 `(:category ,(plist-get keywords :category)))
+            ,@(when (plist-get keywords :deprecated)
+                `(:deprecated ,(plist-get keywords :deprecated)))
             ,@(when (plist-get classified :options)
                 `(:options (list ,@(plist-get classified :options))))
             ,@(when (plist-get classified :args)
@@ -212,7 +214,7 @@ PATH is a list of symbols naming the target command path."
          (path-strings (mapcar #'symbol-name path-form))
          (extracted (clime--extract-keywords
                      (cddr args)
-                     '(:help :doc :aliases :hidden :category)))
+                     '(:help :doc :aliases :hidden :category :deprecated)))
          (keywords (car extracted)))
     `(cons ,name-str
            (clime-make-command
@@ -225,7 +227,9 @@ PATH is a list of symbols naming the target command path."
             ,@(when (plist-get keywords :hidden)
                 `(:hidden ,(plist-get keywords :hidden)))
             ,@(when (plist-get keywords :category)
-                `(:category ,(plist-get keywords :category)))))))
+                `(:category ,(plist-get keywords :category)))
+            ,@(when (plist-get keywords :deprecated)
+                `(:deprecated ,(plist-get keywords :deprecated)))))))
 
 (defun clime--build-group (args)
   "Build a `clime-group' constructor form from DSL ARGS.
@@ -234,7 +238,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :inline :epilog :category)))
+                     '(:help :doc :aliases :hidden :inline :epilog :category :deprecated)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -253,6 +257,8 @@ ARGS is (NAME &rest BODY)."
                 `(:epilog ,(plist-get keywords :epilog)))
             ,@(when (plist-get keywords :category)
                 `(:category ,(plist-get keywords :category)))
+            ,@(when (plist-get keywords :deprecated)
+                `(:deprecated ,(plist-get keywords :deprecated)))
             ,@(when (plist-get classified :options)
                 `(:options (list ,@(plist-get classified :options))))
             ,@(when (plist-get classified :args)
