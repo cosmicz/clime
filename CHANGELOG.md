@@ -29,6 +29,16 @@
   and table right-columns now wrap at the terminal width.  Auto-detects
   from `COLUMNS` env var (fallback 80, minimum 40).  Override with
   `clime-help-width` variable.
+- DSL indent rules: `lisp-indent-function` properties on `clime-option` (2),
+  `clime-arg`, `clime-command`, `clime-group`, `clime-handler` (1) for
+  correct Emacs indentation.
+- `clime-main-script-p` guard on `clime-make.el` entrypoint: `(require
+  'clime-make)` from interactive Emacs no longer triggers the CLI.
+
+### Fixed
+
+- Inline group names are now excluded from user-facing error paths and
+  "Try X --help" hints (internal parse path still includes them).
 
 ## 0.2.0 — 2026-03-10
 
