@@ -9,6 +9,10 @@
   time, eliminating boilerplate when exposing nested commands at a higher
   level.  Supports `:help`, `:aliases`, `:hidden`, `:category` overrides,
   transitive resolution, and circular chain detection.
+- Terminal-width-aware help text wrapping: help descriptions, epilog text,
+  and table right-columns now wrap at the terminal width.  Auto-detects
+  from `COLUMNS` env var (fallback 80, minimum 40).  Override with
+  `clime-help-width` variable.
 
 ## 0.2.0 — 2026-03-10
 

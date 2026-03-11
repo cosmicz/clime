@@ -918,5 +918,115 @@ into one section with indented sub-headings."
             (footer-pos (string-match "for more information" help)))
         (should (> footer-pos epilog-pos))))))
 
+;;; ─── Text Wrapping ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/wrap-text-basic ()
+  "clime-help--wrap-text wraps at word boundaries."
+  (let ((result (clime-help--wrap-text "one two three four five" 12)))
+    (should (equal result "one two\nthree four\nfive"))))
+
+(ert-deftest clime-test-help/wrap-text-preserves-newlines ()
+  "clime-help--wrap-text preserves existing line breaks."
+  (let ((result (clime-help--wrap-text "line one\nline two has words" 15)))
+    (should (equal result "line one\nline two has\nwords"))))
+
+(ert-deftest clime-test-help/wrap-text-with-prefix ()
+  "clime-help--wrap-text prepends prefix to continuation lines.
+Width applies to content; prefix is extra visual indentation."
+  (let ((result (clime-help--wrap-text "one two three four" 10 "    ")))
+    ;; "one two" (7) fits, "one two three" (13) doesn't → wrap
+    (should (equal result "one two\n    three four"))))
+
+(ert-deftest clime-test-help/wrap-text-long-word ()
+  "Words longer than width are not broken."
+  (let ((result (clime-help--wrap-text "short verylongwordhere end" 10)))
+    (should (string-match-p "verylongwordhere" result))))
+
+(ert-deftest clime-test-help/wrap-text-fits ()
+  "Text that fits within width is not modified."
+  (let ((result (clime-help--wrap-text "short text" 80)))
+    (should (equal result "short text"))))
+
+(ert-deftest clime-test-help/terminal-width-default ()
+  "Default terminal width is 80 when COLUMNS is unset."
+  (let ((clime-help-width nil)
+        (process-environment (cl-remove-if
+                              (lambda (e) (string-prefix-p "COLUMNS=" e))
+                              process-environment)))
+    (should (= 80 (clime-help--terminal-width)))))
+
+(ert-deftest clime-test-help/terminal-width-from-var ()
+  "clime-help-width overrides auto-detection."
+  (let ((clime-help-width 60))
+    (should (= 60 (clime-help--terminal-width)))))
+
+(ert-deftest clime-test-help/terminal-width-from-columns ()
+  "COLUMNS env var is used for auto-detection."
+  (let ((clime-help-width nil)
+        (process-environment (cons "COLUMNS=120" process-environment)))
+    (should (= 120 (clime-help--terminal-width)))))
+
+(ert-deftest clime-test-help/terminal-width-minimum ()
+  "Width is clamped to minimum 40."
+  (let ((clime-help-width 20))
+    (should (= 40 (clime-help--terminal-width)))))
+
+(ert-deftest clime-test-help/table-wraps-help-column ()
+  "Table help text wraps when it would exceed terminal width."
+  (let* ((clime-help-width 50)
+         (opt (clime-make-option :name 'output
+                                 :flags '("--output" "-o")
+                                 :help "Set the output format for all commands in the system"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show"
+                                  :options (list opt)))
+         (help (clime-format-help cmd '("app" "show"))))
+    ;; No line in the options section should exceed 50 chars
+    (let ((lines (split-string help "\n")))
+      (dolist (line lines)
+        (should (<= (length line) 50))))))
+
+(ert-deftest clime-test-help/description-wraps ()
+  "Description paragraph wraps at terminal width."
+  (let* ((clime-help-width 40)
+         (cmd (clime-make-command
+               :name "show" :handler #'ignore
+               :help "This is a long description that should be wrapped at the terminal width boundary")))
+    (let ((help (clime-format-help cmd '("app" "show"))))
+      (dolist (line (split-string help "\n"))
+        (should (<= (length line) 40))))))
+
+(ert-deftest clime-test-help/epilog-wraps ()
+  "Epilog text wraps at terminal width."
+  (let* ((clime-help-width 40)
+         (cmd (clime-make-command :name "sub" :handler #'ignore :help "Sub"))
+         (app (clime-make-app :name "app" :version "1"
+                               :epilog "This is an epilog with enough words to require wrapping at narrow widths"
+                               :children (list (cons "sub" cmd)))))
+    (clime--set-parent-refs app)
+    (let* ((help (clime-format-help app '("app")))
+           (lines (split-string help "\n")))
+      ;; Check epilog lines are wrapped (skip usage, footer, and empty lines)
+      (let ((epilog-lines (cl-remove-if
+                           (lambda (l) (or (string-prefix-p "Usage:" l)
+                                           (string-prefix-p "Run \"" l)
+                                           (string-empty-p l)))
+                           lines)))
+        (dolist (line epilog-lines)
+          (should (<= (length line) 40)))))))
+
+(ert-deftest clime-test-help/usage-not-wrapped ()
+  "Usage line is not wrapped even when it exceeds terminal width."
+  (let* ((clime-help-width 40)
+         (cmd (clime-make-command
+               :name "deploy" :handler #'ignore
+               :help "Deploy"
+               :args (list (clime-make-arg :name 'target)
+                           (clime-make-arg :name 'environment)))))
+    (let* ((help (clime-format-help cmd '("myapp" "infra" "deploy")))
+           (usage-line (car (split-string help "\n"))))
+      ;; Usage line should be intact, not wrapped
+      (should (string-match-p "^Usage: myapp infra deploy" usage-line)))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here
