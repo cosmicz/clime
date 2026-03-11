@@ -71,7 +71,7 @@ Returns a plist (:options :args :children :handler)."
           :children (nreverse children)
           :handler handler)))
 
-;;; ─── Option Templates ──────────────────────────────────────────────────
+;;; ─── Parameter Templates ───────────────────────────────────────────────
 
 ;;;###autoload
 (defmacro clime-defopt (name &rest plist)
@@ -96,6 +96,18 @@ Supports DSL shorthands: :flag t normalizes to :nargs 0,
     (when (and (plist-get plist :separator)
                (not (plist-member plist :multiple)))
       (setq plist (plist-put (cl-copy-list plist) :multiple t)))
+    `(defvar ,var-sym (list ,@plist))))
+
+;;;###autoload
+(defmacro clime-defarg (name &rest plist)
+  "Define NAME as a reusable argument template.
+Expands to (defvar clime--arg-NAME PLIST).
+PLIST contains default arg slot values (evaluated at load time).
+Must not contain :name (per-instance)."
+  (declare (indent 1))
+  (let ((var-sym (intern (format "clime--arg-%s" name))))
+    (when (plist-member plist :name)
+      (error "clime-defarg %s: :name is per-instance, not allowed in templates" name))
     `(defvar ,var-sym (list ,@plist))))
 
 ;;; ─── Form Builders ──────────────────────────────────────────────────────
@@ -130,10 +142,20 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defopt' template.
 
 (defun clime--build-arg (args)
   "Build a `clime-arg' constructor form from DSL ARGS.
-ARGS is (NAME &rest PLIST)."
+ARGS is (NAME &rest PLIST).
+Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defarg' template."
   (let* ((name (car args))
-         (plist (cdr args)))
-    `(clime-make-arg :name ',name ,@plist)))
+         (plist (cdr args))
+         (from-name (plist-get plist :from)))
+    (when from-name
+      (setq plist (cl-copy-list plist))
+      (cl-remf plist :from))
+    (if from-name
+        (let ((template-sym (intern (format "clime--arg-%s" from-name))))
+          `(apply #'clime-make-arg
+                  (clime--merge-template ,template-sym
+                                         :name ',name ,@plist)))
+      `(clime-make-arg :name ',name ,@plist))))
 
 (defun clime--build-handler (args)
   "Build a lambda form from DSL ARGS.

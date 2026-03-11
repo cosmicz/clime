@@ -662,5 +662,85 @@
   (let ((result (clime-parse clime-test--from-parse '("show" "-i" "xyz"))))
     (should (equal (plist-get (clime-parse-result-params result) 'id) "xyz"))))
 
+;;; ─── clime-defarg: Arg Templates ───────────────────────────────────────
+
+(ert-deftest clime-test-dsl/defarg-basic ()
+  "clime-defarg creates a clime--arg-NAME variable holding arg slot defaults."
+  (eval '(clime-defarg test-arg-basic
+           :type 'string
+           :conform #'identity
+           :help "A reusable arg")
+        t)
+  (should (listp clime--arg-test-arg-basic))
+  (should (eq (plist-get clime--arg-test-arg-basic :type) 'string))
+  (should (functionp (plist-get clime--arg-test-arg-basic :conform)))
+  (should (equal (plist-get clime--arg-test-arg-basic :help) "A reusable arg")))
+
+(ert-deftest clime-test-dsl/defarg-rejects-name ()
+  "clime-defarg errors if :name is included."
+  (should-error
+   (eval '(clime-defarg test-arg-bad
+            :name 'foo
+            :help "Bad")
+         t)
+   :type 'error))
+
+(ert-deftest clime-test-dsl/defarg-from-basic ()
+  ":from inherits arg template defaults."
+  (eval '(progn
+           (clime-defarg test-arg-id
+             :type 'string
+             :conform #'identity
+             :help "A verified ID")
+           (clime-app clime-test--arg-from-basic
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-arg id :from test-arg-id)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--arg-from-basic))))
+         (arg (car (clime-command-args cmd))))
+    (should (eq (clime-arg-name arg) 'id))
+    (should (eq (clime-arg-type arg) 'string))
+    (should (functionp (clime-arg-conform arg)))
+    (should (equal (clime-arg-help arg) "A verified ID"))))
+
+(ert-deftest clime-test-dsl/defarg-from-override ()
+  ":from arg values are overridden by explicit slot values."
+  (eval '(progn
+           (clime-defarg test-arg-ovr
+             :type 'string
+             :help "Template help"
+             :required t)
+           (clime-app clime-test--arg-from-override
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-arg id :from test-arg-ovr :help "Overridden" :required nil)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--arg-from-override))))
+         (arg (car (clime-command-args cmd))))
+    (should (equal (clime-arg-help arg) "Overridden"))
+    (should-not (clime-arg-required arg))
+    (should (eq (clime-arg-type arg) 'string))))
+
+(ert-deftest clime-test-dsl/defarg-from-parse-integration ()
+  ":from arg templates parse correctly end-to-end."
+  (eval '(progn
+           (clime-defarg test-arg-parse
+             :type 'string
+             :help "An ID param")
+           (clime-app clime-test--arg-from-parse
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-arg id :from test-arg-parse)
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((result (clime-parse clime-test--arg-from-parse '("show" "abc"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "abc"))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here
