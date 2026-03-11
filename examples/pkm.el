@@ -33,6 +33,7 @@
 ;;  16.  Context destructuring   clime-let macro in handlers
 ;;  17.  Command categories      search/list under "Discovery"
 ;;  18.  Inline group category   admin inline group with option + command
+;;  19.  Parameter template      clime-defopt for shared --force flag
 ;;
 ;; Run it (this file is directly executable via the shebang header):
 ;;   chmod +x examples/pkm.el
@@ -52,6 +53,13 @@
 ;;; Code:
 
 (require 'clime)
+
+;; ─── Parameter Templates ────────────────────────────────────────────────
+;; [19] Define once, reuse via :from — shared across install and repo remove
+
+(clime-defopt force-flag
+  :flag t
+  :help "Force the operation (skip safety checks)")
 
 ;; ─── App Definition ──────────────────────────────────────────────────────
 
@@ -86,7 +94,7 @@
 
     (clime-arg package :help "Package name or URL")
 
-    (clime-option force ("--force" "-f") :flag t  ; [7] :flag t shorthand
+    (clime-option force ("--force" "-f") :from force-flag  ; [19] from template
       :help "Overwrite existing installation")
 
     (clime-option dry-run ("--dry-run" "-n") :flag t
@@ -191,7 +199,7 @@
       :help "Remove a repository"
       :aliases (rm)
       (clime-arg name :help "Repository name")
-      (clime-option force ("--force" "-f") :flag t
+      (clime-option force ("--force" "-f") :from force-flag  ; [19] reused
         :help "Remove even if packages depend on it")
       (clime-handler (ctx)
         (clime-let ctx (name force)

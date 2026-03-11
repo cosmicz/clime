@@ -12,6 +12,13 @@
   Enables config loading that influences lazy `:choices` and `:default` functions.
 - `clime-params-plist`: convert context params to keyword plist, eliminating
   `clime-let` + plist reconstruction boilerplate
+- `:conform` slot on options and args: pass-2 value conformer that runs
+  after env vars and defaults are resolved.  Receives the final value,
+  returns conformed value or signals error.  Pipeline order:
+  type → `:coerce` → choices → `:conform`.
+- `clime-defopt` and `clime-defarg`: reusable parameter templates.
+  Define option/arg slot defaults once, inherit via `:from` in any
+  command.  Explicit slot values override the template.
 - `clime-parse-finalize`: public API for explicit pass-2 control
 - `:separator` slot on options: split a single value into a list
   (e.g. `--tags=a,b,c` with `:separator ","` yields `("a" "b" "c")`)

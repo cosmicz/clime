@@ -110,6 +110,8 @@ So ~./myapp.el hello world~ just works from your shell.
 - Invocable groups (group with its own handler)
 - Inline groups (~:inline t~) --- promote children to parent level
 - Lazy choices (~:choices~ accepts a function)
+- Value conformers (~:conform~) for pass-2 validation and transformation
+- Parameter templates (~clime-defopt~, ~clime-defarg~) with ~:from~ inheritance
 - Ancestor option propagation --- group options available to all descendants
 - Setup hook (~:setup~) with two-pass parse for config loading
 - ~clime-params-plist~ --- convert context params to keyword plist
@@ -234,6 +236,31 @@ Apply an arbitrary function after type coercion:
 #+end_src
 
 When combined with ~:choices~, validation runs first, then ~:coerce~.
+
+** Value conformers with ~:conform~
+
+~:conform~ runs in pass 2 (after env vars and defaults are resolved)
+and can both validate and transform the final value.  Unlike ~:coerce~
+(which runs immediately during parsing), ~:conform~ sees the fully
+resolved value --- including defaults and env var overrides:
+
+#+begin_src emacs-lisp
+(clime-option id ("--id")
+  :conform (lambda (val)
+             (unless (string-match-p "^[a-z0-9]\\{7\\}$" val)
+               (error "Invalid ID format: %s" val))
+             (upcase val))
+  :help "Resource ID (7-char alphanumeric)")
+#+end_src
+
+A conformer receives the value and must either return the conformed
+value or signal an error.  This is useful for:
+
+- Domain validation that depends on the final resolved value
+- Normalizing values after all sources (CLI, env, default) are merged
+- Cross-cutting checks shared via parameter templates (~:from~)
+
+The pipeline order is: type coercion → ~:coerce~ → choices → ~:conform~.
 
 ** Environment variables
 
@@ -546,6 +573,53 @@ Static ~:choices~ (literal lists) are validated immediately in pass 1.
 Dynamic ~:choices~ (functions) are deferred to pass 2 after the setup
 hook has run.
 
+** Parameter templates
+
+Define reusable option or arg specs with ~clime-defopt~ and
+~clime-defarg~, then reference them with ~:from~:
+
+#+begin_src emacs-lisp
+;; Define a template once
+(clime-defopt verified-id
+  :type 'string
+  :conform #'my-ensure-id
+  :help "A verified resource ID")
+
+;; Reuse across commands — explicit values override the template
+(clime-command copy
+  :help "Copy a resource"
+  (clime-option src ("--src") :from verified-id :multiple t)
+  (clime-option dst ("--dst") :from verified-id)
+  (clime-handler (ctx) ...))
+
+(clime-command move
+  :help "Move a resource"
+  (clime-option src ("--src") :from verified-id)
+  (clime-option dst ("--dst") :from verified-id)
+  (clime-handler (ctx) ...))
+#+end_src
+
+~clime-defopt~ expands to a ~defvar~ with a ~clime--opt-~ prefix
+(e.g. ~clime--opt-verified-id~).  The ~:from~ keyword handles the
+prefixing transparently --- you write the bare name in both places.
+
+Templates cannot contain ~:name~ or ~:flags~ (those are per-instance).
+All DSL shorthands (~:flag t~, ~:separator~) work in templates.
+
+~clime-defarg~ works the same way for positional args:
+
+#+begin_src emacs-lisp
+(clime-defarg file-path
+  :type 'string
+  :coerce #'expand-file-name
+  :help "Path to a file")
+
+(clime-command cat
+  :help "Print file contents"
+  (clime-arg path :from file-path)
+  (clime-handler (ctx) ...))
+#+end_src
+
 ** ~clime-params-plist~
 
 Convert context params to a keyword plist, useful for passing parsed
@@ -596,8 +670,10 @@ listings, and shown in full in detailed command help.
 | ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~, ~:setup~   |
 | ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:epilog~, ~:category~                   |
 | ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:inline~, ~:epilog~, ~:category~        |
-| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:env~, ~:category~ |
-| ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:default~, ~:help~            |
+| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:env~, ~:category~, ~:from~ |
+| ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~, ~:from~ |
+| ~clime-defopt~   | Define a reusable option template  | Any option slot except ~:name~, ~:flags~                                 |
+| ~clime-defarg~   | Define a reusable arg template     | Any arg slot except ~:name~                                              |
 | ~clime-handler~  | Attach a handler to a command      | ~(ctx)~ --- receives the parse context                                   |
 | ~clime-let~      | Destructure context in a handler   | ~ctx (var1 var2 ...)~ --- binds option/arg values                        |
 
