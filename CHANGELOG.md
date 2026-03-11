@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- **Output mode variable**: replaced internal boolean `clime--json-mode-p`
+  with symbol-valued `clime-output-mode` (`'text` / `'json`).  Handlers can
+  check `(clime-output-mode-json-p)` to vary output format.  Extensible to
+  future output modes.  The `:json-mode` DSL keyword is unchanged.
+
 ### Added
 
 - `clime-alias-for` DSL form: declare a command as an alias for a nested

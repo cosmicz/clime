@@ -465,7 +465,9 @@ Commands and groups support ~:epilog~ too.
 ** JSON output mode
 
 Set ~:json-mode t~ on the app to auto-inject a ~--json~ flag.
-When ~--json~ is set, handler return values are encoded as JSON:
+When ~--json~ is set, ~clime-output-mode~ is bound to ~'json~ and handler
+return values are encoded as JSON.  Handlers can check
+~(clime-output-mode-json-p)~ to vary their output format:
 
 #+begin_src emacs-lisp
 (clime-app myapp
