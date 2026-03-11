@@ -742,5 +742,27 @@
   (let ((result (clime-parse clime-test--arg-from-parse '("show" "abc"))))
     (should (equal (plist-get (clime-parse-result-params result) 'id) "abc"))))
 
+;;; ─── Indent Rules ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/indent-option ()
+  "clime-option has lisp-indent-function 2 (name + flags)."
+  (should (equal 2 (get 'clime-option 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-arg ()
+  "clime-arg has lisp-indent-function 1 (name)."
+  (should (equal 1 (get 'clime-arg 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-command ()
+  "clime-command has lisp-indent-function 1 (name)."
+  (should (equal 1 (get 'clime-command 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-group ()
+  "clime-group has lisp-indent-function 1 (name)."
+  (should (equal 1 (get 'clime-group 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-handler ()
+  "clime-handler has lisp-indent-function 1 (arglist)."
+  (should (equal 1 (get 'clime-handler 'lisp-indent-function))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

@@ -287,5 +287,16 @@ Child forms:
         ,@(when (plist-get classified :handler)
             `(:handler ,(plist-get classified :handler)))))))
 
+;;; ─── Indent Rules ──────────────────────────────────────────────────────
+
+;; DSL forms are consumed by `clime--classify-body' at macro-expansion
+;; time — they are not real macros, so we set indent properties directly.
+
+(put 'clime-option  'lisp-indent-function 2) ; name flags &rest plist
+(put 'clime-arg     'lisp-indent-function 1) ; name &rest plist
+(put 'clime-command 'lisp-indent-function 1) ; name &rest body
+(put 'clime-group   'lisp-indent-function 1) ; name &rest body
+(put 'clime-handler 'lisp-indent-function 1) ; arglist &rest body
+
 (provide 'clime-dsl)
 ;;; clime-dsl.el ends here

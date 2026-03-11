@@ -305,55 +305,55 @@ CTX is the clime context."
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
 (clime-app clime-make
-           :version clime-version
-           :help "clime — declarative CLI framework for Emacs Lisp."
+  :version clime-version
+  :help "clime — declarative CLI framework for Emacs Lisp."
 
-           ;; ── init ─────────────────────────────────────────────────────────────
-           (clime-command
-            init
-            :help "Add a polyglot shebang header to an Emacs Lisp file"
+  ;; ── init ─────────────────────────────────────────────────────────────
+  (clime-command
+   init
+   :help "Add a polyglot shebang header to an Emacs Lisp file"
 
-            (clime-arg file :help "The .el file to initialize")
+   (clime-arg file :help "The .el file to initialize")
 
-            (clime-option extra-load-path ("--load-path" "-L") :multiple t
-                          :help "Additional load paths to include in the shebang")
+   (clime-option extra-load-path ("--load-path" "-L") :multiple t
+                 :help "Additional load paths to include in the shebang")
 
-            (clime-option self-dir ("--self-dir") :flag t
-                          :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
+   (clime-option self-dir ("--self-dir") :flag t
+                 :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
-            (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
-                          :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
+   (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
+                 :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
 
-            (clime-option standalone ("--standalone") :flag t
-                          :help "Skip the automatic clime load path (for vendored/bundled setups)")
+   (clime-option standalone ("--standalone") :flag t
+                 :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-            (clime-option force ("--force" "-f") :flag t
-                          :help "Replace an existing non-clime shebang")
+   (clime-option force ("--force" "-f") :flag t
+                 :help "Replace an existing non-clime shebang")
 
-            (clime-option env ("--env" "-e") :multiple t
-                          :help "Set environment variable in shebang (NAME=VALUE)")
+   (clime-option env ("--env" "-e") :multiple t
+                 :help "Set environment variable in shebang (NAME=VALUE)")
 
-            (clime-handler (ctx) (clime-make--init-handler ctx)))
+   (clime-handler (ctx) (clime-make--init-handler ctx)))
 
-           ;; ── bundle ──────────────────────────────────────────────────────────
-           (clime-command bundle
-                          :help "Concatenate multiple Elisp source files into a single file"
+  ;; ── bundle ──────────────────────────────────────────────────────────
+  (clime-command bundle
+                 :help "Concatenate multiple Elisp source files into a single file"
 
-                          (clime-arg files :nargs :rest :help "Source files in dependency order")
+                 (clime-arg files :nargs :rest :help "Source files in dependency order")
 
-                          (clime-option output ("--output" "-o") :required t
-                                        :help "Output file path")
+                 (clime-option output ("--output" "-o") :required t
+                               :help "Output file path")
 
-                          (clime-option provide ("--provide" "-p")
-                                        :help "Feature name for (provide 'FEATURE) (default: output filename)")
+                 (clime-option provide ("--provide" "-p")
+                               :help "Feature name for (provide 'FEATURE) (default: output filename)")
 
-                          (clime-option main ("--main" "-m")
-                                        :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
+                 (clime-option main ("--main" "-m")
+                               :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
 
-                          (clime-option description ("--description" "-d")
-                                        :help "One-line description for the file header")
+                 (clime-option description ("--description" "-d")
+                               :help "One-line description for the file header")
 
-                          (clime-handler (ctx) (clime-make--bundle-handler ctx))))
+                 (clime-handler (ctx) (clime-make--bundle-handler ctx))))
 
 (provide 'clime-make)
 ;;; Entrypoint:
