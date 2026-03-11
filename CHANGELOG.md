@@ -13,9 +13,9 @@
 - `clime-params-plist`: convert context params to keyword plist, eliminating
   `clime-let` + plist reconstruction boilerplate
 - `:conform` slot on options and args: pass-2 value conformer that runs
-  after env vars and defaults are resolved.  Receives the final value,
-  returns conformed value or signals error.  Pipeline order:
-  type → `:coerce` → choices → `:conform`.
+  after env vars are applied but before defaults.  Validates and
+  transforms external input (CLI + env); defaults skip conforming.
+  Pipeline: type → `:coerce` → choices → env → `:conform` → defaults.
 - `clime-defopt` and `clime-defarg`: reusable parameter templates.
   Define option/arg slot defaults once, inherit via `:from` in any
   command.  Explicit slot values override the template.

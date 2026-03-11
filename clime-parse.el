@@ -581,9 +581,10 @@ since static choices were already validated in pass 1."
 
 (defun clime--run-conformers (nodes params)
   "Run :conform functions for options and args in NODES against PARAMS.
-Called in pass 2 after dynamic choices validation.  Skips nil values.
-Returns updated PARAMS plist.  Each conformer receives the current value
-and returns the conformed value; signaled errors become `clime-usage-error'."
+Called in pass 2 after dynamic choices validation and env var application.
+Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
+the current value and returns the conformed value; signaled errors become
+`clime-usage-error'."
   (dolist (node nodes)
     (dolist (opt (clime-node-options node))
       (let ((cfn (clime-option-conform opt)))
@@ -617,7 +618,7 @@ and returns the conformed value; signaled errors become `clime-usage-error'."
 
 (defun clime-parse-finalize (result)
   "Finalize RESULT from pass-1 parse (pass 2).
-Validates dynamic choices, runs conformers, applies env vars, applies
+Validates dynamic choices, applies env vars, runs conformers, applies
 defaults, and checks required params.  Returns the updated RESULT."
   (when (clime-parse-result-finalized result)
     (error "clime-parse-finalize: result already finalized"))
@@ -627,10 +628,12 @@ defaults, and checks required params.  Returns the updated RESULT."
          (root (cl-find-if #'clime-app-p visited-nodes)))
     ;; Validate dynamic choices (functions resolved now, after setup)
     (clime--validate-dynamic-choices visited-nodes params)
-    ;; Run :conform functions (after choices, before env/defaults)
-    (setq params (clime--run-conformers visited-nodes params))
-    ;; Apply env vars, then defaults, then check required
+    ;; Apply env vars (external input, needs conforming)
     (setq params (clime--apply-env visited-nodes params root))
+    ;; Run :conform functions (after env, before defaults — defaults
+    ;; are developer-authored and should already be valid)
+    (setq params (clime--run-conformers visited-nodes params))
+    ;; Apply defaults, then check required
     (setq params (clime--apply-defaults visited-nodes params))
     (clime--check-required visited-nodes params path)
     ;; Update and mark finalized

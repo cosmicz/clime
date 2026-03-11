@@ -239,10 +239,11 @@ When combined with ~:choices~, validation runs first, then ~:coerce~.
 
 ** Value conformers with ~:conform~
 
-~:conform~ runs in pass 2 (after env vars and defaults are resolved)
-and can both validate and transform the final value.  Unlike ~:coerce~
-(which runs immediately during parsing), ~:conform~ sees the fully
-resolved value --- including defaults and env var overrides:
+~:conform~ runs in pass 2 after env vars are applied but before
+defaults.  Unlike ~:coerce~ (which runs immediately during parsing),
+~:conform~ validates values from both CLI and env var sources.
+Defaults skip conforming --- they're developer-authored and should
+already be valid:
 
 #+begin_src emacs-lisp
 (clime-option id ("--id")
@@ -256,11 +257,11 @@ resolved value --- including defaults and env var overrides:
 A conformer receives the value and must either return the conformed
 value or signal an error.  This is useful for:
 
-- Domain validation that depends on the final resolved value
-- Normalizing values after all sources (CLI, env, default) are merged
+- Domain validation of external input (CLI args and env vars)
+- Normalizing values before they reach the handler
 - Cross-cutting checks shared via parameter templates (~:from~)
 
-The pipeline order is: type coercion → ~:coerce~ → choices → ~:conform~.
+The pipeline order is: type coercion → ~:coerce~ → choices → env vars → ~:conform~ → defaults.
 
 ** Environment variables
 
