@@ -31,6 +31,7 @@
   (command nil :documentation "Resolved leaf command, or nil for group.")
   (node nil :documentation "Terminal node where parsing ended.")
   (path nil :type list :documentation "List of node names from root to command.")
+  (display-path nil :type list :documentation "User-facing path excluding inline group names.")
   (params nil :type list :documentation "Plist of (param-name value) for all scopes.")
   (visited-nodes nil :type list :documentation "Nodes visited during parse (for finalization).")
   (finalized nil :type boolean :documentation "Non-nil after pass-2 finalization."))
@@ -392,6 +393,7 @@ This enables a setup hook to run between passes."
         (option-parsing t)
         (params '())
         (path (list (or (clime-app-argv0 app) (clime-app-name app))))
+        (display-path (list (or (clime-app-argv0 app) (clime-app-name app))))
         (arg-index 0)
         (visited-nodes (list app))
         (i 0)
@@ -484,13 +486,15 @@ This enables a setup hook to run between passes."
                   (signal 'clime-usage-error
                           (list (format "Unknown option %s for %s"
                                         (if split (car split) token)
-                                        (string-join path " ")))))))))
+                                        (string-join display-path " ")))))))))
 
          ;; 4. Try group descent (child-path includes inline groups)
          (child
           (dolist (node child-path)
             (setq current-node node)
             (setq path (append path (list (clime-node-name node))))
+            (unless (clime-node-inline node)
+              (setq display-path (append display-path (list (clime-node-name node)))))
             (push node visited-nodes))
           (setq arg-index 0)
           (cl-incf i))
@@ -512,7 +516,7 @@ This enables a setup hook to run between passes."
               ;; No more arg specs
               (signal 'clime-usage-error
                       (list (format "Unexpected argument \"%s\" for %s"
-                                    token (string-join path " "))))))))))
+                                    token (string-join display-path " "))))))))))
 
     ;; Post-parse: if we ended on a group (not a leaf command), check
     ;; if it has an invoke handler, otherwise it's missing a subcommand
@@ -536,6 +540,7 @@ This enables a setup hook to run between passes."
                    :command (if (clime-command-p current-node) current-node nil)
                    :node current-node
                    :path path
+                   :display-path display-path
                    :params params
                    :visited-nodes visited-nodes)))
       (if skip-finalize
@@ -544,7 +549,7 @@ This enables a setup hook to run between passes."
       ;; Enrich usage errors with the current parse path for hints
       (clime-usage-error
        (signal 'clime-usage-error
-               (list (cadr err) path))))))
+               (list (cadr err) display-path))))))
 
 ;;; ─── Pass-2 Finalization ────────────────────────────────────────────────
 
@@ -624,7 +629,7 @@ defaults, and checks required params.  Returns the updated RESULT."
     (error "clime-parse-finalize: result already finalized"))
   (let* ((visited-nodes (clime-parse-result-visited-nodes result))
          (params (clime-parse-result-params result))
-         (path (clime-parse-result-path result))
+         (display-path (clime-parse-result-display-path result))
          (root (cl-find-if #'clime-app-p visited-nodes)))
     ;; Validate dynamic choices (functions resolved now, after setup)
     (clime--validate-dynamic-choices visited-nodes params)
@@ -635,7 +640,7 @@ defaults, and checks required params.  Returns the updated RESULT."
     (setq params (clime--run-conformers visited-nodes params))
     ;; Apply defaults, then check required
     (setq params (clime--apply-defaults visited-nodes params))
-    (clime--check-required visited-nodes params path)
+    (clime--check-required visited-nodes params display-path)
     ;; Update and mark finalized
     (setf (clime-parse-result-params result) params)
     (setf (clime-parse-result-finalized result) t)

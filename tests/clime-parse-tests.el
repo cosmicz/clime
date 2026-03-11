@@ -1303,5 +1303,53 @@
     (should (equal (plist-get (clime-parse-result-params result) 'tag)
                    '("A" "B")))))
 
+;;; ─── Inline Group Error Path ────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/inline-group-error-excludes-group-name ()
+  "Error messages for commands reached through inline groups exclude the group name."
+  (let* ((cmd (clime-make-command :name "log" :handler #'ignore
+                                   :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "ops" :inline t
+                                :children (list (cons "log" cmd))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "ops" grp)))))
+    (condition-case err
+        (clime-parse app '("log"))
+      (clime-usage-error
+       ;; The error message should say "myapp log", not "myapp ops log"
+       (should (string-match-p "for myapp log" (cadr err)))
+       ;; The hint path (third element) should also exclude "ops"
+       (should (equal (caddr err) '("myapp" "log")))))))
+
+(ert-deftest clime-test-parse/inline-group-error-nested ()
+  "Nested inline groups are all excluded from error paths."
+  (let* ((cmd (clime-make-command :name "start" :handler #'ignore
+                                   :args (list (clime-make-arg :name 'svc))))
+         (inner (clime-make-group :name "inner" :inline t
+                                  :children (list (cons "start" cmd))))
+         (outer (clime-make-group :name "outer" :inline t
+                                  :children (list (cons "inner" inner))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "outer" outer)))))
+    (condition-case err
+        (clime-parse app '("start"))
+      (clime-usage-error
+       (should (string-match-p "for myapp start" (cadr err)))
+       (should (equal (caddr err) '("myapp" "start")))))))
+
+(ert-deftest clime-test-parse/non-inline-group-error-includes-name ()
+  "Non-inline group names still appear in error paths."
+  (let* ((cmd (clime-make-command :name "log" :handler #'ignore
+                                   :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "ops"
+                                :children (list (cons "log" cmd))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "ops" grp)))))
+    (condition-case err
+        (clime-parse app '("ops" "log"))
+      (clime-usage-error
+       (should (string-match-p "for myapp ops log" (cadr err)))
+       (should (equal (caddr err) '("myapp" "ops" "log")))))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here
