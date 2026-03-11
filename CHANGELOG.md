@@ -25,6 +25,14 @@
 - `:category` slot on commands, groups, and options: group items under
   named sections in help output (e.g. `Admin:`, `I/O:`)
 
+- `scaffold` command: auto-detect `clime-app` symbol in a file and insert
+  `;;; Entrypoint:` boilerplate with `clime-main-script-p` guard.  Uses
+  `(provide 'FEATURE)` for the guard symbol when present, falls back to the
+  app symbol.
+- `setup` command: composes `scaffold` + `init` in one shot.  Auto-detects
+  `CLIME_MAIN_APP` from the `clime-app` form (explicit `-e` overrides).
+  Accepts all of `init`'s flags (`--self-dir`, `-R`, `--standalone`, etc.).
+
 - `init --self-dir` and `init --rel-load-path` now resolve symlinks at runtime
   via `realpath`, so relative load paths work correctly when the script is
   invoked through a symlink
