@@ -8,6 +8,11 @@
   `:bool t` to avoid confusion with the `:flags` slot (list of flag
   strings).  `:flag t` still works but emits a deprecation warning.
 
+- **Alias struct**: `clime-alias-for` now creates a `clime-alias` node
+  (a `clime-node` subtype) instead of a `clime-command` with alias
+  slots.  The DSL is unchanged; this is an internal refactor that
+  enables future group aliasing.
+
 - **Output mode variable**: replaced internal boolean `clime--json-mode-p`
   with symbol-valued `clime-output-mode` (`'text` / `'json`).  Handlers can
   check `(clime-output-mode-json-p)` to vary output format.  Extensible to
