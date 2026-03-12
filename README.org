@@ -378,6 +378,59 @@ Warning: migrate is deprecated. Use 'upgrade' instead
 Combine ~:hidden t~ with ~:deprecated~ for silent deprecation: hidden
 from help but still warns when used.
 
+** Mutually exclusive options
+
+Use ~:mutex~ to declare options that cannot be used together.  Options
+sharing the same ~:mutex~ symbol are mutually exclusive — at most one
+may be set per invocation:
+
+#+begin_src emacs-lisp
+(clime-option format-json ("--json") :flag t :mutex 'output-format)
+(clime-option format-csv  ("--csv")  :flag t :mutex 'output-format)
+(clime-option format-text ("--text") :flag t :mutex 'output-format)
+#+end_src
+
+Using more than one signals an error:
+
+#+begin_example
+Error: Options --json, --csv are mutually exclusive
+#+end_example
+
+Mutex validation runs after env vars are applied, so conflicts from
+environment variables are caught too.  When any member of a mutex group
+is set (via CLI or env), defaults on sibling options are suppressed.
+
+** Negatable flags
+
+Use ~:negatable t~ to auto-generate ~--no-X~ variants for boolean flags.
+This implies boolean (no ~:flag t~ needed):
+
+#+begin_src emacs-lisp
+(clime-option color ("--color") :negatable t :default t
+  :help "Colorize output")
+#+end_src
+
+Help output:
+
+#+begin_example
+Options:
+  --color / --no-color  Colorize output
+#+end_example
+
+The ~--no-X~ form explicitly sets the param to ~nil~, enabling handlers
+to distinguish three states — unset, enabled, and disabled:
+
+#+begin_src emacs-lisp
+(clime-handler (ctx)
+  (pcase (clime-param ctx 'color 'auto)
+    ('auto (if (isatty) "color" "plain"))  ; unset → auto-detect
+    ('t    "color")                         ; --color
+    (_     "plain")))                       ; --no-color
+#+end_src
+
+All long flags on the option get negated variants.  Short flags (~-c~)
+and flags already starting with ~--no-~ are not double-negated.
+
 ** Nested groups
 
 Organize related commands under a group:
@@ -700,6 +753,21 @@ values to other functions:
   (my-other-function (clime-params-plist ctx 'package 'force)))
 #+end_src
 
+** ~clime-param~
+
+Get a param value with a default for absent params.  Unlike
+~clime-ctx-get~, distinguishes between explicitly ~nil~ and absent:
+
+#+begin_src emacs-lisp
+(clime-param ctx 'color 'auto)
+;; => t       when --color was passed
+;; => nil     when --no-color was passed
+;; => 'auto   when neither was passed
+#+end_src
+
+Use ~clime-ctx-get~ or ~clime-let~ for simple binary params, and
+~clime-param~ when you need ternary state (common with negatable flags).
+
 ** Stdin
 
 Use ~-~ as an argument value to read from stdin:
@@ -753,7 +821,7 @@ listings, and shown in full in detailed command help.
 | ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~, ~:setup~   |
 | ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:deprecated~, ~:epilog~, ~:category~    |
 | ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:deprecated~, ~:inline~, ~:epilog~, ~:category~ |
-| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:env~, ~:category~, ~:deprecated~, ~:from~ |
+| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:negatable~, ~:mutex~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:env~, ~:category~, ~:deprecated~, ~:from~ |
 | ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~, ~:deprecated~, ~:from~ |
 | ~clime-defopt~   | Define a reusable option template  | Any option slot except ~:name~, ~:flags~                                 |
 | ~clime-defarg~   | Define a reusable arg template     | Any arg slot except ~:name~                                              |
