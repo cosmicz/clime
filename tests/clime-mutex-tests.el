@@ -272,8 +272,8 @@
   (eval
    '(clime-app clime-test--mutex-dsl-app
       :version "1"
-      (clime-option fmt-json ("--json") :flag t :mutex 'output-format)
-      (clime-option fmt-csv ("--csv") :flag t :mutex 'output-format)
+      (clime-option fmt-json ("--json") :bool t :mutex 'output-format)
+      (clime-option fmt-csv ("--csv") :bool t :mutex 'output-format)
       (clime-command run
         :help "Run"
         (clime-handler (_ctx) nil)))

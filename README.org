@@ -20,7 +20,7 @@ Write an Elisp file using the clime DSL:
   :version "1.0.0"
   :help "A friendly greeter."
 
-  (clime-option shout ("--shout" "-s") :flag t
+  (clime-option shout ("--shout" "-s") :bool t
     :help "SHOUT THE GREETING")
 
   (clime-command hello
@@ -120,10 +120,10 @@ So ~./myapp.el hello world~ just works from your shell.
 
 ** Options
 
-Boolean flags consume no value.  Use ~:flag t~ (shorthand for ~:nargs 0~):
+Boolean flags consume no value.  Use ~:bool t~ (shorthand for ~:nargs 0~):
 
 #+begin_src emacs-lisp
-(clime-option force ("--force" "-f") :flag t
+(clime-option force ("--force" "-f") :bool t
   :help "Skip confirmation")
 #+end_src
 
@@ -338,7 +338,7 @@ keeping it callable:
   :hidden t
   (clime-handler (ctx) ...))
 
-(clime-option trace ("--internal-trace") :flag t
+(clime-option trace ("--internal-trace") :bool t
   :help "Enable tracing" :hidden t)
 #+end_src
 
@@ -348,7 +348,7 @@ Mark commands or options as ~:deprecated~ to emit a warning when used.
 The value can be ~t~ (generic) or a string (migration hint):
 
 #+begin_src emacs-lisp
-(clime-option old-flag ("--old") :flag t
+(clime-option old-flag ("--old") :bool t
   :deprecated "Use --new instead"
   :help "Legacy option")
 
@@ -385,9 +385,9 @@ sharing the same ~:mutex~ symbol are mutually exclusive — at most one
 may be set per invocation:
 
 #+begin_src emacs-lisp
-(clime-option format-json ("--json") :flag t :mutex 'output-format)
-(clime-option format-csv  ("--csv")  :flag t :mutex 'output-format)
-(clime-option format-text ("--text") :flag t :mutex 'output-format)
+(clime-option format-json ("--json") :bool t :mutex 'output-format)
+(clime-option format-csv  ("--csv")  :bool t :mutex 'output-format)
+(clime-option format-text ("--text") :bool t :mutex 'output-format)
 #+end_src
 
 Using more than one signals an error:
@@ -403,7 +403,7 @@ is set (via CLI or env), defaults on sibling options are suppressed.
 ** Negatable flags
 
 Use ~:negatable t~ to auto-generate ~--no-X~ variants for boolean flags.
-This implies boolean (no ~:flag t~ needed):
+This implies boolean (no ~:bool t~ needed):
 
 #+begin_src emacs-lisp
 (clime-option color ("--color") :negatable t :default t
@@ -722,7 +722,7 @@ Define reusable option or arg specs with ~clime-defopt~ and
 prefixing transparently --- you write the bare name in both places.
 
 Templates cannot contain ~:name~ or ~:flags~ (those are per-instance).
-All DSL shorthands (~:flag t~, ~:separator~) work in templates.
+All DSL shorthands (~:bool t~, ~:separator~) work in templates.
 
 ~clime-defarg~ works the same way for positional args:
 
@@ -821,7 +821,7 @@ listings, and shown in full in detailed command help.
 | ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~, ~:setup~   |
 | ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:deprecated~, ~:epilog~, ~:category~    |
 | ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:deprecated~, ~:inline~, ~:epilog~, ~:category~ |
-| ~clime-option~   | Declare a named option             | ~:flag~, ~:count~, ~:multiple~, ~:negatable~, ~:mutex~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:env~, ~:category~, ~:deprecated~, ~:from~ |
+| ~clime-option~   | Declare a named option             | ~:bool~, ~:count~, ~:multiple~, ~:negatable~, ~:mutex~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:env~, ~:category~, ~:deprecated~, ~:from~ |
 | ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~, ~:deprecated~, ~:from~ |
 | ~clime-defopt~   | Define a reusable option template  | Any option slot except ~:name~, ~:flags~                                 |
 | ~clime-defarg~   | Define a reusable arg template     | Any arg slot except ~:name~                                              |
@@ -831,7 +831,7 @@ listings, and shown in full in detailed command help.
 
 ~:doc~ is an alias for ~:help~ on commands, groups, and apps.
 
-~:flag t~ is shorthand for ~:nargs 0~ (boolean flag, DSL only).
+~:bool t~ is shorthand for ~:nargs 0~ (boolean flag, DSL only).
 
 See =examples/pkm.el= for a comprehensive demo covering all major features.
 

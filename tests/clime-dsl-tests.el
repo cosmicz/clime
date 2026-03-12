@@ -393,6 +393,41 @@
     (should (clime-option-boolean-p opt))
     (should (eql (clime-option-nargs opt) 0))))
 
+(ert-deftest clime-test-dsl/bool-shorthand ()
+  ":bool t in DSL produces a boolean option (nargs=0)."
+  (eval '(clime-app clime-test--dsl-bool
+           :version "1"
+           (clime-command test
+             :help "Test"
+             (clime-option force ("--force") :bool t)
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (assoc "test" (clime-group-children clime-test--dsl-bool))))
+         (opt (car (clime-command-options cmd))))
+    (should (clime-option-boolean-p opt))
+    (should (eql (clime-option-nargs opt) 0))))
+
+(ert-deftest clime-test-dsl/defopt-bool-shorthand ()
+  "clime-defopt normalizes :bool t to :nargs 0."
+  (eval '(clime-defopt test-bool-tmpl
+           :bool t
+           :help "A boolean template")
+        t)
+  (should (eql (plist-get clime--opt-test-bool-tmpl :nargs) 0))
+  (should-not (plist-member clime--opt-test-bool-tmpl :bool)))
+
+(ert-deftest clime-test-dsl/flag-deprecated-warning ()
+  ":flag t emits a deprecation warning."
+  (let ((msgs (clime-test-with-messages
+                (eval '(clime-app clime-test--dsl-flag-depr
+                         :version "1"
+                         (clime-command test
+                           :help "Test"
+                           (clime-option force ("--force") :flag t)
+                           (clime-handler (ctx) nil)))
+                      t))))
+    (should (cl-some (lambda (m) (string-match-p ":bool" m)) msgs))))
+
 ;;; ─── Separator Shorthand ────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/separator-implies-multiple ()

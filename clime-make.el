@@ -404,16 +404,16 @@ CTX is the clime context."
    (clime-option extra-load-path ("--load-path" "-L") :multiple t
                  :help "Additional load paths to include in the shebang")
 
-   (clime-option self-dir ("--self-dir") :flag t
+   (clime-option self-dir ("--self-dir") :bool t
                  :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
    (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
                  :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
 
-   (clime-option standalone ("--standalone") :flag t
+   (clime-option standalone ("--standalone") :bool t
                  :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-   (clime-option force ("--force" "-f") :flag t
+   (clime-option force ("--force" "-f") :bool t
                  :help "Replace an existing non-clime shebang")
 
    (clime-option env ("--env" "-e") :multiple t
@@ -459,16 +459,16 @@ CTX is the clime context."
    (clime-option extra-load-path ("--load-path" "-L") :multiple t
                  :help "Additional load paths to include in the shebang")
 
-   (clime-option self-dir ("--self-dir") :flag t
+   (clime-option self-dir ("--self-dir") :bool t
                  :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
    (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
                  :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
 
-   (clime-option standalone ("--standalone") :flag t
+   (clime-option standalone ("--standalone") :bool t
                  :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-   (clime-option force ("--force" "-f") :flag t
+   (clime-option force ("--force" "-f") :bool t
                  :help "Replace an existing non-clime shebang")
 
    (clime-option env ("--env" "-e") :multiple t

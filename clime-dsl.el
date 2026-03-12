@@ -72,6 +72,27 @@ Returns a plist (:options :args :children :handler)."
           :children (nreverse children)
           :handler handler)))
 
+;;; ─── DSL Shorthands ────────────────────────────────────────────────────
+
+(defun clime--normalize-bool-flag (plist)
+  "Normalize :bool/:flag in PLIST to :nargs 0.
+:bool t is the preferred form.  :flag t is deprecated (emits a warning).
+Returns the updated plist with :bool/:flag removed and :nargs 0 set."
+  (let ((has-bool (plist-get plist :bool))
+        (has-flag (plist-get plist :flag)))
+    (when (and has-bool has-flag)
+      (error "clime-option: use :bool or :flag, not both"))
+    (when has-flag
+      (message "Warning: :flag is deprecated, use :bool instead")
+      (setq plist (cl-copy-list plist))
+      (cl-remf plist :flag)
+      (setq plist (plist-put plist :nargs 0)))
+    (when has-bool
+      (setq plist (cl-copy-list plist))
+      (cl-remf plist :bool)
+      (setq plist (plist-put plist :nargs 0)))
+    plist))
+
 ;;; ─── Parameter Templates ───────────────────────────────────────────────
 
 ;;;###autoload
@@ -80,7 +101,7 @@ Returns a plist (:options :args :children :handler)."
 Expands to (defvar clime--opt-NAME PLIST).
 PLIST contains default option slot values (evaluated at load time).
 Must not contain :name or :flags (those are per-instance).
-Supports DSL shorthands: :flag t normalizes to :nargs 0,
+Supports DSL shorthands: :bool t normalizes to :nargs 0,
 :separator implies :multiple t."
   (declare (indent 1))
   (let ((var-sym (intern (format "clime--opt-%s" name))))
@@ -89,10 +110,8 @@ Supports DSL shorthands: :flag t normalizes to :nargs 0,
       (error "clime-defopt %s: :name is per-instance, not allowed in templates" name))
     (when (plist-member plist :flags)
       (error "clime-defopt %s: :flags is per-instance, not allowed in templates" name))
-    ;; Normalize :flag t → :nargs 0
-    (when (plist-get plist :flag)
-      (setq plist (plist-put (cl-copy-list plist) :nargs 0))
-      (cl-remf plist :flag))
+    ;; Normalize :bool/:flag t → :nargs 0
+    (setq plist (clime--normalize-bool-flag plist))
     ;; :separator implies :multiple t
     (when (and (plist-get plist :separator)
                (not (plist-member plist :multiple)))
@@ -116,7 +135,7 @@ Must not contain :name (per-instance)."
 (defun clime--build-option (args)
   "Build a `clime-option' constructor form from DSL ARGS.
 ARGS is (NAME FLAGS &rest PLIST).
-Supports :flag t as shorthand for :nargs 0 (boolean flag).
+Supports :bool t as shorthand for :nargs 0 (boolean flag).
 Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defopt' template."
   (let* ((name (car args))
          (flags (cadr args))
@@ -126,10 +145,8 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defopt' template.
     (when from-name
       (setq plist (cl-copy-list plist))
       (cl-remf plist :from))
-    ;; :flag t → :nargs 0 (DSL-only shorthand, not a real slot)
-    (when (plist-get plist :flag)
-      (setq plist (plist-put (cl-copy-list plist) :nargs 0))
-      (cl-remf plist :flag))
+    ;; :bool/:flag t → :nargs 0 (DSL-only shorthand, not a real slot)
+    (setq plist (clime--normalize-bool-flag plist))
     ;; :separator implies :multiple t
     (when (and (plist-get plist :separator)
                (not (plist-member plist :multiple)))

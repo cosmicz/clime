@@ -214,7 +214,7 @@
   (eval
    '(clime-app clime-test--depr-opt-app
       :version "1"
-      (clime-option old ("--old") :deprecated "Use --new" :flag t)
+      (clime-option old ("--old") :deprecated "Use --new" :bool t)
       (clime-command run
         :help "Run"
         (clime-handler (_ctx) nil)))

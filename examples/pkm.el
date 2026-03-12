@@ -16,12 +16,12 @@
 ;; Features demonstrated (in order of appearance):
 ;;
 ;;   1.  Root count flag         -v/--verbose (stackable: -vvv = 3)
-;;   2.  Root boolean flag       -q/--quiet (:flag t shorthand)
+;;   2.  Root boolean flag       -q/--quiet (:bool t shorthand)
 ;;   3.  Hidden option           --internal-trace (omitted from help)
 ;;   4.  JSON mode               :json-mode t → auto-injected --json
 ;;   5.  Command with args       install <package>
 ;;   6.  Aliases                 install → i, search → s, list → ls (symbols)
-;;   7.  Boolean flags           --force, --dry-run (:flag t shorthand)
+;;   7.  Boolean flags           --force, --dry-run (:bool t shorthand)
 ;;   8.  Multiple option         --tag (repeatable) on install
 ;;   9.  Default value           --registry defaults to "default"
 ;;  10.  Optional arg            search [query]
@@ -60,7 +60,7 @@
 ;; [19] Define once, reuse via :from — shared across install and repo remove
 
 (clime-defopt force-flag
-  :flag t
+  :bool t
   :help "Force the operation (skip safety checks)")
 
 ;; ─── App Definition ──────────────────────────────────────────────────────
@@ -79,12 +79,12 @@
   (clime-option verbose ("-v" "--verbose") :count t
     :help "Increase output verbosity")
 
-  ;; [2] Boolean flag — :flag t is shorthand for :nargs 0
-  (clime-option quiet ("-q" "--quiet") :flag t
+  ;; [2] Boolean flag — :bool t is shorthand for :nargs 0
+  (clime-option quiet ("-q" "--quiet") :bool t
     :help "Suppress non-essential output")
 
   ;; [3] Hidden option — internal use only, omitted from --help
-  (clime-option internal-trace ("--internal-trace") :flag t
+  (clime-option internal-trace ("--internal-trace") :bool t
     :help "Enable internal tracing" :hidden t)
 
   ;; ── install ──────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@
     (clime-option force ("--force" "-f") :from force-flag  ; [19] from template
       :help "Overwrite existing installation")
 
-    (clime-option dry-run ("--dry-run" "-n") :flag t
+    (clime-option dry-run ("--dry-run" "-n") :bool t
       :help "Show what would be installed without doing it")
 
     (clime-option tag ("--tag" "-t") :multiple t

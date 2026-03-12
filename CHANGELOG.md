@@ -4,6 +4,10 @@
 
 ### Changed
 
+- **`:bool` replaces `:flag`**: the `:flag t` DSL shorthand is renamed to
+  `:bool t` to avoid confusion with the `:flags` slot (list of flag
+  strings).  `:flag t` still works but emits a deprecation warning.
+
 - **Output mode variable**: replaced internal boolean `clime--json-mode-p`
   with symbol-valued `clime-output-mode` (`'text` / `'json`).  Handlers can
   check `(clime-output-mode-json-p)` to vary output format.  Extensible to
@@ -41,7 +45,7 @@
 - `:negatable` slot on options: auto-generate `--no-X` variants for
   boolean flags.  `--no-X` explicitly sets the param to nil, allowing
   handlers to distinguish unset/true/false (ternary state).  Implies
-  boolean (no `:flag t` needed).  Help renders `--flag / --no-flag`.
+  boolean (no `:bool t` needed).  Help renders `--flag / --no-flag`.
 - `clime-param` accessor: `(clime-param ctx 'name default)` returns
   the param value if set (even nil), or DEFAULT if absent.  Complements
   `clime-ctx-get` for ternary-aware param access.
