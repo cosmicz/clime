@@ -224,14 +224,16 @@ ARGS is (NAME &rest BODY)."
 (defun clime--build-alias-for (args)
   "Build a `clime-command' alias-for form from DSL ARGS.
 ARGS is (NAME (PATH...) &rest KEYWORDS).
-PATH is a list of symbols naming the target command path."
+PATH is a list of symbols naming the target command path.
+Supports :defaults and :vals alists for preset/locked option values."
   (let* ((name (car args))
          (name-str (symbol-name name))
          (path-form (cadr args))
          (path-strings (mapcar #'symbol-name path-form))
          (extracted (clime--extract-keywords
                      (cddr args)
-                     '(:help :doc :aliases :hidden :category :deprecated)))
+                     '(:help :doc :aliases :hidden :category :deprecated
+                       :defaults :vals)))
          (keywords (car extracted)))
     `(cons ,name-str
            (clime-make-command
@@ -246,7 +248,11 @@ PATH is a list of symbols naming the target command path."
             ,@(when (plist-get keywords :category)
                 `(:category ,(plist-get keywords :category)))
             ,@(when (plist-get keywords :deprecated)
-                `(:deprecated ,(plist-get keywords :deprecated)))))))
+                `(:deprecated ,(plist-get keywords :deprecated)))
+            ,@(when (plist-get keywords :defaults)
+                `(:alias-defaults ,(plist-get keywords :defaults)))
+            ,@(when (plist-get keywords :vals)
+                `(:alias-vals ,(plist-get keywords :vals)))))))
 
 (defun clime--build-group (args)
   "Build a `clime-group' constructor form from DSL ARGS.

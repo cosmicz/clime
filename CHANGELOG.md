@@ -20,6 +20,11 @@
   time, eliminating boilerplate when exposing nested commands at a higher
   level.  Supports `:help`, `:aliases`, `:hidden`, `:category` overrides,
   transitive resolution, and circular chain detection.
+  - `:defaults '((name . value) ...)` — override default values on
+    copied options.  Visible in help, overridable by CLI.
+  - `:vals '((name . value) ...)` — lock option values.  The option
+    is removed from CLI and help; the value is injected into params
+    unconditionally.
 - `clime-invoke`: interactive transient.el UI for clime apps.  Auto-generates
   menus from `clime-app` definitions — groups become nested prefixes, options
   become infixes, leaf commands get a "Run" action.  Requires the `transient`

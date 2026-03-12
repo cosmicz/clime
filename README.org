@@ -527,6 +527,22 @@ time.  You can override ~:help~, ~:aliases~, ~:hidden~, and
 ~:category~ on the alias.  When ~:help~ is omitted, it inherits from
 the target.
 
+Use ~:defaults~ to preset option values (user can still override):
+
+#+begin_src emacs-lisp
+(clime-alias-for show-csv (report show)
+  :help "Show report as CSV"
+  :defaults '((format . "csv")))
+#+end_src
+
+Use ~:vals~ to lock option values (removed from CLI and help):
+
+#+begin_src emacs-lisp
+(clime-alias-for deploy-ci (deploy run)
+  :help "Deploy to CI"
+  :vals '((target . "ci")))
+#+end_src
+
 *** Nested groups
 
 Organize related commands under a group:
@@ -967,7 +983,7 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 | ~clime-arg~        | Declare a positional argument    | ~:nargs~, ~:required~                                                 |
 | ~clime-defopt~     | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
 | ~clime-defarg~     | Reusable arg template            | Any arg slot except ~:name~                                           |
-| ~clime-alias-for~  | Alias for a nested command       | Path to target command                                                |
+| ~clime-alias-for~  | Alias for a nested command       | Path to target command, ~:defaults~, ~:vals~                         |
 | ~clime-handler~    | Attach a handler                 | ~(ctx)~ --- receives the parse context                                |
 | ~clime-let~        | Destructure context in a handler | ~ctx (var1 var2 ...)~ --- binds option/arg values                     |
 

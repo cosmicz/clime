@@ -132,7 +132,9 @@ ARGS is a plist of slot values."
                              (:constructor clime-command--create)
                              (:copier nil))
   "A leaf command in the CLI tree."
-  (alias-for nil :type list :documentation "Path to target command, e.g. (\"agents\" \"start\"). Nil for normal commands."))
+  (alias-for nil :type list :documentation "Path to target command, e.g. (\"agents\" \"start\"). Nil for normal commands.")
+  (alias-defaults nil :type list :documentation "Alist of (name . value) to override defaults on copied options.")
+  (alias-vals nil :type list :documentation "Alist of (name . value) for locked params, hidden from CLI and help."))
 
 (defun clime-make-command (&rest args)
   "Create a `clime-command' with validation.
@@ -221,15 +223,44 @@ by copying args, options, and handler from the target.  Idempotent."
          ;; Command with alias-for: resolve it
          ((and (clime-command-p child)
                (clime-command-alias-for child))
-          (let ((target (clime--resolve-alias-1 child app nil)))
+          (let ((target (clime--resolve-alias-1 child app nil))
+                (defaults (clime-command-alias-defaults child))
+                (vals (clime-command-alias-vals child)))
             ;; Copy from target, preserving alias's own overrides
             (setf (clime-node-args child) (clime-node-args target))
-            (setf (clime-node-options child) (clime-node-options target))
+            (setf (clime-node-options child)
+                  (copy-sequence (clime-node-options target)))
             (setf (clime-node-handler child) (clime-node-handler target))
             (unless (clime-node-help child)
               (setf (clime-node-help child) (clime-node-help target)))
             (unless (clime-node-epilog child)
               (setf (clime-node-epilog child) (clime-node-epilog target)))
+            ;; Apply :defaults — patch :default on copied options
+            (dolist (entry defaults)
+              (let* ((name (car entry))
+                     (val (cdr entry))
+                     (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
+                                      (clime-node-options child))))
+                (unless opt
+                  (error "Alias %s: :defaults names unknown option `%s'"
+                         (clime-node-name child) name))
+                ;; Replace with a copy to avoid mutating target's option
+                (let ((new-opt (copy-sequence opt)))
+                  (setf (clime-option-default new-opt) val)
+                  (setf (clime-node-options child)
+                        (mapcar (lambda (o) (if (eq o opt) new-opt o))
+                                (clime-node-options child))))))
+            ;; Apply :vals — remove options from list (hidden from CLI/help)
+            (dolist (entry vals)
+              (let* ((name (car entry))
+                     (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
+                                      (clime-node-options child))))
+                (unless opt
+                  (error "Alias %s: :vals names unknown option `%s'"
+                         (clime-node-name child) name))
+                (setf (clime-node-options child)
+                      (cl-remove-if (lambda (o) (eq (clime-option-name o) name))
+                                    (clime-node-options child)))))
             ;; Mark as resolved
             (setf (clime-command-alias-for child) nil)))
          ;; Group: recurse
