@@ -41,6 +41,7 @@ Configure project-specific settings for clean test execution."
 (require 'clime-mutex-tests)
 (require 'clime-negatable-tests)
 (require 'clime-requires-tests)
+(require 'clime-zip-tests)
 (require 'clime-integration-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────

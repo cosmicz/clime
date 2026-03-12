@@ -94,6 +94,7 @@ So ~./myapp.el hello world~ just works from your shell.
 - Negatable flags (~--color / --no-color~) with ternary state
 - Mutually exclusive options (~:mutex~)
 - Option dependencies (~:requires~) --- coupled or one-way
+- Paired option groups (~:zip~) --- matched cardinality with zipped alist output
 - Collapsed short flags (~-abc~ expands to ~-a -b -c~)
 - ~--flag=value~ syntax
 - Choices validation (~:choices '("json" "csv")~), including lazy ~:choices~ functions
@@ -275,6 +276,40 @@ Error: --skip requires --reason
 An option can require multiple others: ~:requires '(a b c)~ means all
 three must be set.  Env-var-set values satisfy the requirement;
 defaults do not.
+
+*** Paired option groups
+
+Use ~:zip~ to declare options that must be used the same number of
+times.  Values are paired by position and stored as a list of alists
+in ctx under the group name.  Implies ~:multiple t~:
+
+#+begin_src emacs-lisp
+(clime-option skip ("--skip") :zip 'skip-reason)
+(clime-option reason ("--reason") :zip 'skip-reason)
+#+end_src
+
+#+begin_src bash
+myapp --skip SPEC --reason "no spec" --skip TEST --reason "no test"
+#+end_src
+
+#+begin_src emacs-lisp
+(clime-handler (ctx)
+  (clime-ctx-get ctx 'skip-reason)
+  ;; => (((skip . "SPEC") (reason . "no spec"))
+  ;;     ((skip . "TEST") (reason . "no test")))
+
+  ;; Individual lists still available:
+  (clime-ctx-get ctx 'skip)    ;; => ("SPEC" "TEST")
+  (clime-ctx-get ctx 'reason)) ;; => ("no spec" "no test")
+#+end_src
+
+Unequal counts signal an error:
+
+#+begin_example
+Error: Zip group options must be used the same number of times: --skip (2), --reason (1)
+#+end_example
+
+Combine with ~:required t~ on any member to require at least one pair.
 
 ** Parsing
 
@@ -928,7 +963,7 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 | ~clime-app~        | Define a CLI application         | ~:version~, ~:env-prefix~, ~:json-mode~, ~:setup~                    |
 | ~clime-command~    | Define a subcommand              | (uses shared command slots)                                           |
 | ~clime-group~      | Nest related commands            | ~:inline~                                                             |
-| ~clime-option~     | Declare a named option           | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:mutex~, ~:requires~, ~:env~, ~:category~ |
+| ~clime-option~     | Declare a named option           | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:requires~, ~:mutex~, ~:zip~, ~:env~, ~:category~ |
 | ~clime-arg~        | Declare a positional argument    | ~:nargs~, ~:required~                                                 |
 | ~clime-defopt~     | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
 | ~clime-defarg~     | Reusable arg template            | Any arg slot except ~:name~                                           |

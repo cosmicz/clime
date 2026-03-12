@@ -59,6 +59,10 @@
   be used when `--reason` is also provided.  Validates after env vars
   are applied; defaults do not satisfy the requirement.  Supports
   one-way deps, multi-deps, and cross-level (ancestor) options.
+- `:zip` slot on options: declare paired option groups where `:multiple`
+  options must be used the same number of times.  Values are zipped into
+  a list of alists available in ctx under the group name.  Implies
+  `:multiple t`.
 
 ### Fixed
 

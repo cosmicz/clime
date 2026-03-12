@@ -491,6 +491,67 @@ of its required options are absent from PARAMS."
                                         flag
                                         (mapconcat #'identity missing-flags ", ")))))))))))))
 
+(defun clime--check-and-zip (nodes params)
+  "Check :zip constraints across NODES and build zipped alists in PARAMS.
+Signal `clime-usage-error' if zip group members have unequal cardinality
+or partial presence.  Returns updated PARAMS with zip group entries added."
+  (let ((groups (make-hash-table :test #'eq)))
+    ;; Collect options by zip group
+    (dolist (node nodes)
+      (dolist (opt (clime-node-options node))
+        (when-let* ((zg (clime-option-zip opt)))
+          (push opt (gethash zg groups)))))
+    ;; Validate and zip each group
+    (maphash
+     (lambda (group opts)
+       (let* ((opts (nreverse opts))
+              (counts (mapcar (lambda (opt)
+                                (let ((val (plist-get params (clime-option-name opt))))
+                                  (if (listp val) (length val) 0)))
+                              opts))
+              (set-opts (cl-remove-if-not
+                         (lambda (opt)
+                           (plist-member params (clime-option-name opt)))
+                         opts))
+              (any-set (> (length set-opts) 0))
+              (all-set (= (length set-opts) (length opts))))
+         ;; Partial presence check
+         (when (and any-set (not all-set))
+           (let ((missing (cl-remove-if
+                           (lambda (opt)
+                             (plist-member params (clime-option-name opt)))
+                           opts)))
+             (signal 'clime-usage-error
+                     (list (format "%s requires %s"
+                                   (car (clime-option-flags (car set-opts)))
+                                   (mapconcat (lambda (o) (car (clime-option-flags o)))
+                                              missing ", "))))))
+         ;; Cardinality check
+         (when (and all-set (not (apply #'= counts)))
+           (let ((parts (mapcar (lambda (opt)
+                                  (format "%s (%d)"
+                                          (car (clime-option-flags opt))
+                                          (let ((val (plist-get params (clime-option-name opt))))
+                                            (if (listp val) (length val) 0))))
+                                opts)))
+             (signal 'clime-usage-error
+                     (list (format "Zip group options must be used the same number of times: %s"
+                                   (mapconcat #'identity parts ", "))))))
+         ;; Build zipped alist
+         (when all-set
+           (let* ((n (car counts))
+                  (zipped '()))
+             (dotimes (i n)
+               (let ((row '()))
+                 (dolist (opt opts)
+                   (let* ((name (clime-option-name opt))
+                          (vals (plist-get params name)))
+                     (push (cons name (nth i vals)) row)))
+                 (push (nreverse row) zipped)))
+             (setq params (plist-put params group (nreverse zipped)))))))
+     groups)
+    params))
+
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
 (defun clime-parse (app argv &optional skip-finalize)
@@ -757,6 +818,7 @@ defaults, and checks required params.  Returns the updated RESULT."
     ;; Mutex check (after env+conform, before defaults)
     (clime--check-mutex visited-nodes params)
     (clime--check-requires visited-nodes params)
+    (setq params (clime--check-and-zip visited-nodes params))
     ;; Apply defaults (mutex-aware: skips defaults when a sibling is set)
     (setq params (clime--apply-defaults visited-nodes params))
     (clime--check-required visited-nodes params display-path)

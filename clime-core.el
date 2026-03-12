@@ -41,7 +41,8 @@
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
   (mutex nil :type (or symbol null) :documentation "Mutex group symbol. Options sharing a mutex are mutually exclusive.")
   (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0).")
-  (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used."))
+  (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used.")
+  (zip nil :type (or symbol null) :documentation "Zip group symbol. Options sharing a :zip are paired by position and must have equal cardinality."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.
@@ -59,6 +60,8 @@ ARGS is a plist of slot values."
           (error "clime-make-option: :negatable is incompatible with :nargs %d" nargs)))
       (when (plist-get args :count)
         (error "clime-make-option: :negatable is incompatible with :count")))
+    (when (plist-get args :zip)
+      (setq args (plist-put (cl-copy-list args) :multiple t)))
     (apply #'clime-option--create args)))
 
 (defun clime--merge-template (template &rest overrides)
