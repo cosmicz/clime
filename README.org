@@ -91,34 +91,39 @@ So ~./myapp.el hello world~ just works from your shell.
 - Subcommands and nested groups (~myapp repo add~)
 - Auto-generated ~--help~ and ~--version~ at every level
 - Boolean flags, count flags (~-vvv~), repeatable options (~--tag a --tag b~)
+- Negatable flags (~--color / --no-color~) with ternary state
+- Mutually exclusive options (~:mutex~)
 - Collapsed short flags (~-abc~ expands to ~-a -b -c~)
 - ~--flag=value~ syntax
-- Choices validation (~:choices '("json" "csv")~)
-- Custom value transforms (~:coerce #'expand-file-name~)
+- Choices validation (~:choices '("json" "csv")~), including lazy ~:choices~ functions
+- Value separator (~:separator ","~ splits ~--tags=a,b,c~ into a list)
+- Custom value transforms (~:coerce~) and conformers (~:conform~)
 - Type coercion (string, integer, number)
 - Default values
 - Command aliases (~:aliases (i)~)
-- Hidden commands and options
+- Command aliases for nested paths (~clime-alias-for start (agents start)~)
+- Hidden commands and options (~:hidden t~)
+- Deprecation warnings (~:deprecated~) with migration hints
 - Environment variables with auto-derived or per-option names
 - Stdin via ~-~ sentinel
 - JSON output mode (~:json-mode t~)
 - Epilog text for extra help content
 - Category sections in help output (options, commands, inline groups)
+- Terminal-width-aware help wrapping
 - Rest args (~:nargs :rest~)
 - Invocable groups (group with its own handler)
 - Inline groups (~:inline t~) --- promote children to parent level
-- Command aliases for nested paths (~clime-alias-for start (agents start)~)
-- Lazy choices (~:choices~ accepts a function)
-- Value conformers (~:conform~) for pass-2 validation and transformation
-- Parameter templates (~clime-defopt~, ~clime-defarg~) with ~:from~ inheritance
 - Ancestor option propagation --- group options available to all descendants
 - Setup hook (~:setup~) with two-pass parse for config loading
-- ~clime-params-plist~ --- convert context params to keyword plist
+- Parameter templates (~clime-defopt~, ~clime-defarg~) with ~:from~ inheritance
+- ~clime-params-plist~ and ~clime-param~ --- context param accessors
 - Interactive transient UI (~clime-invoke~) --- auto-generated menus from app definitions
 - ~clime-reload~ --- hot-reload all modules during development
 - Single-file distribution via ~bundle~ command
 
 ** Options
+
+*** Boolean flags
 
 Boolean flags consume no value.  Use ~:bool t~ (shorthand for ~:nargs 0~):
 
@@ -126,6 +131,8 @@ Boolean flags consume no value.  Use ~:bool t~ (shorthand for ~:nargs 0~):
 (clime-option force ("--force" "-f") :bool t
   :help "Skip confirmation")
 #+end_src
+
+*** Count flags
 
 Count flags increment on each occurrence:
 
@@ -135,6 +142,8 @@ Count flags increment on each occurrence:
 ;; -v → 1, -vv → 2, -vvv → 3
 #+end_src
 
+*** Repeatable options
+
 Repeatable options collect values into a list:
 
 #+begin_src emacs-lisp
@@ -142,6 +151,8 @@ Repeatable options collect values into a list:
   :help "Add tag")
 ;; --tag dev --tag ci → ("dev" "ci")
 #+end_src
+
+*** Default values
 
 Default values are used when an option isn't provided:
 
@@ -151,7 +162,75 @@ Default values are used when an option isn't provided:
   :default "default")
 #+end_src
 
-** Collapsed short flags
+*** Value separator
+
+Split a single value into a list by a delimiter.  Implies ~:multiple t~:
+
+#+begin_src emacs-lisp
+(clime-option tags ("--tags" "-t") :separator ","
+  :help "Comma-separated tags")
+;; --tags=dev,ci → ("dev" "ci")
+#+end_src
+
+This also affects env var parsing: ~MYAPP_TAGS=dev,ci~ produces the
+same result.
+
+*** Negatable flags
+
+Use ~:negatable t~ to auto-generate ~--no-X~ variants for boolean flags.
+This implies boolean (no ~:bool t~ needed):
+
+#+begin_src emacs-lisp
+(clime-option color ("--color") :negatable t :default t
+  :help "Colorize output")
+#+end_src
+
+Help output:
+
+#+begin_example
+Options:
+  --color / --no-color  Colorize output
+#+end_example
+
+The ~--no-X~ form explicitly sets the param to ~nil~, enabling handlers
+to distinguish three states --- unset, enabled, and disabled:
+
+#+begin_src emacs-lisp
+(clime-handler (ctx)
+  (pcase (clime-param ctx 'color 'auto)
+    ('auto (if (isatty) "color" "plain"))  ; unset → auto-detect
+    ('t    "color")                         ; --color
+    (_     "plain")))                       ; --no-color
+#+end_src
+
+All long flags on the option get negated variants.  Short flags (~-c~)
+and flags already starting with ~--no-~ are not double-negated.
+
+*** Mutually exclusive options
+
+Use ~:mutex~ to declare options that cannot be used together.  Options
+sharing the same ~:mutex~ symbol are mutually exclusive --- at most one
+may be set per invocation:
+
+#+begin_src emacs-lisp
+(clime-option format-json ("--json") :bool t :mutex 'output-format)
+(clime-option format-csv  ("--csv")  :bool t :mutex 'output-format)
+(clime-option format-text ("--text") :bool t :mutex 'output-format)
+#+end_src
+
+Using more than one signals an error:
+
+#+begin_example
+Error: Options --json, --csv are mutually exclusive
+#+end_example
+
+Mutex validation runs after env vars are applied, so conflicts from
+environment variables are caught too.  When any member of a mutex group
+is set (via CLI or env), defaults on sibling options are suppressed.
+
+** Parsing
+
+*** Collapsed short flags
 
 Single-character flags can be collapsed: ~-abc~ expands to ~-a -b -c~.
 This works when all flags in the group are boolean.  A trailing
@@ -161,7 +240,7 @@ value-taking flag consumes the next argument:
 ./myapp.el -vvf show 123   # -v -v -f show 123
 #+end_src
 
-** ~--flag=value~ and ~--~
+*** ~--flag=value~ and ~--~
 
 Options accept ~--flag=value~ syntax:
 
@@ -176,93 +255,77 @@ positional arguments:
 ./myapp.el show -- --not-a-flag
 #+end_src
 
-** Type coercion
+*** Value pipeline
 
-Set ~:type~ on an option or arg to convert from the raw string:
-
-#+begin_src emacs-lisp
-(clime-option count ("--count" "-n") :type 'integer
-  :help "Number of items")
-
-(clime-option rate ("--rate") :type 'number
-  :help "Rate as a float")
-#+end_src
-
-Supported types: ~string~ (default), ~integer~, ~number~.
-
-** Choices validation
-
-Restrict an option or arg to a fixed set of values:
-
-#+begin_src emacs-lisp
-(clime-option format ("--format") :choices '("json" "table" "csv")
-  :help "Output format")
-
-(clime-arg action :choices '("start" "stop" "restart")
-  :help "Service action")
-#+end_src
-
-Invalid values produce a clear error:
+Each option and arg value flows through a multi-stage pipeline.  The
+stages are ordered so that each step receives the right kind of input:
 
 #+begin_example
-Error: Invalid value "xml" for --format (choose from: json, table, csv)
+raw string → :type → :choices → :coerce → env vars → :conform → :mutex → defaults
+   pass 1 (immediate, per-token)       │     pass 2 (after all input collected)
+                                       │
+                              :setup hook runs here
 #+end_example
 
-Choices are validated post-coercion, so they work with ~:type 'integer~:
+- *:type* --- convert the raw string to a typed value.  Accepts
+  ~'integer~, ~'number~, or ~'string~ (default).  Runs first so that
+  ~:choices~ can compare typed values:
 
-#+begin_src emacs-lisp
-(clime-option level ("--level") :type 'integer :choices '(1 2 3))
-#+end_src
+  #+begin_src emacs-lisp
+  (clime-option level ("--level") :type 'integer :choices '(1 2 3))
+  #+end_src
 
-~:choices~ also accepts a function for lazy evaluation --- the function
-is called at parse time and help time:
+- *:choices* --- validate against an allowed set.  Runs after ~:type~
+  so the comparison uses typed values.  Accepts a literal list or a
+  function (lazy; deferred to pass 2):
 
-#+begin_src emacs-lisp
-(clime-option format ("--format")
-  :choices (lambda () (compute-available-formats))
-  :help "Output format")
-#+end_src
+  #+begin_src emacs-lisp
+  (clime-option format ("--format") :choices '("json" "table" "csv")
+    :help "Output format")
+  #+end_src
 
-** Custom transforms with ~:coerce~
+  Invalid values produce a clear error:
 
-Apply an arbitrary function after type coercion:
+  #+begin_example
+  Error: Invalid value "xml" for --format (choose from: json, table, csv)
+  #+end_example
 
-#+begin_src emacs-lisp
-(clime-option path ("--path") :coerce #'expand-file-name
-  :help "File path (expanded)")
+- *:coerce* --- arbitrary transform after validation.  Runs after
+  ~:choices~ so you validate against user-friendly values, then
+  transform for the handler:
 
-(clime-option env ("--env") :choices '("dev" "prod") :coerce #'upcase
-  :help "Deploy target")
-;; --env dev → "DEV"
-#+end_src
+  #+begin_src emacs-lisp
+  (clime-option env ("--env") :choices '("dev" "prod") :coerce #'upcase
+    :help "Deploy target")
+  ;; user types "dev", choices validates "dev", handler gets "DEV"
+  #+end_src
 
-When combined with ~:choices~, validation runs first, then ~:coerce~.
+  Also useful for standalone transforms:
 
-** Value conformers with ~:conform~
+  #+begin_src emacs-lisp
+  (clime-option path ("--path") :coerce #'expand-file-name
+    :help "File path (expanded)")
+  #+end_src
 
-~:conform~ runs in pass 2 after env vars are applied but before
-defaults.  Unlike ~:coerce~ (which runs immediately during parsing),
-~:conform~ validates values from both CLI and env var sources.
-Defaults skip conforming --- they're developer-authored and should
-already be valid:
+- *:conform* --- pass-2 validation and normalization.  Runs after env
+  vars are applied, so it catches values from both CLI and environment.
+  Defaults skip conforming --- they're developer-authored and should
+  already be valid.  Must return the conformed value or signal an error:
 
-#+begin_src emacs-lisp
-(clime-option id ("--id")
-  :conform (lambda (val)
-             (unless (string-match-p "^[a-z0-9]\\{7\\}$" val)
-               (error "Invalid ID format: %s" val))
-             (upcase val))
-  :help "Resource ID (7-char alphanumeric)")
-#+end_src
+  #+begin_src emacs-lisp
+  (clime-option id ("--id")
+    :conform (lambda (val)
+               (unless (string-match-p "^[a-z0-9]\\{7\\}$" val)
+                 (error "Invalid ID format: %s" val))
+               (upcase val))
+    :help "Resource ID (7-char alphanumeric)")
+  #+end_src
 
-A conformer receives the value and must either return the conformed
-value or signal an error.  This is useful for:
-
-- Domain validation of external input (CLI args and env vars)
-- Normalizing values before they reach the handler
-- Cross-cutting checks shared via parameter templates (~:from~)
-
-The pipeline order is: type coercion → ~:coerce~ → choices → env vars → ~:conform~ → defaults.
+The key distinction between ~:coerce~ and ~:conform~ is /when/ they
+run: ~:coerce~ runs immediately in pass 1 (CLI input only), while
+~:conform~ runs in pass 2 (CLI + env var input, after the ~:setup~
+hook).  Use ~:coerce~ for simple transforms, ~:conform~ for
+cross-source validation.
 
 ** Environment variables
 
@@ -288,7 +351,61 @@ For individual options, override the env var name with ~:env~:
 Boolean flags accept ~1~/~true~/~yes~ and ~0~/~false~/~no~.  Multiple
 options split on comma: ~MYAPP_TAGS=dev,ci~ becomes ~("dev" "ci")~.
 
-** Aliases
+** Arguments
+
+*** Positional arguments
+
+Declare positional arguments with ~clime-arg~:
+
+#+begin_src emacs-lisp
+(clime-command show
+  :help "Show a resource"
+  (clime-arg id :help "Resource ID")
+  (clime-handler (ctx)
+    (clime-let ctx (id)
+      (format "Showing %s" id))))
+#+end_src
+
+Arguments are required by default.  Use ~:required nil~ for optional args.
+
+*** Rest args
+
+Collect all remaining positional arguments into a list:
+
+#+begin_src emacs-lisp
+(clime-command run
+  :help "Run a script"
+  (clime-arg script :help "Script name")
+  (clime-arg args :nargs :rest :required nil
+    :help "Arguments passed to the script")
+  (clime-handler (ctx)
+    (clime-let ctx (script args)
+      (format "Running %s with %s" script args))))
+#+end_src
+
+*** Stdin
+
+Use ~-~ as an argument value to read from stdin:
+
+#+begin_src bash
+echo "World" | ./greet.el hello -
+#+end_src
+
+** Commands & Groups
+
+*** Subcommands
+
+Define subcommands with ~clime-command~:
+
+#+begin_src emacs-lisp
+(clime-command install
+  :help "Install a package"
+  (clime-arg name :help "Package name")
+  (clime-handler (ctx)
+    (clime-let ctx (name) (format "Installing %s" name))))
+#+end_src
+
+*** Aliases
 
 Commands can have aliases:
 
@@ -302,7 +419,7 @@ Commands can have aliases:
 Now both ~myapp install foo~ and ~myapp i foo~ work.  Aliases are
 symbols or strings.
 
-** Command aliases for nested paths
+*** Command aliases for nested paths
 
 Use ~clime-alias-for~ to expose a nested command at a higher level
 without duplicating its definition:
@@ -327,7 +444,86 @@ time.  You can override ~:help~, ~:aliases~, ~:hidden~, and
 ~:category~ on the alias.  When ~:help~ is omitted, it inherits from
 the target.
 
-** Hidden commands and options
+*** Nested groups
+
+Organize related commands under a group:
+
+#+begin_src emacs-lisp
+(clime-group repo
+  :help "Manage repositories"
+
+  (clime-command add
+    :help "Add a repository"
+    (clime-arg name :help "Repository name")
+    (clime-arg url :help "Repository URL")
+    (clime-handler (ctx)
+      (clime-let ctx (name url)
+        (format "Added %s → %s" name url))))
+
+  (clime-command remove
+    :help "Remove a repository"
+    :aliases (rm)
+    (clime-arg name :help "Repository name")
+    (clime-handler (ctx)
+      (clime-let ctx (name) (format "Removed %s" name)))))
+#+end_src
+
+*** Inline groups
+
+Mark a group with ~:inline t~ to promote its children to the parent
+level.  Both the group prefix and the short form work:
+
+#+begin_src emacs-lisp
+(clime-group repo
+  :inline t
+  :help "Manage repositories"
+
+  (clime-command add
+    :help "Add a repository"
+    (clime-arg name :help "Repository name")
+    (clime-handler (ctx)
+      (clime-let ctx (name) (format "Added %s" name))))
+
+  (clime-command remove
+    :help "Remove a repository"
+    (clime-arg name :help "Repository name")
+    (clime-handler (ctx)
+      (clime-let ctx (name) (format "Removed %s" name)))))
+#+end_src
+
+#+begin_src bash
+./myapp.el add foo       # works (promoted)
+./myapp.el repo add foo  # also works (direct)
+#+end_src
+
+In ~--help~, inline group children appear at the parent level.  The
+group name itself is hidden from the command listing.  If a parent has
+its own child with the same name, the parent's child takes priority.
+
+*** Invocable groups
+
+A group can have its own ~:handler~ that runs when no subcommand is
+given:
+
+#+begin_src emacs-lisp
+(clime-group config
+  :help "View or modify configuration"
+
+  (clime-handler (_ctx)
+    "Configuration:\n  registry = default\n  timeout = 30s")
+
+  (clime-command set
+    :help "Set a config value"
+    (clime-arg key :help "Config key")
+    (clime-arg value :help "New value")
+    (clime-handler (ctx)
+      (clime-let ctx (key value)
+        (format "Set %s = %s" key value)))))
+#+end_src
+
+~myapp config~ shows the overview; ~myapp config set key val~ sets a value.
+
+*** Hidden commands and options
 
 Mark a command or option as ~:hidden t~ to omit it from ~--help~ while
 keeping it callable:
@@ -342,7 +538,7 @@ keeping it callable:
   :help "Enable tracing" :hidden t)
 #+end_src
 
-** Deprecation warnings
+*** Deprecation warnings
 
 Mark commands or options as ~:deprecated~ to emit a warning when used.
 The value can be ~t~ (generic) or a string (migration hint):
@@ -378,154 +574,33 @@ Warning: migrate is deprecated. Use 'upgrade' instead
 Combine ~:hidden t~ with ~:deprecated~ for silent deprecation: hidden
 from help but still warns when used.
 
-** Mutually exclusive options
+** Help & Output
 
-Use ~:mutex~ to declare options that cannot be used together.  Options
-sharing the same ~:mutex~ symbol are mutually exclusive — at most one
-may be set per invocation:
+*** Help
 
-#+begin_src emacs-lisp
-(clime-option format-json ("--json") :bool t :mutex 'output-format)
-(clime-option format-csv  ("--csv")  :bool t :mutex 'output-format)
-(clime-option format-text ("--text") :bool t :mutex 'output-format)
-#+end_src
-
-Using more than one signals an error:
-
-#+begin_example
-Error: Options --json, --csv are mutually exclusive
-#+end_example
-
-Mutex validation runs after env vars are applied, so conflicts from
-environment variables are caught too.  When any member of a mutex group
-is set (via CLI or env), defaults on sibling options are suppressed.
-
-** Negatable flags
-
-Use ~:negatable t~ to auto-generate ~--no-X~ variants for boolean flags.
-This implies boolean (no ~:bool t~ needed):
-
-#+begin_src emacs-lisp
-(clime-option color ("--color") :negatable t :default t
-  :help "Colorize output")
-#+end_src
-
-Help output:
-
-#+begin_example
-Options:
-  --color / --no-color  Colorize output
-#+end_example
-
-The ~--no-X~ form explicitly sets the param to ~nil~, enabling handlers
-to distinguish three states — unset, enabled, and disabled:
-
-#+begin_src emacs-lisp
-(clime-handler (ctx)
-  (pcase (clime-param ctx 'color 'auto)
-    ('auto (if (isatty) "color" "plain"))  ; unset → auto-detect
-    ('t    "color")                         ; --color
-    (_     "plain")))                       ; --no-color
-#+end_src
-
-All long flags on the option get negated variants.  Short flags (~-c~)
-and flags already starting with ~--no-~ are not double-negated.
-
-** Nested groups
-
-Organize related commands under a group:
-
-#+begin_src emacs-lisp
-(clime-group repo
-  :help "Manage repositories"
-
-  (clime-command add
-    :help "Add a repository"
-    (clime-arg name :help "Repository name")
-    (clime-arg url :help "Repository URL")
-    (clime-handler (ctx)
-      (clime-let ctx (name url)
-        (format "Added %s → %s" name url))))
-
-  (clime-command remove
-    :help "Remove a repository"
-    :aliases (rm)
-    (clime-arg name :help "Repository name")
-    (clime-handler (ctx)
-      (clime-let ctx (name) (format "Removed %s" name)))))
-#+end_src
-
-** Inline groups
-
-Mark a group with ~:inline t~ to promote its children to the parent
-level.  Both the group prefix and the short form work:
-
-#+begin_src emacs-lisp
-(clime-group repo
-  :inline t
-  :help "Manage repositories"
-
-  (clime-command add
-    :help "Add a repository"
-    (clime-arg name :help "Repository name")
-    (clime-handler (ctx)
-      (clime-let ctx (name) (format "Added %s" name))))
-
-  (clime-command remove
-    :help "Remove a repository"
-    (clime-arg name :help "Repository name")
-    (clime-handler (ctx)
-      (clime-let ctx (name) (format "Removed %s" name)))))
-#+end_src
+~--help~ and ~-h~ are recognized at every level.  Both orderings work:
 
 #+begin_src bash
-./myapp.el add foo       # works (promoted)
-./myapp.el repo add foo  # also works (direct)
+./myapp.el install --help   # help for install
+./myapp.el --help install   # same thing
+./myapp.el --help           # app-level help
 #+end_src
 
-In ~--help~, inline group children appear at the parent level.  The
-group name itself is hidden from the command listing.  If a parent has
-its own child with the same name, the parent's child takes priority.
+Usage errors include a hint:
 
-** Invocable groups
+#+begin_example
+Error: Missing required argument <name>
+Try 'myapp install --help' for more information.
+#+end_example
 
-A group can have its own ~:handler~ that runs when no subcommand is
-given:
+Multiline ~:help~ strings are truncated to the first line in command
+listings, and shown in full in detailed command help.
 
-#+begin_src emacs-lisp
-(clime-group config
-  :help "View or modify configuration"
+Help text wraps to the terminal width, auto-detected from the
+~COLUMNS~ environment variable (fallback 80, minimum 40).  Override
+with the ~clime-help-width~ variable.
 
-  (clime-handler (_ctx)
-    "Configuration:\n  registry = default\n  timeout = 30s")
-
-  (clime-command set
-    :help "Set a config value"
-    (clime-arg key :help "Config key")
-    (clime-arg value :help "New value")
-    (clime-handler (ctx)
-      (clime-let ctx (key value)
-        (format "Set %s = %s" key value)))))
-#+end_src
-
-~myapp config~ shows the overview; ~myapp config set key val~ sets a value.
-
-** Rest args
-
-Collect all remaining positional arguments into a list:
-
-#+begin_src emacs-lisp
-(clime-command run
-  :help "Run a script"
-  (clime-arg script :help "Script name")
-  (clime-arg args :nargs :rest :required nil
-    :help "Arguments passed to the script")
-  (clime-handler (ctx)
-    (clime-let ctx (script args)
-      (format "Running %s with %s" script args))))
-#+end_src
-
-** Epilog
+*** Epilog
 
 Add free-form text after the auto-generated help with ~:epilog~:
 
@@ -541,35 +616,7 @@ Add free-form text after the auto-generated help with ~:epilog~:
 
 Commands and groups support ~:epilog~ too.
 
-** ~:doc~ alias
-
-~:doc~ is an alias for ~:help~ in the DSL:
-
-#+begin_src emacs-lisp
-(clime-command show
-  :doc "Show a resource"
-  ...)
-#+end_src
-
-** JSON output mode
-
-Set ~:json-mode t~ on the app to auto-inject a ~--json~ flag.
-When ~--json~ is set, ~clime-output-mode~ is bound to ~'json~ and handler
-return values are encoded as JSON.  Handlers can check
-~(clime-output-mode-json-p)~ to vary their output format:
-
-#+begin_src emacs-lisp
-(clime-app myapp
-  :version "1.0"
-  :json-mode t
-  ...)
-#+end_src
-
-#+begin_src bash
-./myapp.el show --json 123
-#+end_src
-
-** Categories in help
+*** Categories in help
 
 Use ~:category~ on options, commands, or inline groups to organize
 ~--help~ into named sections.  Items sharing a category appear under
@@ -631,7 +678,27 @@ Nested inline groups compose category paths --- an inner group with
 ~:category "Config"~ inside an outer ~:category "Admin"~ produces
 "Admin / Config:" in help.
 
-** Ancestor option propagation
+*** JSON output mode
+
+Set ~:json-mode t~ on the app to auto-inject a ~--json~ flag.
+When ~--json~ is set, ~clime-output-mode~ is bound to ~'json~ and handler
+return values are encoded as JSON.  Handlers can check
+~(clime-output-mode-json-p)~ to vary their output format:
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+  :json-mode t
+  ...)
+#+end_src
+
+#+begin_src bash
+./myapp.el show --json 123
+#+end_src
+
+** Advanced
+
+*** Ancestor option propagation
 
 Options declared at any level are automatically available to all
 descendants.  A ~--verbose~ flag on the app or on a group can be used
@@ -660,7 +727,7 @@ from any child command:
 In ~--help~, inherited options appear in a separate "Global Options:"
 section.
 
-** Setup hook
+*** Setup hook
 
 The ~:setup~ hook runs after pass-1 parsing (all values extracted from
 argv) but before pass-2 finalization (dynamic ~:choices~ validation,
@@ -691,7 +758,7 @@ Static ~:choices~ (literal lists) are validated immediately in pass 1.
 Dynamic ~:choices~ (functions) are deferred to pass 2 after the setup
 hook has run.
 
-** Parameter templates
+*** Parameter templates
 
 Define reusable option or arg specs with ~clime-defopt~ and
 ~clime-defarg~, then reference them with ~:from~:
@@ -738,10 +805,17 @@ All DSL shorthands (~:bool t~, ~:separator~) work in templates.
   (clime-handler (ctx) ...))
 #+end_src
 
-** ~clime-params-plist~
+*** Context accessors
 
-Convert context params to a keyword plist, useful for passing parsed
-values to other functions:
+~clime-let~ destructures context params into let-bindings:
+
+#+begin_src emacs-lisp
+(clime-handler (ctx)
+  (clime-let ctx (name verbose (tags tag))
+    (format "name=%s verbose=%s tags=%s" name verbose tags)))
+#+end_src
+
+~clime-params-plist~ converts context params to a keyword plist:
 
 #+begin_src emacs-lisp
 (clime-handler (ctx)
@@ -753,10 +827,9 @@ values to other functions:
   (my-other-function (clime-params-plist ctx 'package 'force)))
 #+end_src
 
-** ~clime-param~
-
-Get a param value with a default for absent params.  Unlike
-~clime-ctx-get~, distinguishes between explicitly ~nil~ and absent:
+~clime-param~ gets a param value with a default for absent params.
+Unlike ~clime-ctx-get~, it distinguishes between explicitly ~nil~ and
+absent --- useful for negatable flags:
 
 #+begin_src emacs-lisp
 (clime-param ctx 'color 'auto)
@@ -765,18 +838,9 @@ Get a param value with a default for absent params.  Unlike
 ;; => 'auto   when neither was passed
 #+end_src
 
-Use ~clime-ctx-get~ or ~clime-let~ for simple binary params, and
-~clime-param~ when you need ternary state (common with negatable flags).
+** Interactive
 
-** Stdin
-
-Use ~-~ as an argument value to read from stdin:
-
-#+begin_src bash
-echo "World" | ./greet.el hello -
-#+end_src
-
-** Interactive UI (~clime-invoke~)
+*** Interactive UI (~clime-invoke~)
 
 Any ~clime-app~ can be invoked interactively from Emacs via
 ~clime-invoke~, which auto-generates a [[https://magit.vc/manual/transient/][transient.el]] menu:
@@ -794,42 +858,35 @@ for positional args, calls ~clime-run~, and displays output in the
 
 Requires the ~transient~ package (ships with Emacs 29+).
 
-** Help
+*** Hot-reload (~clime-reload~)
 
-~--help~ and ~-h~ are recognized at every level.  Both orderings work:
-
-#+begin_src bash
-./myapp.el install --help   # help for install
-./myapp.el --help install   # same thing
-./myapp.el --help           # app-level help
-#+end_src
-
-Usage errors include a hint:
-
-#+begin_example
-Error: Missing required argument <name>
-Try 'myapp install --help' for more information.
-#+end_example
-
-Multiline ~:help~ strings are truncated to the first line in command
-listings, and shown in full in detailed command help.
+~clime-reload~ force-reloads all clime modules in dependency order,
+including optional modules (~clime-invoke~, ~clime-make~) if already
+loaded.  Useful during development to pick up changes without
+restarting Emacs.
 
 * DSL Reference
 
-| Macro            | Purpose                            | Key arguments                                                             |
-|------------------+------------------------------------+---------------------------------------------------------------------------|
-| ~clime-app~      | Define a CLI application           | ~:version~, ~:help~, ~:env-prefix~, ~:json-mode~, ~:epilog~, ~:setup~   |
-| ~clime-command~  | Define a subcommand                | ~:help~, ~:aliases~, ~:hidden~, ~:deprecated~, ~:epilog~, ~:category~    |
-| ~clime-group~    | Nest related commands              | ~:help~, ~:aliases~, ~:hidden~, ~:deprecated~, ~:inline~, ~:epilog~, ~:category~ |
-| ~clime-option~   | Declare a named option             | ~:bool~, ~:count~, ~:multiple~, ~:negatable~, ~:mutex~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:env~, ~:category~, ~:deprecated~, ~:from~ |
-| ~clime-arg~      | Declare a positional argument      | ~:nargs~, ~:type~, ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~, ~:deprecated~, ~:from~ |
-| ~clime-defopt~   | Define a reusable option template  | Any option slot except ~:name~, ~:flags~                                 |
-| ~clime-defarg~   | Define a reusable arg template     | Any arg slot except ~:name~                                              |
-| ~clime-alias-for~ | Alias for a nested command        | ~:help~, ~:aliases~, ~:hidden~, ~:category~                             |
-| ~clime-handler~  | Attach a handler to a command      | ~(ctx)~ --- receives the parse context                                   |
-| ~clime-let~      | Destructure context in a handler   | ~ctx (var1 var2 ...)~ --- binds option/arg values                        |
+All command-like forms (~clime-command~, ~clime-group~, ~clime-app~)
+accept: ~:help~ (~:doc~ is an alias), ~:aliases~, ~:hidden~,
+~:deprecated~, ~:epilog~, ~:category~.
 
-~:doc~ is an alias for ~:help~ on commands, groups, and apps.
+All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
+~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~,
+~:deprecated~, ~:from~.
+
+| Macro              | Purpose                          | Distinctive arguments                                                 |
+|--------------------+----------------------------------+-----------------------------------------------------------------------|
+| ~clime-app~        | Define a CLI application         | ~:version~, ~:env-prefix~, ~:json-mode~, ~:setup~                    |
+| ~clime-command~    | Define a subcommand              | (uses shared command slots)                                           |
+| ~clime-group~      | Nest related commands            | ~:inline~                                                             |
+| ~clime-option~     | Declare a named option           | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:mutex~, ~:env~, ~:category~ |
+| ~clime-arg~        | Declare a positional argument    | ~:nargs~, ~:required~                                                 |
+| ~clime-defopt~     | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
+| ~clime-defarg~     | Reusable arg template            | Any arg slot except ~:name~                                           |
+| ~clime-alias-for~  | Alias for a nested command       | Path to target command                                                |
+| ~clime-handler~    | Attach a handler                 | ~(ctx)~ --- receives the parse context                                |
+| ~clime-let~        | Destructure context in a handler | ~ctx (var1 var2 ...)~ --- binds option/arg values                     |
 
 ~:bool t~ is shorthand for ~:nargs 0~ (boolean flag, DSL only).
 
