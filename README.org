@@ -93,6 +93,7 @@ So ~./myapp.el hello world~ just works from your shell.
 - Boolean flags, count flags (~-vvv~), repeatable options (~--tag a --tag b~)
 - Negatable flags (~--color / --no-color~) with ternary state
 - Mutually exclusive options (~:mutex~)
+- Option dependencies (~:requires~) --- coupled or one-way
 - Collapsed short flags (~-abc~ expands to ~-a -b -c~)
 - ~--flag=value~ syntax
 - Choices validation (~:choices '("json" "csv")~), including lazy ~:choices~ functions
@@ -175,6 +176,28 @@ Split a single value into a list by a delimiter.  Implies ~:multiple t~:
 This also affects env var parsing: ~MYAPP_TAGS=dev,ci~ produces the
 same result.
 
+*** Required options
+
+Mark an option as ~:required t~ to enforce that it must be provided.
+Unlike positional args (which are required by default), options are
+optional by default --- ~:required~ makes them mandatory:
+
+#+begin_src emacs-lisp
+(clime-option token ("--token") :required t
+  :help "API authentication token")
+#+end_src
+
+#+begin_example
+Error: Missing required option --token for myapp deploy
+#+end_example
+
+This is especially useful with ~:env-prefix~ --- the option can be
+satisfied via an environment variable instead of the command line:
+
+#+begin_src bash
+MYAPP_TOKEN=secret ./myapp.el deploy   # --token satisfied via env
+#+end_src
+
 *** Negatable flags
 
 Use ~:negatable t~ to auto-generate ~--no-X~ variants for boolean flags.
@@ -227,6 +250,31 @@ Error: Options --json, --csv are mutually exclusive
 Mutex validation runs after env vars are applied, so conflicts from
 environment variables are caught too.  When any member of a mutex group
 is set (via CLI or env), defaults on sibling options are suppressed.
+
+*** Option dependencies
+
+Use ~:requires~ to declare that an option depends on other options.
+When the option is set, all required options must also be present:
+
+#+begin_src emacs-lisp
+;; Bidirectional: both must be used together
+(clime-option skip ("--skip") :requires '(reason))
+(clime-option reason ("--reason") :requires '(skip))
+
+;; One-way: --output-file needs --format, but --format works alone
+(clime-option output-file ("--output-file") :requires '(format))
+(clime-option format ("--format"))
+#+end_src
+
+Using ~--skip~ without ~--reason~ signals an error:
+
+#+begin_example
+Error: --skip requires --reason
+#+end_example
+
+An option can require multiple others: ~:requires '(a b c)~ means all
+three must be set.  Env-var-set values satisfy the requirement;
+defaults do not.
 
 ** Parsing
 
@@ -880,7 +928,7 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 | ~clime-app~        | Define a CLI application         | ~:version~, ~:env-prefix~, ~:json-mode~, ~:setup~                    |
 | ~clime-command~    | Define a subcommand              | (uses shared command slots)                                           |
 | ~clime-group~      | Nest related commands            | ~:inline~                                                             |
-| ~clime-option~     | Declare a named option           | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:mutex~, ~:env~, ~:category~ |
+| ~clime-option~     | Declare a named option           | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:mutex~, ~:requires~, ~:env~, ~:category~ |
 | ~clime-arg~        | Declare a positional argument    | ~:nargs~, ~:required~                                                 |
 | ~clime-defopt~     | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
 | ~clime-defarg~     | Reusable arg template            | Any arg slot except ~:name~                                           |

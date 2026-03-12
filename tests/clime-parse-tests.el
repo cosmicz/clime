@@ -437,6 +437,36 @@
     (should-error (clime-parse app '("deploy"))
                   :type 'clime-usage-error)))
 
+(ert-deftest clime-test-parse/required-option-satisfied-by-cli ()
+  "Required option satisfied via CLI succeeds."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                 :required t))
+         (cmd (clime-make-command :name "deploy"
+                                  :handler (lambda (ctx)
+                                             (clime-ctx-get ctx 'token))
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "deploy" cmd))))
+         (output (with-output-to-string
+                   (clime-run app '("deploy" "--token" "abc")))))
+    (should (equal output "abc"))))
+
+(ert-deftest clime-test-parse/required-option-satisfied-by-env ()
+  "Required option satisfied via env var succeeds."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                 :required t))
+         (cmd (clime-make-command :name "deploy"
+                                  :handler (lambda (ctx)
+                                             (clime-ctx-get ctx 'token))
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1" :env-prefix "TEST_RO"
+                              :children (list (cons "deploy" cmd)))))
+    (let ((process-environment (append '("TEST_RO_TOKEN=from-env")
+                                       process-environment)))
+      (let ((output (with-output-to-string
+                      (clime-run app '("deploy")))))
+        (should (equal output "from-env"))))))
+
 (ert-deftest clime-test-parse/short-bundle-non-boolean-error ()
   "Short bundle with non-boolean flag signals usage error."
   (let* ((opt-v (clime-make-option :name 'verbose :flags '("-v") :count t))

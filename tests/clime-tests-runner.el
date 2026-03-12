@@ -40,6 +40,7 @@ Configure project-specific settings for clean test execution."
 (require 'clime-deprecated-tests)
 (require 'clime-mutex-tests)
 (require 'clime-negatable-tests)
+(require 'clime-requires-tests)
 (require 'clime-integration-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────

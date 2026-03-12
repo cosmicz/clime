@@ -54,6 +54,11 @@
   are validated to be mutually exclusive — at most one may be set per
   invocation.  Defaults on mutex siblings are suppressed when any member
   is explicitly set (CLI or env var).
+- `:requires` slot on options: declare directional dependencies between
+  options.  `:requires '(reason)` on `--skip` means `--skip` can only
+  be used when `--reason` is also provided.  Validates after env vars
+  are applied; defaults do not satisfy the requirement.  Supports
+  one-way deps, multi-deps, and cross-level (ancestor) options.
 
 ### Fixed
 

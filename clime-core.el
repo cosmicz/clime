@@ -40,7 +40,8 @@
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
   (mutex nil :type (or symbol null) :documentation "Mutex group symbol. Options sharing a mutex are mutually exclusive.")
-  (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0)."))
+  (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0).")
+  (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.

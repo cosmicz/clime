@@ -456,6 +456,41 @@ Signal `clime-usage-error' if multiple options in the same mutex group are set."
                                             set-opts ", ")))))))
      groups)))
 
+(defun clime--check-requires (nodes params)
+  "Check :requires constraints across NODES for PARAMS.
+Signal `clime-usage-error' if an option with :requires is set but any
+of its required options are absent from PARAMS."
+  (let ((all-opts '()))
+    ;; Collect all options for flag lookup
+    (dolist (node nodes)
+      (dolist (opt (clime-node-options node))
+        (push opt all-opts)))
+    ;; Check each option with :requires
+    (dolist (node nodes)
+      (dolist (opt (clime-node-options node))
+        (when-let* ((reqs (clime-option-requires opt)))
+          (when (plist-member params (clime-option-name opt))
+            (let ((missing (cl-remove-if
+                            (lambda (req-name)
+                              (plist-member params req-name))
+                            reqs)))
+              (when missing
+                (let* ((flag (car (clime-option-flags opt)))
+                       (missing-flags
+                        (mapcar (lambda (name)
+                                  (let ((req-opt (cl-find-if
+                                                  (lambda (o)
+                                                    (eq (clime-option-name o) name))
+                                                  all-opts)))
+                                    (if req-opt
+                                        (car (clime-option-flags req-opt))
+                                      (format "--%s" name))))
+                                missing)))
+                  (signal 'clime-usage-error
+                          (list (format "%s requires %s"
+                                        flag
+                                        (mapconcat #'identity missing-flags ", ")))))))))))))
+
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
 (defun clime-parse (app argv &optional skip-finalize)
@@ -721,6 +756,7 @@ defaults, and checks required params.  Returns the updated RESULT."
     (setq params (clime--run-conformers visited-nodes params))
     ;; Mutex check (after env+conform, before defaults)
     (clime--check-mutex visited-nodes params)
+    (clime--check-requires visited-nodes params)
     ;; Apply defaults (mutex-aware: skips defaults when a sibling is set)
     (setq params (clime--apply-defaults visited-nodes params))
     (clime--check-required visited-nodes params display-path)
