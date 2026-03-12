@@ -124,27 +124,35 @@ ARGS is a plist of slot values."
   (inline nil :type boolean :documentation "If non-nil, promote children to parent level for dispatch and help.")
   (handler nil :type (or function null) :documentation "Handler function, called with context.")
   (epilog nil :type (or string null) :documentation "Free-form text appended after auto-generated help.")
-  (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning)."))
+  (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
+  (locked-vals nil :type list :documentation "Alist of (name . value) injected into params during finalize.  Locked vals hide their options from CLI and help."))
+
+;;; ─── Alias ──────────────────────────────────────────────────────────────
+
+(cl-defstruct (clime-alias (:include clime-node)
+                           (:constructor clime-alias--create)
+                           (:copier nil))
+  "Alias reference to another node in the CLI tree.
+Lives in `children' before resolution.  During `clime--resolve-aliases',
+each alias is replaced with a copy of its target command (or group)."
+  (target nil :type list :documentation "Path to target command, e.g. (\"agents\" \"start\").")
+  (defaults nil :type list :documentation "Alist of (name . value) to override defaults on copied options.")
+  (vals nil :type list :documentation "Alist of (name . value) for locked params, hidden from CLI and help."))
 
 ;;; ─── Command ────────────────────────────────────────────────────────────
 
 (cl-defstruct (clime-command (:include clime-node)
                              (:constructor clime-command--create)
                              (:copier nil))
-  "A leaf command in the CLI tree."
-  (alias-for nil :type list :documentation "Path to target command, e.g. (\"agents\" \"start\"). Nil for normal commands.")
-  (alias-defaults nil :type list :documentation "Alist of (name . value) to override defaults on copied options.")
-  (alias-vals nil :type list :documentation "Alist of (name . value) for locked params, hidden from CLI and help."))
+  "A leaf command in the CLI tree.")
 
 (defun clime-make-command (&rest args)
   "Create a `clime-command' with validation.
 Required keyword args: :name (string), :handler (function).
-When :alias-for is set, :handler is not required (copied from target).
 ARGS is a plist of slot values."
   (unless (plist-get args :name)
     (error "clime-make-command: :name is required"))
-  (unless (or (plist-get args :handler)
-              (plist-get args :alias-for))
+  (unless (plist-get args :handler)
     (error "clime-make-command: :handler is required"))
   (apply #'clime-command--create args))
 
@@ -178,15 +186,15 @@ Also runs ancestor collision checks after parent refs are established."
 
 ;;; ─── Alias Resolution ───────────────────────────────────────────────────
 
-(defun clime--resolve-alias-1 (cmd app visited)
-  "Resolve a single alias CMD against APP root.
-VISITED is a list of already-visited command names for cycle detection.
-Returns the resolved target command (a `clime-command' without alias-for)."
-  (let ((target-path (clime-command-alias-for cmd)))
+(defun clime--resolve-alias-1 (alias app visited)
+  "Resolve a single ALIAS node against APP root.
+VISITED is a list of already-visited node names for cycle detection.
+Returns the resolved target command (not an alias)."
+  (let ((target-path (clime-alias-target alias)))
     (unless target-path
-      (error "clime--resolve-alias-1: command %s has no alias-for" (clime-node-name cmd)))
-    (when (member (clime-node-name cmd) visited)
-      (error "Circular alias chain: %s" (string-join (append visited (list (clime-node-name cmd))) " → ")))
+      (error "clime--resolve-alias-1: alias %s has no target" (clime-node-name alias)))
+    (when (member (clime-node-name alias) visited)
+      (error "Circular alias chain: %s" (string-join (append visited (list (clime-node-name alias))) " → ")))
     ;; Walk the path from root
     (let ((node app))
       (dolist (step target-path)
@@ -194,75 +202,84 @@ Returns the resolved target command (a `clime-command' without alias-for)."
                           (clime-group-find-child node step))))
           (unless child
             (error "Alias %s: target path %s not found at step \"%s\""
-                   (clime-node-name cmd)
+                   (clime-node-name alias)
                    (mapconcat #'identity target-path " → ")
                    step))
           (setq node child)))
       ;; Must resolve to a command, not a group
       (unless (clime-command-p node)
-        (error "Alias %s: target %s is a group, not a command"
-               (clime-node-name cmd)
+        (error "Alias %s: target %s is not a command"
+               (clime-node-name alias)
                (mapconcat #'identity target-path " → ")))
       ;; If target is itself an alias, resolve transitively
-      (if (clime-command-alias-for node)
-          (clime--resolve-alias-1 node app (cons (clime-node-name cmd) visited))
+      (if (clime-alias-p node)
+          (clime--resolve-alias-1 node app (cons (clime-node-name alias) visited))
         node))))
 
 (defun clime--resolve-aliases (app)
-  "Resolve all alias-for commands in APP's tree.
-Walk the tree, find commands with non-nil `alias-for', resolve them
+  "Resolve all alias commands in APP's tree.
+Walk the tree, find commands with non-nil `alias', resolve them
 by copying args, options, and handler from the target.  Idempotent."
   (clime--resolve-aliases-walk app app))
 
 (defun clime--resolve-aliases-walk (node app)
-  "Walk NODE's subtree resolving aliases against APP root."
+  "Walk NODE's subtree resolving aliases against APP root.
+Alias nodes are replaced in-place in the children alist with
+resolved command copies."
   (when (clime-group-p node)
     (dolist (entry (clime-group-children node))
       (let ((child (cdr entry)))
         (cond
-         ;; Command with alias-for: resolve it
-         ((and (clime-command-p child)
-               (clime-command-alias-for child))
-          (let ((target (clime--resolve-alias-1 child app nil))
-                (defaults (clime-command-alias-defaults child))
-                (vals (clime-command-alias-vals child)))
-            ;; Copy from target, preserving alias's own overrides
-            (setf (clime-node-args child) (clime-node-args target))
-            (setf (clime-node-options child)
-                  (copy-sequence (clime-node-options target)))
-            (setf (clime-node-handler child) (clime-node-handler target))
-            (unless (clime-node-help child)
-              (setf (clime-node-help child) (clime-node-help target)))
-            (unless (clime-node-epilog child)
-              (setf (clime-node-epilog child) (clime-node-epilog target)))
+         ;; Alias node: resolve and replace
+         ((clime-alias-p child)
+          (let* ((target (clime--resolve-alias-1 child app nil))
+                 (defaults (clime-alias-defaults child))
+                 (vals (clime-alias-vals child))
+                 ;; Build resolved command with alias's metadata overlay
+                 (resolved (clime-command--create
+                            :name (clime-node-name child)
+                            :handler (clime-node-handler target)
+                            :args (clime-node-args target)
+                            :options (copy-sequence (clime-node-options target))
+                            :help (or (clime-node-help child)
+                                      (clime-node-help target))
+                            :epilog (or (clime-node-epilog child)
+                                        (clime-node-epilog target))
+                            :category (clime-node-category child)
+                            :hidden (clime-node-hidden child)
+                            :aliases (clime-node-aliases child)
+                            :deprecated (clime-node-deprecated child))))
             ;; Apply :defaults — patch :default on copied options
-            (dolist (entry defaults)
-              (let* ((name (car entry))
-                     (val (cdr entry))
+            (dolist (dfl defaults)
+              (let* ((name (car dfl))
+                     (val (cdr dfl))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
-                                      (clime-node-options child))))
+                                      (clime-node-options resolved))))
                 (unless opt
                   (error "Alias %s: :defaults names unknown option `%s'"
                          (clime-node-name child) name))
                 ;; Replace with a copy to avoid mutating target's option
                 (let ((new-opt (copy-sequence opt)))
                   (setf (clime-option-default new-opt) val)
-                  (setf (clime-node-options child)
+                  (setf (clime-node-options resolved)
                         (mapcar (lambda (o) (if (eq o opt) new-opt o))
-                                (clime-node-options child))))))
+                                (clime-node-options resolved))))))
             ;; Apply :vals — remove options from list (hidden from CLI/help)
-            (dolist (entry vals)
-              (let* ((name (car entry))
+            (dolist (val-entry vals)
+              (let* ((name (car val-entry))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
-                                      (clime-node-options child))))
+                                      (clime-node-options resolved))))
                 (unless opt
                   (error "Alias %s: :vals names unknown option `%s'"
                          (clime-node-name child) name))
-                (setf (clime-node-options child)
+                (setf (clime-node-options resolved)
                       (cl-remove-if (lambda (o) (eq (clime-option-name o) name))
-                                    (clime-node-options child)))))
-            ;; Mark as resolved
-            (setf (clime-command-alias-for child) nil)))
+                                    (clime-node-options resolved)))))
+            ;; Store vals for injection during finalize
+            (when vals
+              (setf (clime-node-locked-vals resolved) vals))
+            ;; Replace alias with resolved command in children
+            (setcdr entry resolved)))
          ;; Group: recurse
          ((clime-group-p child)
           (clime--resolve-aliases-walk child app)))))))

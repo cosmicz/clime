@@ -31,11 +31,11 @@
          (grp (clime-make-group :name "agents"
                                 :help "Manage agents"
                                 :children (list (cons "start" cmd-start))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "start"
                  :help "Start an agent (shortcut)"
                  :category "Shortcuts"
-                 :alias-for '("agents" "start"))))
+                 :target '("agents" "start"))))
     (clime-make-app :name "myapp"
                     :children (list (cons "agents" grp)
                                     (cons "start" alias)))))
@@ -78,9 +78,9 @@
                                    :handler #'ignore))
          (grp (clime-make-group :name "agents"
                                 :children (list (cons "stop" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "stop"
-                 :alias-for '("agents" "stop")))
+                 :target '("agents" "stop")))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "agents" grp)
                                               (cons "stop" alias)))))
@@ -88,12 +88,22 @@
     (let ((sc (cdr (assoc "stop" (clime-group-children app)))))
       (should (equal "Stop an agent" (clime-node-help sc))))))
 
-(ert-deftest clime-test-alias-for/clears-target-after-resolve ()
-  "After resolution, alias-for is nil (resolved marker)."
+(ert-deftest clime-test-alias-for/alias-is-node-before-resolve ()
+  "Before resolution, alias is a clime-alias node (includes clime-node)."
+  (let* ((app (clime-test--alias-for-app))
+         (child (cdr (assoc "start" (clime-group-children app)))))
+    (should (clime-alias-p child))
+    (should (clime-node-p child))
+    (should-not (clime-command-p child))
+    (should (equal "Start an agent (shortcut)" (clime-node-help child)))))
+
+(ert-deftest clime-test-alias-for/replaced-with-command-after-resolve ()
+  "After resolution, alias is replaced with a real command in children."
   (let* ((app (clime-test--alias-for-app))
          (_ (clime--resolve-aliases app))
-         (alias (cdr (assoc "start" (clime-group-children app)))))
-    (should-not (clime-command-alias-for alias))))
+         (resolved (cdr (assoc "start" (clime-group-children app)))))
+    (should (clime-command-p resolved))
+    (should-not (clime-alias-p resolved))))
 
 (ert-deftest clime-test-alias-for/idempotent ()
   "Calling resolve-aliases twice is safe."
@@ -107,9 +117,9 @@
 
 (ert-deftest clime-test-alias-for/error-target-not-found ()
   "Error when alias target path does not resolve."
-  (let* ((alias (clime-command--create
+  (let* ((alias (clime-alias--create
                  :name "start"
-                 :alias-for '("nonexistent" "start")))
+                 :target '("nonexistent" "start")))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "start" alias)))))
     (should-error (clime--resolve-aliases app) :type 'error)))
@@ -118,9 +128,9 @@
   "Error when alias target resolves to a group, not a command."
   (let* ((grp (clime-make-group :name "agents"
                                 :children nil))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "agents-sc"
-                 :alias-for '("agents")))
+                 :target '("agents")))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "agents" grp)
                                               (cons "agents-sc" alias)))))
@@ -128,12 +138,12 @@
 
 (ert-deftest clime-test-alias-for/error-circular ()
   "Error on circular alias chain."
-  (let* ((sc-a (clime-command--create
+  (let* ((sc-a (clime-alias--create
                 :name "a"
-                :alias-for '("b")))
-         (sc-b (clime-command--create
+                :target '("b")))
+         (sc-b (clime-alias--create
                 :name "b"
-                :alias-for '("a")))
+                :target '("a")))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "a" sc-a)
                                               (cons "b" sc-b)))))
@@ -149,12 +159,12 @@
                                    :args (list (clime-make-arg :name 'name))))
          (grp (clime-make-group :name "agents"
                                 :children (list (cons "start" cmd))))
-         (sc1 (clime-command--create
+         (sc1 (clime-alias--create
                :name "go"
-               :alias-for '("agents" "start")))
-         (sc2 (clime-command--create
+               :target '("agents" "start")))
+         (sc2 (clime-alias--create
                :name "g"
-               :alias-for '("go")))
+               :target '("go")))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "agents" grp)
                                               (cons "go" sc1)
@@ -240,9 +250,9 @@
 ;;; ─── :defaults ─────────────────────────────────────────────────────
 
 (ert-deftest clime-test-alias-for/defaults-struct-slot ()
-  "alias-defaults slot exists and defaults to nil."
-  (let ((cmd (clime-command--create :name "x" :handler #'ignore)))
-    (should-not (clime-command-alias-defaults cmd))))
+  "Alias struct defaults slot exists and defaults to nil."
+  (let ((alias (clime-alias--create :target '("x"))))
+    (should-not (clime-alias-defaults alias))))
 
 (ert-deftest clime-test-alias-for/defaults-patches-option-default ()
   "alias :defaults overrides the :default on copied options."
@@ -252,10 +262,10 @@
                                    :options (list opt)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-defaults '((format . "csv"))))
+                 :target '("report" "show")
+                 :defaults '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
@@ -272,10 +282,10 @@
                                    :options (list opt)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-defaults '((format . "csv"))))
+                 :target '("report" "show")
+                 :defaults '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
@@ -291,10 +301,10 @@
                                    :options (list opt)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-defaults '((format . "csv"))))
+                 :target '("report" "show")
+                 :defaults '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
@@ -310,10 +320,10 @@
                                    :options (list opt)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-defaults '((format . "csv"))))
+                 :target '("report" "show")
+                 :defaults '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
@@ -327,10 +337,10 @@
   (let* ((cmd (clime-make-command :name "show" :handler #'ignore))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "bad"
-                 :alias-for '("report" "show")
-                 :alias-defaults '((nonexistent . "x"))))
+                 :target '("report" "show")
+                 :defaults '((nonexistent . "x"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "bad" alias)))))
@@ -339,9 +349,9 @@
 ;;; ─── :vals ─────────────────────────────────────────────────────────
 
 (ert-deftest clime-test-alias-for/vals-struct-slot ()
-  "alias-vals slot exists and defaults to nil."
-  (let ((cmd (clime-command--create :name "x" :handler #'ignore)))
-    (should-not (clime-command-alias-vals cmd))))
+  "Alias struct vals slot exists and defaults to nil."
+  (let ((alias (clime-alias--create :target '("x"))))
+    (should-not (clime-alias-vals alias))))
 
 (ert-deftest clime-test-alias-for/vals-removes-option-from-list ()
   "alias :vals removes the option from the command's options list."
@@ -351,10 +361,10 @@
                                    :options (list opt-a opt-b)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-vals '((format . "csv"))))
+                 :target '("report" "show")
+                 :vals '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
@@ -364,6 +374,24 @@
       (should (= 1 (length (clime-node-options resolved))))
       (should (eq 'verbose (clime-option-name (car (clime-node-options resolved))))))))
 
+(ert-deftest clime-test-alias-for/vals-stored-as-locked-vals ()
+  "alias :vals are stored as locked-vals on the resolved command."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                   :options (list opt)))
+         (grp (clime-make-group :name "report"
+                                :children (list (cons "show" cmd))))
+         (alias (clime-alias--create
+                 :name "show-csv"
+                 :target '("report" "show")
+                 :vals '((format . "csv"))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)
+                                              (cons "show-csv" alias)))))
+    (clime--resolve-aliases app)
+    (let ((resolved (cdr (assoc "show-csv" (clime-group-children app)))))
+      (should (equal '((format . "csv")) (clime-node-locked-vals resolved))))))
+
 (ert-deftest clime-test-alias-for/vals-injected-into-params ()
   "alias :vals value appears in parsed params."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")))
@@ -371,10 +399,10 @@
                                    :options (list opt)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-vals '((format . "csv"))))
+                 :target '("report" "show")
+                 :vals '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
@@ -389,10 +417,10 @@
                                    :options (list opt)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-vals '((format . "csv"))))
+                 :target '("report" "show")
+                 :vals '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
@@ -404,10 +432,10 @@
   (let* ((cmd (clime-make-command :name "show" :handler #'ignore))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "bad"
-                 :alias-for '("report" "show")
-                 :alias-vals '((nonexistent . "x"))))
+                 :target '("report" "show")
+                 :vals '((nonexistent . "x"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "bad" alias)))))
@@ -467,10 +495,10 @@
                                    :options (list opt)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-defaults '((format . "csv"))))
+                 :target '("report" "show")
+                 :defaults '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
@@ -487,10 +515,10 @@
                                    :options (list opt)))
          (grp (clime-make-group :name "report"
                                 :children (list (cons "show" cmd))))
-         (alias (clime-command--create
+         (alias (clime-alias--create
                  :name "show-csv"
-                 :alias-for '("report" "show")
-                 :alias-vals '((format . "csv"))))
+                 :target '("report" "show")
+                 :vals '((format . "csv"))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))

@@ -236,9 +236,13 @@ Supports :defaults and :vals alists for preset/locked option values."
                        :defaults :vals)))
          (keywords (car extracted)))
     `(cons ,name-str
-           (clime-make-command
+           (clime-alias--create
             :name ,name-str
-            :alias-for ',path-strings
+            :target ',path-strings
+            ,@(when (plist-get keywords :defaults)
+                `(:defaults ,(plist-get keywords :defaults)))
+            ,@(when (plist-get keywords :vals)
+                `(:vals ,(plist-get keywords :vals)))
             ,@(when (plist-get keywords :help)
                 `(:help ,(plist-get keywords :help)))
             ,@(when (plist-get keywords :aliases)
@@ -248,11 +252,7 @@ Supports :defaults and :vals alists for preset/locked option values."
             ,@(when (plist-get keywords :category)
                 `(:category ,(plist-get keywords :category)))
             ,@(when (plist-get keywords :deprecated)
-                `(:deprecated ,(plist-get keywords :deprecated)))
-            ,@(when (plist-get keywords :defaults)
-                `(:alias-defaults ,(plist-get keywords :defaults)))
-            ,@(when (plist-get keywords :vals)
-                `(:alias-vals ,(plist-get keywords :vals)))))))
+                `(:deprecated ,(plist-get keywords :deprecated)))))))
 
 (defun clime--build-group (args)
   "Build a `clime-group' constructor form from DSL ARGS.

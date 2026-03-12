@@ -576,7 +576,7 @@ This enables a setup hook to run between passes."
         (clime--stdin-app app))
     ;; Set parent refs for direct children (if not already set)
     (clime--set-parent-refs app)
-    ;; Resolve alias-for commands (idempotent)
+    ;; Resolve alias commands (idempotent)
     (clime--resolve-aliases app)
     (condition-case err
         (progn
@@ -808,11 +808,9 @@ defaults, and checks required params.  Returns the updated RESULT."
          (params (clime-parse-result-params result))
          (display-path (clime-parse-result-display-path result))
          (root (cl-find-if #'clime-app-p visited-nodes)))
-    ;; Inject alias-vals (locked params from alias-for :vals)
-    (let ((cmd (clime-parse-result-node result)))
-      (when (clime-command-p cmd)
-        (dolist (entry (clime-command-alias-vals cmd))
-          (setq params (plist-put params (car entry) (cdr entry))))))
+    ;; Inject locked vals (from alias :vals resolution)
+    (dolist (entry (clime-node-locked-vals (clime-parse-result-node result)))
+      (setq params (plist-put params (car entry) (cdr entry))))
     ;; Validate dynamic choices (functions resolved now, after setup)
     (clime--validate-dynamic-choices visited-nodes params)
     ;; Apply env vars (external input, needs conforming)
