@@ -35,6 +35,10 @@
 ;;  18.  Inline group category   admin inline group with option + command
 ;;  19.  Parameter template      clime-defopt for shared --force flag
 ;;  20.  Command alias           clime-alias-for exposes nested cmd at top level
+;;  21.  Negatable flag          --color/--no-color with ternary state
+;;  22.  Mutual exclusion        --format-table/--format-csv via :mutex
+;;  23.  Deprecated option       --output with migration hint
+;;  24.  clime-param accessor    ternary access for negatable flags
 ;;
 ;; Run it (this file is directly executable via the shebang header):
 ;;   chmod +x examples/pkm.el
@@ -87,6 +91,10 @@
   (clime-option internal-trace ("--internal-trace") :bool t
     :help "Enable internal tracing" :hidden t)
 
+  ;; [21] Negatable flag — --color / --no-color with ternary state
+  (clime-option color ("--color") :negatable t :default t
+    :help "Colorize output")
+
   ;; ── install ──────────────────────────────────────────────────────────
   ;; [5] Command with required arg, [6] symbol alias, [7] booleans,
   ;; [8] multiple option, [9] default value, [16] clime-let
@@ -138,7 +146,8 @@
           (format "Listing all packages (limit %s)" limit)))))
 
   ;; ── list ─────────────────────────────────────────────────────────────
-  ;; [11] Option groups in help, [6] symbol alias, [17] command category
+  ;; [11] Option groups in help, [6] symbol alias, [17] command category,
+  ;; [22] mutex for format, [23] deprecated option
   (clime-command list
     :help "List installed packages"
     :aliases (ls)
@@ -157,12 +166,31 @@
       :choices '("name" "date" "size")
       :default "name")
 
+    ;; [22] Mutually exclusive output format options
+    (clime-option format-table ("--table") :bool t :mutex 'list-format
+      :help "Output as table (default)"
+      :category "Format")
+
+    (clime-option format-csv ("--csv") :bool t :mutex 'list-format
+      :help "Output as CSV"
+      :category "Format")
+
+    ;; [23] Deprecated option with migration hint
+    (clime-option output ("--output" "-o")
+      :deprecated "Use --table or --csv instead"
+      :help "Output format"
+      :hidden t)
+
     (clime-handler (ctx)
-      (clime-let ctx (author since sort)
-        (format "Listing packages (sort=%s%s%s)"
-                sort
-                (if author (format ", author=%s" author) "")
-                (if since (format ", since=%s" since) "")))))
+      ;; [24] clime-param for ternary access to negatable --color
+      (let ((color (clime-param ctx 'color 'auto)))
+        (clime-let ctx (author since sort format-table format-csv)
+          (format "Listing packages (sort=%s, fmt=%s, color=%s%s%s)"
+                  sort
+                  (cond (format-csv "csv") (format-table "table") (t "table"))
+                  color
+                  (if author (format ", author=%s" author) "")
+                  (if since (format ", since=%s" since) ""))))))
 
   ;; ── run ──────────────────────────────────────────────────────────────
   ;; [12] Rest args — collects everything after script name
