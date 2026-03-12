@@ -36,7 +36,8 @@ SELECTOR ?= $(SELECT)
 
 test: clean-elc
 	@$(BATCH) -l ./tests/clime-tests-runner.el \
-		--eval '(clime-run-tests-batch "$(SELECTOR)")'
+		--eval '(clime-run-tests-batch "$(SELECTOR)")' \
+		< /dev/null
 
 tests: test
 
