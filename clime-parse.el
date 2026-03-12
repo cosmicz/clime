@@ -55,10 +55,20 @@ Matches anything starting with \"-\" that isn't just \"-\" alone."
         (cons (substring token 0 pos)
               (substring token (1+ pos)))))))
 
+(defun clime--negated-flag-p (flag)
+  "If FLAG is a --no-X negation, return the positive flag --X, else nil.
+Only applies to long flags.  Does not double-negate --no-no-X."
+  (when (and (> (length flag) 5)  ;; longer than "--no-"
+             (string-prefix-p "--no-" flag)
+             (not (string-prefix-p "--no-no-" flag)))
+    (concat "--" (substring flag 5))))
+
 (defun clime--find-option-in-scope (flag current-node _root)
   "Find option matching FLAG, first in CURRENT-NODE then in ancestors.
 Walk the parent chain from CURRENT-NODE upward.
-Return (OPTION . SCOPE) where SCOPE is \\='current or \\='ancestor, or nil."
+For --no-X flags, checks if the positive --X option is negatable.
+Return (OPTION . SCOPE) where SCOPE is \\='current, \\='ancestor,
+\\='negated-current, or \\='negated-ancestor.  Returns nil if not found."
   (let ((opt (clime-node-find-option current-node flag)))
     (if opt
         (cons opt 'current)
@@ -66,8 +76,20 @@ Return (OPTION . SCOPE) where SCOPE is \\='current or \\='ancestor, or nil."
         (while (and node (not opt))
           (setq opt (clime-node-find-option node flag))
           (unless opt (setq node (clime-node-parent node))))
-        (when opt
-          (cons opt 'ancestor))))))
+        (if opt
+            (cons opt 'ancestor)
+          ;; Try --no-X → --X negation lookup
+          (let ((pos-flag (clime--negated-flag-p flag)))
+            (when pos-flag
+              (let ((pos-opt (clime-node-find-option current-node pos-flag))
+                    (pos-node nil))
+                (unless pos-opt
+                  (setq pos-node (clime-node-parent current-node))
+                  (while (and pos-node (not pos-opt))
+                    (setq pos-opt (clime-node-find-option pos-node pos-flag))
+                    (unless pos-opt (setq pos-node (clime-node-parent pos-node)))))
+                (when (and pos-opt (clime-option-negatable pos-opt))
+                  (cons pos-opt (if pos-node 'negated-ancestor 'negated-current)))))))))))
 
 (defun clime--expand-short-bundle (token current-node root)
   "Try to expand TOKEN as a short flag bundle like \"-abc\".
@@ -154,20 +176,22 @@ PATH is the command path for help signals."
            (value (clime--resolve-stdin-value (cdr split)))
            (found (clime--find-option-in-scope flag current-node root)))
       (when found
-        (when (clime-option-boolean-p (car found))
+        (when (or (clime-option-boolean-p (car found))
+                  (clime--negated-scope-p (cdr found)))
           (signal 'clime-usage-error
                   (list (format "Option %s does not take a value" flag))))
         (list (clime--consume-option (car found) params value)
               (1+ i)
               option-parsing))))
-   ;; Known single option
+   ;; Known single option (including --no-X negation)
    ((and option-parsing
          (clime--option-like-p tok)
          (clime--find-option-in-scope tok current-node root))
     (let* ((found (clime--find-option-in-scope tok current-node root))
-           (opt (car found)))
-      (if (clime-option-boolean-p opt)
-          (list (clime--consume-option opt params nil)
+           (opt (car found))
+           (negated (clime--negated-scope-p (cdr found))))
+      (if (or negated (clime-option-boolean-p opt))
+          (list (clime--consume-option opt params nil negated)
                 (1+ i)
                 option-parsing)
         ;; Value option: consume next token
@@ -180,9 +204,14 @@ PATH is the command path for help signals."
                 (+ i 2)
                 option-parsing)))))))
 
-(defun clime--consume-option (opt params token-value)
+(defun clime--negated-scope-p (scope)
+  "Return non-nil if SCOPE indicates a negated option lookup."
+  (memq scope '(negated-current negated-ancestor)))
+
+(defun clime--consume-option (opt params token-value &optional negated)
   "Consume option OPT into PARAMS plist, returning updated plist.
-TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
+TOKEN-VALUE is the string value for value-taking options, or nil for booleans.
+When NEGATED is non-nil, explicitly set the param to nil (for --no-X flags)."
   (let ((dep (clime-option-deprecated opt)))
     (when dep
       (let ((flag (car (clime-option-flags opt))))
@@ -194,6 +223,9 @@ TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
         (choices (clime-option-choices opt))
         (coerce (clime-option-coerce opt)))
     (cond
+     ;; Negated flag (--no-X): explicitly set to nil
+     (negated
+      (plist-put params name nil))
      ;; Count option: increment
      ((clime-option-count opt)
       (let ((current (or (plist-get params name) 0)))

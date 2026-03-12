@@ -39,7 +39,8 @@
   (category nil :type (or string null) :documentation "Help display category label.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
-  (mutex nil :type (or symbol null) :documentation "Mutex group symbol. Options sharing a mutex are mutually exclusive."))
+  (mutex nil :type (or symbol null) :documentation "Mutex group symbol. Options sharing a mutex are mutually exclusive.")
+  (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0)."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.
@@ -51,6 +52,12 @@ ARGS is a plist of slot values."
       (error "clime-make-option: :name is required"))
     (unless (and flags (listp flags) (> (length flags) 0))
       (error "clime-make-option: :flags must be a non-empty list of strings"))
+    (when (plist-get args :negatable)
+      (let ((nargs (plist-get args :nargs)))
+        (when (and nargs (> nargs 0))
+          (error "clime-make-option: :negatable is incompatible with :nargs %d" nargs)))
+      (when (plist-get args :count)
+        (error "clime-make-option: :negatable is incompatible with :count")))
     (apply #'clime-option--create args)))
 
 (defun clime--merge-template (template &rest overrides)
@@ -64,6 +71,7 @@ OVERRIDES take precedence over TEMPLATE values."
 (defun clime-option-boolean-p (option)
   "Return non-nil if OPTION is a boolean/count flag (consumes no value)."
   (or (clime-option-count option)
+      (clime-option-negatable option)
       (eq (clime-option-type option) 'boolean)
       (eql (clime-option-nargs option) 0)))
 
@@ -289,6 +297,16 @@ ARGS is a plist of slot values."
 (defun clime-ctx-get (ctx name)
   "Get the value of param NAME from context CTX."
   (plist-get (clime-context-params ctx) name))
+
+(defun clime-param (ctx name &optional default)
+  "Get param NAME from CTX, returning DEFAULT if not set.
+Unlike `clime-ctx-get', distinguishes between explicitly nil and
+absent — returns DEFAULT only when NAME is not in the params plist.
+Useful for negatable flags where nil means explicitly disabled."
+  (let ((params (clime-context-params ctx)))
+    (if (plist-member params name)
+        (plist-get params name)
+      default)))
 
 (defmacro clime-let (ctx bindings &rest body)
   "Destructure context CTX into BINDINGS and evaluate BODY.

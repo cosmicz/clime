@@ -203,8 +203,14 @@ Appends repeat indicator for :count and :multiple options."
                               flags))
          (sorted (append shorts longs))
          (base (string-join sorted ", "))
-         (boolean-p (clime-option-boolean-p opt)))
+         (boolean-p (clime-option-boolean-p opt))
+         ;; Append "/ --no-X" for negatable options with a long flag
+         (neg-suffix (when (clime-option-negatable opt)
+                       (let ((long (car longs)))
+                         (when (and long (not (string-prefix-p "--no-" long)))
+                           (concat " / --no-" (substring long 2)))))))
     (concat base
+            neg-suffix
             (unless boolean-p " VALUE")
             (cond
              ((clime-option-count opt) " ...")

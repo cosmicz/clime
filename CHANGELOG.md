@@ -38,6 +38,13 @@
   string (migration hint) or `t` (generic).  Shows "(deprecated)" in help
   output and emits a warning to stderr at runtime.  Combine with `:hidden t`
   for silent deprecation.
+- `:negatable` slot on options: auto-generate `--no-X` variants for
+  boolean flags.  `--no-X` explicitly sets the param to nil, allowing
+  handlers to distinguish unset/true/false (ternary state).  Implies
+  boolean (no `:flag t` needed).  Help renders `--flag / --no-flag`.
+- `clime-param` accessor: `(clime-param ctx 'name default)` returns
+  the param value if set (even nil), or DEFAULT if absent.  Complements
+  `clime-ctx-get` for ternary-aware param access.
 - `:mutex` slot on options: declare mutually exclusive option groups.
   Options sharing the same `:mutex` symbol (e.g. `:mutex 'output-format`)
   are validated to be mutually exclusive — at most one may be set per
