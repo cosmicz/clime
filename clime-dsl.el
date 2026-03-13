@@ -56,7 +56,7 @@ Resolves :doc as an alias for :help (error if both are present)."
 (defun clime--classify-body (forms)
   "Classify FORMS into options, args, children, and handler.
 Returns a plist (:options :args :children :handler)."
-  (let (options args children handler)
+  (let (options args children output-formats handler)
     (dolist (form forms)
       (when (consp form)
         (pcase (car form)
@@ -65,11 +65,13 @@ Returns a plist (:options :args :children :handler)."
           ('clime-command (push (clime--build-command (cdr form)) children))
           ('clime-alias-for (push (clime--build-alias-for (cdr form)) children))
           ('clime-group (push (clime--build-group (cdr form)) children))
+          ('clime-output-format (push (clime--build-output-format (cdr form)) output-formats))
           ('clime-handler (setq handler (clime--build-handler (cdr form))))
           (_ (error "Unknown DSL form: %S" (car form))))))
     (list :options (nreverse options)
           :args (nreverse args)
           :children (nreverse children)
+          :output-formats (nreverse output-formats)
           :handler handler)))
 
 ;;; ─── DSL Shorthands ────────────────────────────────────────────────────
@@ -174,6 +176,14 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defarg' template.
                   (clime--merge-template ,template-sym
                                          :name ',name ,@plist)))
       `(clime-make-arg :name ',name ,@plist))))
+
+(defun clime--build-output-format (args)
+  "Build a `clime-output-format' constructor form from DSL ARGS.
+ARGS is (NAME FLAGS &rest PLIST)."
+  (let* ((name (car args))
+         (flags (cadr args))
+         (plist (cddr args)))
+    `(clime-make-output-format :name ',name :flags ',flags ,@plist)))
 
 (defun clime--build-handler (args)
   "Build a lambda form from DSL ARGS.
@@ -303,13 +313,14 @@ BODY is a mix of keyword args and child forms:
   :version STRING  — app version
   :env-prefix STRING — prefix for env var auto-derivation
   :help STRING — app description
-  :json-mode BOOL — enable built-in --json option
+  :json-mode BOOL — enable built-in --json option (deprecated)
 
 Child forms:
   (clime-option NAME FLAGS &rest PLIST)
   (clime-arg NAME &rest PLIST)
   (clime-command NAME &rest BODY)
-  (clime-group NAME &rest BODY)"
+  (clime-group NAME &rest BODY)
+  (clime-output-format NAME FLAGS &rest PLIST)"
   (declare (indent 1))
   (let* ((name-str (symbol-name name))
          (extracted (clime--extract-keywords
@@ -333,6 +344,8 @@ Child forms:
             `(:epilog ,(plist-get keywords :epilog)))
         ,@(when (plist-get keywords :setup)
             `(:setup ,(plist-get keywords :setup)))
+        ,@(when (plist-get classified :output-formats)
+            `(:output-formats (list ,@(plist-get classified :output-formats))))
         ,@(when (plist-get classified :options)
             `(:options (list ,@(plist-get classified :options))))
         ,@(when (plist-get classified :args)
@@ -480,6 +493,31 @@ Child forms:
   (clime-handler (CTX) &rest BODY)"
   (declare (indent 1))
   (clime--build-group (cons name body)))
+
+(cl-defmacro clime-output-format (name flags
+                                  &rest plist
+                                  &key help finalize streaming encoder
+                                  mutex hidden category deprecated
+                                  &allow-other-keys)
+  "Declare an output format NAME with FLAGS.
+NAME is a symbol — the format name (e.g. json, yaml).
+FLAGS is a list of flag strings, e.g. (\"--json\").
+
+Inherits all `clime-option' behavior (mutex, hidden, category, etc.)
+since output formats ARE options.
+
+Keyword arguments:
+  :help STR         Help text for the flag
+  :finalize FN      Envelope function: (items retval) → data | nil
+  :streaming t      Emit immediately, bypass accumulator
+  :encoder FN       Data → string encoder (reserved for future use)
+  :mutex SYM        Mutual exclusion group
+  :hidden t         Omit from help
+  :category STR     Help display category
+  :deprecated STR   Deprecation message or t"
+  (declare (indent 2))
+  (ignore help finalize streaming encoder mutex hidden category deprecated)
+  (clime--build-output-format (cons name (cons flags plist))))
 
 (defmacro clime-handler (arglist &rest body)
   "Define a command handler with ARGLIST and BODY.

@@ -54,20 +54,6 @@
   (let ((result (json-read-from-string (clime-json-encode '(:key "val")))))
     (should (equal (cdr (assq 'key result)) "val"))))
 
-;;; ─── Pre-parse Detection ────────────────────────────────────────────
-
-(ert-deftest clime-test-output/pre-parse-detects-json ()
-  "--json in argv is detected."
-  (should (clime--pre-parse-json-p '("--json" "list"))))
-
-(ert-deftest clime-test-output/pre-parse-no-json ()
-  "Absent --json returns nil."
-  (should-not (clime--pre-parse-json-p '("list" "--verbose"))))
-
-(ert-deftest clime-test-output/pre-parse-json-anywhere ()
-  "--json anywhere in argv is detected."
-  (should (clime--pre-parse-json-p '("show" "--json" "id"))))
-
 ;;; ─── Auto-inject --json Option ──────────────────────────────────────
 
 (ert-deftest clime-test-output/json-option-injected-at-construction ()
@@ -416,6 +402,138 @@
                    (clime-run app '("--help")))))
     (should (string-match-p "--json" output))
     (should (string-match-p "Output as JSON" output))))
+
+;;; ─── Output Format ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-output/format-struct-inherits-option ()
+  "clime-output-format inherits clime-option slots."
+  (let ((fmt (clime-make-output-format :name 'json :flags '("--json")
+                                        :help "JSON out")))
+    (should (clime-output-format-p fmt))
+    (should (clime-option-p fmt))
+    (should (eq (clime-option-name fmt) 'json))
+    (should (equal (clime-option-flags fmt) '("--json")))
+    (should (eql (clime-option-nargs fmt) 0))
+    (should (equal (clime-option-category fmt) "Output"))))
+
+(ert-deftest clime-test-output/format-in-app ()
+  "App with clime-output-format generates option and stores format."
+  (let* ((fmt (clime-make-output-format :name 'json :flags '("--json")))
+         (app (clime-make-app :name "t" :version "1"
+                               :output-formats (list fmt))))
+    (should (= (length (clime-app-output-formats app)) 1))
+    (should (clime-node-find-option app "--json"))))
+
+(ert-deftest clime-test-output/format-replaces-json-mode ()
+  "App with output-format json works like :json-mode t."
+  (let* ((cmd (clime-make-command :name "greet"
+                                   :handler (lambda (_ctx) "hi")))
+         (fmt (clime-make-output-format :name 'json :flags '("--json")))
+         (app (clime-make-app :name "t" :version "1"
+                               :output-formats (list fmt)
+                               :children (list (cons "greet" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("greet" "--json"))))
+                     (should (= code 0)))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (equal (cdr (assq 'success parsed)) t))
+    (should (equal (cdr (assq 'data parsed)) "hi"))))
+
+(ert-deftest clime-test-output/format-custom-finalize ()
+  "Custom finalize controls envelope shape."
+  (let* ((cmd (clime-make-command :name "greet"
+                                   :handler (lambda (_ctx) "hi")))
+         (fmt (clime-make-output-format
+               :name 'json :flags '("--json")
+               :finalize (lambda (_items retval)
+                           (when retval `((result . ,retval) (status . "ok"))))))
+         (app (clime-make-app :name "t" :version "1"
+                               :output-formats (list fmt)
+                               :children (list (cons "greet" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("greet" "--json"))))
+                     (should (= code 0)))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (equal (cdr (assq 'result parsed)) "hi"))
+    (should (equal (cdr (assq 'status parsed)) "ok"))))
+
+(ert-deftest clime-test-output/format-custom-finalize-with-items ()
+  "Custom finalize receives accumulated items."
+  (let* ((cmd (clime-make-command
+               :name "multi"
+               :handler (lambda (_ctx)
+                          (clime-output '((x . 1)))
+                          (clime-output '((x . 2)))
+                          nil)))
+         (fmt (clime-make-output-format
+               :name 'json :flags '("--json")
+               :finalize (lambda (items _retval)
+                           `((items . ,(vconcat items))
+                             (count . ,(length items))))))
+         (app (clime-make-app :name "t" :version "1"
+                               :output-formats (list fmt)
+                               :children (list (cons "multi" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("multi" "--json"))))
+                     (should (= code 0)))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (= (cdr (assq 'count parsed)) 2))
+    (should (= (length (cdr (assq 'items parsed))) 2))))
+
+(ert-deftest clime-test-output/format-streaming ()
+  "Streaming output-format emits NDJSON per clime-output call."
+  (let* ((cmd (clime-make-command
+               :name "stream"
+               :handler (lambda (_ctx)
+                          (clime-output '((line . 1)))
+                          (clime-output '((line . 2)))
+                          nil)))
+         (fmt (clime-make-output-format :name 'json :flags '("--json")
+                                         :streaming t))
+         (app (clime-make-app :name "t" :version "1"
+                               :output-formats (list fmt)
+                               :children (list (cons "stream" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("stream" "--json"))))
+                     (should (= code 0)))))
+         (lines (split-string (string-trim output) "\n" t)))
+    (should (= (length lines) 2))
+    (should (= (cdr (assq 'line (json-read-from-string (nth 0 lines)))) 1))
+    (should (= (cdr (assq 'line (json-read-from-string (nth 1 lines)))) 2))))
+
+(ert-deftest clime-test-output/format-json-mode-sugar ()
+  ":json-mode t synthesizes output-format."
+  (let ((app (clime-make-app :name "t" :version "1" :json-mode t)))
+    (should (= (length (clime-app-output-formats app)) 1))
+    (should (eq (clime-output-format-name (car (clime-app-output-formats app))) 'json))
+    (should (clime-node-find-option app "--json"))))
+
+(ert-deftest clime-test-output/format-json-mode-conflict ()
+  ":json-mode t + explicit json output-format signals error."
+  (let ((fmt (clime-make-output-format :name 'json :flags '("--json"))))
+    (should-error
+     (clime-make-app :name "t" :version "1" :json-mode t
+                      :output-formats (list fmt))
+     :type 'error)))
+
+(ert-deftest clime-test-output/format-auto-mutex ()
+  "Output formats get auto-assigned mutex group."
+  (let* ((fmt (clime-make-output-format :name 'json :flags '("--json")))
+         (app (clime-make-app :name "t" :version "1"
+                               :output-formats (list fmt))))
+    (should (eq (clime-option-mutex (car (clime-app-output-formats app)))
+                'clime--output-format))))
+
+(ert-deftest clime-test-output/format-mutex-enforced ()
+  "Multiple output formats are mutually exclusive."
+  (let* ((cmd (clime-make-command :name "x" :handler #'ignore))
+         (json (clime-make-output-format :name 'json :flags '("--json")))
+         (yaml (clime-make-output-format :name 'yaml :flags '("--yaml")))
+         (app (clime-make-app :name "t" :version "1"
+                               :output-formats (list json yaml)
+                               :children (list (cons "x" cmd))))
+         (code (clime-run app '("x" "--json" "--yaml"))))
+    (should (= code 2))))
 
 ;;; ─── Output Mode Variable ────────────────────────────────────────────
 

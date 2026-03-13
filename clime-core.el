@@ -301,6 +301,31 @@ ARGS is a plist of slot values."
 
 (define-obsolete-function-alias 'clime-group-only-p #'clime-branch-p "0.3.0")
 
+;;; ─── Output Format ──────────────────────────────────────────────────────
+
+(cl-defstruct (clime-output-format (:include clime-option)
+                                    (:constructor clime-output-format--create)
+                                    (:copier nil))
+  "Output format option.  Inherits all `clime-option' slots.
+Declares an output mode (e.g. JSON, YAML) as a CLI flag with
+per-format finalize and streaming behavior."
+  (finalize nil :type (or function null) :documentation "Envelope function: (items retval) → data | nil.")
+  (streaming nil :type boolean :documentation "When non-nil, `clime-output' emits immediately (no accumulator).")
+  (encoder nil :type (or function null) :documentation "Encoder function: data → string.  Reserved for future use."))
+
+(defun clime-make-output-format (&rest args)
+  "Create a `clime-output-format' with defaults.
+Sets :nargs 0 (boolean), :category \"Output\", and :mutex
+\\='clime--output-format unless overridden.
+ARGS is a plist of slot values."
+  (unless (plist-member args :nargs)
+    (setq args (plist-put args :nargs 0)))
+  (unless (plist-member args :category)
+    (setq args (plist-put args :category "Output")))
+  (unless (plist-member args :mutex)
+    (setq args (plist-put args :mutex 'clime--output-format)))
+  (apply #'clime-output-format--create args))
+
 ;;; ─── App ────────────────────────────────────────────────────────────────
 
 (cl-defstruct (clime-app (:include clime-group)
@@ -309,29 +334,48 @@ ARGS is a plist of slot values."
   "Root application node.  Extends `clime-group' with app-level metadata."
   (version nil :type (or string null) :documentation "Application version string.")
   (env-prefix nil :type (or string null) :documentation "Prefix for auto-derived env var names.")
-  (json-mode nil :type boolean :documentation "Whether --json is a built-in root option.")
+  (json-mode nil :type boolean :documentation "Whether --json is a built-in root option.  Deprecated: use `clime-output-format'.")
+  (output-formats nil :type list :documentation "List of `clime-output-format' structs.")
   (argv0 nil :type (or string null) :documentation "Program name for usage output (set from CLIME_ARGV0).")
   (setup nil :type (or function null) :documentation "Hook called after pass-1 parse, before dynamic validation and handler."))
 
 (defun clime-make-app (&rest args)
   "Create a `clime-app' with validation.
 Required keyword arg: :name (string).
-When :json-mode is non-nil, a --json boolean option is auto-injected.
+When :json-mode is non-nil, a default JSON `clime-output-format' is
+synthesized (deprecated; prefer `clime-output-format' DSL form).
+Output formats are added to both :output-formats and :options.
 ARGS is a plist of slot values."
   (unless (plist-get args :name)
     (error "clime-make-app: :name is required"))
-  ;; Auto-inject --json option when :json-mode is enabled
-  (when (and (plist-get args :json-mode)
-             (not (cl-some (lambda (opt)
-                             (member "--json" (clime-option-flags opt)))
-                           (plist-get args :options))))
-    (let ((opt (clime-make-option :name 'json
-                                  :flags '("--json")
-                                  :nargs 0
-                                  :help "Output as JSON"
-                                  :category "Output")))
-      (setq args (plist-put args :options
-                            (append (plist-get args :options) (list opt))))))
+  (let ((output-formats (plist-get args :output-formats))
+        (json-mode (plist-get args :json-mode)))
+    ;; Error if both :json-mode and an explicit json output-format
+    (when (and json-mode
+               (cl-some (lambda (fmt) (eq (clime-output-format-name fmt) 'json))
+                        output-formats))
+      (error "clime-make-app: cannot use both :json-mode and clime-output-format for json"))
+    ;; :json-mode t → synthesize default json output-format
+    (when (and json-mode
+               (not (cl-some (lambda (fmt) (eq (clime-output-format-name fmt) 'json))
+                             output-formats)))
+      (push (clime-make-output-format :name 'json
+                                       :flags '("--json")
+                                       :help "Output as JSON")
+            output-formats)
+      (setq args (plist-put args :output-formats output-formats)))
+    ;; Add output-formats to :options (they ARE options)
+    (when output-formats
+      (let* ((existing-options (plist-get args :options))
+             (new-opts (cl-remove-if
+                        (lambda (fmt)
+                          (cl-some (lambda (opt)
+                                     (equal (clime-option-flags opt)
+                                            (clime-option-flags fmt)))
+                                   existing-options))
+                        output-formats)))
+        (setq args (plist-put args :options
+                              (append existing-options new-opts))))))
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
     app))

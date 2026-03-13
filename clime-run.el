@@ -55,20 +55,29 @@ Rebound to `clime-output-error' in JSON mode.")
 
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
+(defun clime--detect-output-format (app argv)
+  "Detect active output format from APP's output-formats and ARGV.
+Returns the matching `clime-output-format' struct, or nil for text mode."
+  (cl-find-if (lambda (fmt)
+                (cl-some (lambda (flag) (member flag argv))
+                         (clime-option-flags fmt)))
+              (clime-app-output-formats app)))
+
 (defun clime-run (app argv)
   "Run APP with ARGV, returning an exit code.
 Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error.
 Does NOT call `kill-emacs'; the caller decides what to do with the code.
 
-When APP has :json-mode t and ARGV contains \"--json\", `clime-output-mode'
-is bound to `json' and output is JSON-encoded.  The --json option is
-auto-injected into the app."
+Output format detection: checks `clime-app-output-formats' for a matching
+flag in ARGV.  When matched, `clime-output-mode' is bound to the format
+name and the format's finalize/streaming config drives output behavior."
   ;; Reset stdin cache so each invocation reads fresh
   (setq clime--stdin-content nil)
-  ;; Pre-parse --json before full parse so even parse errors emit JSON
-  (let* ((json-p (and (clime-app-json-mode app)
-                      (clime--pre-parse-json-p argv)))
-         (clime-output-mode (if json-p 'json 'text))
+  ;; Pre-parse output format before full parse so even parse errors emit correctly
+  (let* ((active-fmt (clime--detect-output-format app argv))
+         (fmt-name (and active-fmt (clime-output-format-name active-fmt)))
+         (json-p (eq fmt-name 'json))
+         (clime-output-mode (or fmt-name 'text))
          (clime-format-error (if json-p
                                  #'clime-output-error
                                clime-format-error)))
@@ -88,18 +97,28 @@ auto-injected into the app."
                          (clime-node-name node)
                          (if (stringp dep) (format ". %s" dep) ""))))
             (when handler
-              (let* ((clime--output-buffer (and json-p '(:buffer)))
+              (let* ((streaming (and active-fmt
+                                     (clime-output-format-streaming active-fmt)))
+                     (clime--output-buffer (and active-fmt (not streaming)
+                                               '(:buffer)))
                      (retval (funcall handler ctx)))
-                (if (and json-p (cdr clime--output-buffer))
-                    ;; Handler called clime-output — flush accumulated items
-                    (clime--output-flush)
-                  ;; No buffered output — use return value directly
-                  (when retval
-                    (if json-p
-                        (princ (concat (clime-json-encode
-                                        `((success . t) (data . ,retval)))
-                                       "\n"))
-                      (princ retval))))))
+                (cond
+                 ;; Streaming mode: output already emitted per-call, nothing to flush
+                 (streaming nil)
+                 ;; Buffered mode with items: flush with format's finalize
+                 ((and active-fmt (cdr clime--output-buffer))
+                  (clime--output-flush
+                   (clime-output-format-finalize active-fmt)
+                   retval))
+                 ;; No buffered output — use finalize with retval only
+                 (retval
+                  (if active-fmt
+                      (let ((fn (or (clime-output-format-finalize active-fmt)
+                                    #'clime--output-finalize-default)))
+                        (let ((data (funcall fn nil retval)))
+                          (when data
+                            (princ (concat (clime-json-encode data) "\n")))))
+                    (princ retval))))))
             0))
       (clime-help-requested
        (clime--print-help (cdr err))

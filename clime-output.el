@@ -54,20 +54,33 @@ items here instead of printing immediately.  Initialize to \\='(:buffer)
 as a sentinel; items are pushed onto the front.  `clime--output-flush'
 strips the sentinel before emitting.  nil means not buffering.")
 
-(defun clime--output-flush ()
-  "Emit accumulated JSON output and clear the buffer.
-0 items: no output.  1 item: bare JSON object.  2+ items: JSON array.
-Strips the `:buffer' sentinel before processing."
+(defun clime--output-finalize-default (items retval)
+  "Default JSON finalize: wrap output for emission.
+ITEMS is a list of accumulated `clime-output' items (may be nil).
+RETVAL is the handler's return value.
+Returns data to encode, or nil for no output.
+- items non-empty → array (2+) or bare object (1)
+- items empty + retval → {success: true, data: retval}
+- both nil → nil"
+  (cond
+   (items
+    (if (cdr items) (vconcat items) (car items)))
+   (retval
+    `((success . t) (data . ,retval)))))
+
+(defun clime--output-flush (&optional finalize retval)
+  "Flush accumulated output using FINALIZE function.
+FINALIZE receives (items retval) and returns data to encode.
+Defaults to `clime--output-finalize-default'.
+RETVAL is the handler's return value (passed through to finalize)."
   (when (and clime--output-buffer (clime-output-mode-json-p))
     ;; Strip :buffer sentinel, reverse to emission order
-    (let ((items (nreverse (remq :buffer clime--output-buffer))))
+    (let* ((items (nreverse (remq :buffer clime--output-buffer)))
+           (fn (or finalize #'clime--output-finalize-default))
+           (data (funcall fn items retval)))
       (setq clime--output-buffer nil)
-      (when items
-        (princ (concat (clime-json-encode
-                        (if (cdr items)
-                            (vconcat items)
-                          (car items)))
-                       "\n"))))))
+      (when data
+        (princ (concat (clime-json-encode data) "\n"))))))
 
 ;;; ─── JSON Encoding ────────────────────────────────────────────────────
 
@@ -76,12 +89,6 @@ Strips the `:buffer' sentinel before processing."
 Thin wrapper around `json-encode'.  See commentary for encoding
 conventions (nil→null, vectors→arrays, :json-false→false)."
   (json-encode data))
-
-;;; ─── Pre-parse Helpers ────────────────────────────────────────────────
-
-(defun clime--pre-parse-json-p (argv)
-  "Return non-nil if ARGV contains \"--json\"."
-  (member "--json" argv))
 
 ;;; ─── Output Helpers ───────────────────────────────────────────────────
 

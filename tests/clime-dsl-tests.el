@@ -853,6 +853,34 @@
     (should (equal (clime-node-help (cdr result)) "Show WAITING"))
     (should (equal (clime-alias-vals (cdr result)) '((todo . "WAITING"))))))
 
+(ert-deftest clime-test-dsl/standalone-output-format ()
+  "clime-output-format produces a clime-output-format struct standalone."
+  (let ((fmt (eval '(clime-output-format json ("--json")
+                      :help "JSON output"
+                      :streaming t)
+                   t)))
+    (should (clime-output-format-p fmt))
+    (should (clime-option-p fmt))
+    (should (eq (clime-output-format-name fmt) 'json))
+    (should (equal (clime-option-flags fmt) '("--json")))
+    (should (clime-output-format-streaming fmt))
+    (should (equal (clime-option-help fmt) "JSON output"))))
+
+(ert-deftest clime-test-dsl/app-with-output-format ()
+  "clime-app with clime-output-format generates option and stores format."
+  (eval '(clime-app clime-test--output-fmt-app
+           :version "1.0"
+           :help "Test app"
+           (clime-output-format json ("--json") :help "JSON")
+           (clime-command test
+             :help "Test"
+             (clime-handler (_ctx) "ok")))
+        t)
+  (let ((app (symbol-value 'clime-test--output-fmt-app)))
+    (should (= (length (clime-app-output-formats app)) 1))
+    (should (clime-node-find-option app "--json"))
+    (should (eq (clime-output-format-name (car (clime-app-output-formats app))) 'json))))
+
 ;;; ─── Indent Rules ──────────────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/indent-option ()
