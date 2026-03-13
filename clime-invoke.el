@@ -134,7 +134,8 @@ Returns nil if VALUE is nil/empty."
 (defun clime-invoke--build-argv (path option-fragments positional-args)
   "Build a complete argv list.
 PATH is the command path (list of strings).
-OPTION-FRAGMENTS is a list of argv fragments from `clime-invoke--option-to-argv'.
+OPTION-FRAGMENTS is a list of argv fragments from
+`clime-invoke--option-to-argv'.
 POSITIONAL-ARGS is a list of positional arg value strings."
   (append path
           (apply #'append option-fragments)

@@ -14,7 +14,7 @@ compile:
 
 lint:
 	@echo "Running lint checks..."
-	@$(BATCH) --eval '(require (quote bytecomp))' --eval '(setq byte-compile-error-on-warn t byte-compile-warnings (quote (not docstrings-wide)))' -f batch-byte-compile $(SRCS)
+	@$(BATCH) --eval '(require (quote bytecomp))' --eval '(setq byte-compile-error-on-warn t byte-compile-warnings (quote (not docstrings-wide)) byte-compile-docstring-max-column 10000)' -f batch-byte-compile $(SRCS)
 	@echo "Byte-compile clean."
 	@$(BATCH) --eval '\
 	  (let ((files (directory-files "." t "^clime.*\\.el$$")) \
