@@ -309,14 +309,17 @@ ARGS is a plist of slot values."
   "Output format option.  Inherits all `clime-option' slots.
 Declares an output mode (e.g. JSON, YAML) as a CLI flag with
 per-format finalize and streaming behavior."
-  (finalize nil :type (or function null) :documentation "Envelope function: (items retval) → data | nil.")
+  (finalize nil :type (or function null) :documentation "Envelope function: (items retval errors) → data | nil.")
   (streaming nil :type boolean :documentation "When non-nil, `clime-output' emits immediately (no accumulator).")
-  (encoder nil :type (or function null) :documentation "Encoder function: data → string.  Reserved for future use."))
+  (encoder nil :type (or function null) :documentation "Encoder function: data → string.")
+  (error-fn nil :type (or function null) :documentation "Error handler: (msg) → side effect.  Called by `clime-output-error'."))
 
 (defun clime-make-output-format (&rest args)
   "Create a `clime-output-format' with defaults.
 Sets :nargs 0 (boolean), :category \"Output\", and :mutex
 \\='clime--output-format unless overridden.
+Defaults :encoder to JSON encoder and :error-fn to JSON error
+emitter when not provided.
 ARGS is a plist of slot values."
   (unless (plist-member args :nargs)
     (setq args (plist-put args :nargs 0)))
@@ -324,6 +327,12 @@ ARGS is a plist of slot values."
     (setq args (plist-put args :category "Output")))
   (unless (plist-member args :mutex)
     (setq args (plist-put args :mutex 'clime--output-format)))
+  (unless (plist-member args :encoder)
+    (setq args (plist-put args :encoder
+                          (lambda (data) (concat (json-encode data) "\n")))))
+  (unless (plist-member args :error-fn)
+    (setq args (plist-put args :error-fn
+                          (lambda (msg) (princ (concat (json-encode `((error . ,msg))) "\n"))))))
   (apply #'clime-output-format--create args))
 
 ;;; ─── App ────────────────────────────────────────────────────────────────

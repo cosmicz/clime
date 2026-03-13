@@ -148,9 +148,13 @@
 ;;; ─── Error Formatter Slot ──────────────────────────────────────────────
 
 (ert-deftest clime-test-run/error-formatter-slot ()
-  "Rebinding clime-format-error changes error output."
+  "Custom error-fn on active format changes error output."
   (let* ((captured '())
-         (clime-format-error (lambda (msg) (push msg captured))))
+         (clime--active-output-format
+          (clime-make-output-format
+           :name 'text :flags '("--text") :streaming t
+           :encoder (lambda (data) (format "%s" data))
+           :error-fn (lambda (msg) (push msg captured)))))
     (clime-run clime-test--run-app '("echo"))  ;; missing arg
     (should (cl-some (lambda (m) (string-match-p "Missing" m)) captured))))
 
@@ -207,10 +211,14 @@
 ;;; ─── Error Formatter Edge Cases ───────────────────────────────────────
 
 (ert-deftest clime-test-run/error-formatter-runtime ()
-  "Error formatter slot works for runtime errors too."
+  "Custom error-fn on active format handles runtime errors too."
   (let* ((debug-on-error nil)
          (captured nil)
-         (clime-format-error (lambda (msg) (setq captured msg))))
+         (clime--active-output-format
+          (clime-make-output-format
+           :name 'text :flags '("--text") :streaming t
+           :encoder (lambda (data) (format "%s" data))
+           :error-fn (lambda (msg) (setq captured msg)))))
     (clime-run clime-test--run-app '("fail"))
     (should (stringp captured))
     (should (string-match-p "went wrong" captured))))

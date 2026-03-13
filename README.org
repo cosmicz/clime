@@ -797,10 +797,12 @@ CLI flag that controls how output is encoded.  The form derives from
 ./myapp.el show --json 123
 #+end_src
 
-In JSON mode, ~clime-output-mode~ is bound to the format name and
-handler return values are JSON-encoded in a ~{success, data}~ envelope.
-Handlers calling ~clime-output~ per-item get automatic accumulation ---
-multiple items become a JSON array, a single item is a bare object.
+In JSON mode, ~clime--active-output-format~ is bound to the format
+struct and handler return values are JSON-encoded in a ~{success, data}~
+envelope.  Handlers calling ~clime-output~ per-item get automatic
+accumulation --- multiple items become a JSON array, a single item is a
+bare object.  Errors reported via ~clime-output-error~ accumulate and
+take priority over items and retval at finalize time.
 
 **** Custom envelopes
 
@@ -808,14 +810,16 @@ Use ~:finalize~ to control the JSON envelope shape:
 
 #+begin_src emacs-lisp
 (clime-output-format json ("--json")
-  :finalize (lambda (items retval)
-              (let ((data (or (and items (vconcat items)) retval)))
-                (when data `((result . ,data) (status . "ok"))))))
+  :finalize (lambda (items retval errors)
+              (cond
+               (errors `((error . ,(car errors))))
+               (t (let ((data (or (and items (vconcat items)) retval)))
+                    (when data `((result . ,data) (status . "ok"))))))))
 #+end_src
 
-The finalize function receives ~(items retval)~ where ~items~ is the
-list of accumulated ~clime-output~ calls and ~retval~ is the handler's
-return value.
+The finalize function receives ~(items retval errors)~ where ~items~ is
+the list of accumulated ~clime-output~ calls, ~retval~ is the handler's
+return value, and ~errors~ is a list of error strings (may be nil).
 
 **** Streaming (NDJSON)
 

@@ -20,18 +20,6 @@
 (require 'clime-help)
 (require 'clime-output)
 
-;;; ─── Error Formatter ───────────────────────────────────────────────────
-
-(defvar clime-format-error #'clime--format-error-default
-  "Function called to format error messages before output.
-Signature: (FORMAT-FN MESSAGE) where MESSAGE is the error string.
-Default implementation prints plain text to stderr via `message'.
-Rebound to `clime-output-error' in JSON mode.")
-
-(defun clime--format-error-default (msg)
-  "Print MSG as a plain-text error to stderr."
-  (message "Error: %s" msg))
-
 ;;; ─── Context Builder ───────────────────────────────────────────────────
 
 (defun clime--build-context (app parse-result)
@@ -69,18 +57,13 @@ Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error.
 Does NOT call `kill-emacs'; the caller decides what to do with the code.
 
 Output format detection: checks `clime-app-output-formats' for a matching
-flag in ARGV.  When matched, `clime-output-mode' is bound to the format
-name and the format's finalize/streaming config drives output behavior."
+flag in ARGV.  When matched, `clime--active-output-format' is bound to
+the format and drives all output behavior through the format struct."
   ;; Reset stdin cache so each invocation reads fresh
   (setq clime--stdin-content nil)
   ;; Pre-parse output format before full parse so even parse errors emit correctly
   (let* ((active-fmt (clime--detect-output-format app argv))
-         (fmt-name (and active-fmt (clime-output-format-name active-fmt)))
-         (json-p (eq fmt-name 'json))
-         (clime-output-mode (or fmt-name 'text))
-         (clime-format-error (if json-p
-                                 #'clime-output-error
-                               clime-format-error)))
+         (clime--active-output-format (or active-fmt clime--active-output-format)))
     (condition-case err
         (let* ((setup (clime-app-setup app))
                (result (clime-parse app argv (and setup t))))
@@ -96,38 +79,49 @@ name and the format's finalize/streaming config drives output behavior."
                 (message "Warning: %s is deprecated%s"
                          (clime-node-name node)
                          (if (stringp dep) (format ". %s" dep) ""))))
-            (when handler
-              (let* ((streaming (and active-fmt
-                                     (clime-output-format-streaming active-fmt)))
-                     (clime--output-buffer (and active-fmt (not streaming)
-                                               '(:buffer)))
-                     (retval (funcall handler ctx)))
-                (cond
-                 ;; Streaming mode: output already emitted per-call, nothing to flush
-                 (streaming nil)
-                 ;; Buffered mode with items: flush with format's finalize
-                 ((and active-fmt (cdr clime--output-buffer))
-                  (clime--output-flush
-                   (clime-output-format-finalize active-fmt)
-                   retval))
-                 ;; No buffered output — use finalize with retval only
-                 (retval
-                  (if active-fmt
-                      (let ((fn (or (clime-output-format-finalize active-fmt)
-                                    #'clime--output-finalize-default)))
-                        (let ((data (funcall fn nil retval)))
-                          (when data
-                            (princ (concat (clime-json-encode data) "\n")))))
-                    (princ retval))))))
-            0))
+            (if (not handler)
+                0
+              (let* ((streaming (clime-output-format-streaming clime--active-output-format))
+                     (clime--output-items nil)
+                     (clime--output-errors nil)
+                     (retval nil)
+                     (exit-code
+                      (condition-case herr
+                          (progn (setq retval (funcall handler ctx)) 0)
+                        (clime-usage-error
+                         ;; Re-signal so outer handler returns exit code 2
+                         (signal (car herr) (cdr herr)))
+                        (clime-help-requested
+                         ;; Re-signal so outer handler prints help
+                         (signal (car herr) (cdr herr)))
+                        (error
+                         (if debug-on-error
+                             (signal (car herr) (cdr herr))
+                           (if streaming
+                               (funcall (clime-output-format-error-fn clime--active-output-format) (error-message-string herr))
+                             (setq clime--output-errors
+                                   (nconc clime--output-errors
+                                          (list (error-message-string herr)))))
+                           1)))))
+                (let ((has-errors (or clime--output-errors (> exit-code 0))))
+                  (if streaming
+                      ;; Streaming: print retval directly if non-nil
+                      (when retval
+                        (princ (funcall (clime-output-format-encoder clime--active-output-format)
+                                        retval)))
+                    ;; Buffered: flush items/errors through finalize
+                    (clime--output-flush
+                     (clime-output-format-finalize clime--active-output-format)
+                     retval))
+                  (if has-errors 1 0))))))
       (clime-help-requested
        (clime--print-help (cdr err))
        0)
       (clime-usage-error
-       (funcall clime-format-error (cadr err))
+       (funcall (clime-output-format-error-fn clime--active-output-format) (cadr err))
        (let ((err-path (caddr err)))
          (when err-path
-           (funcall clime-format-error
+           (funcall (clime-output-format-error-fn clime--active-output-format)
                     (format "Try '%s --help' for more information."
                             (string-join err-path " ")))))
        2)
@@ -135,7 +129,7 @@ name and the format's finalize/streaming config drives output behavior."
        (if debug-on-error
            ;; Re-signal so backtrace prints
            (signal (car err) (cdr err))
-         (funcall clime-format-error (error-message-string err))
+         (funcall (clime-output-format-error-fn clime--active-output-format) (error-message-string err))
          1)))))
 
 (defun clime-main-script-p (app-name)

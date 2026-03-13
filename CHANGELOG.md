@@ -13,10 +13,12 @@
   slots.  The DSL is unchanged; this is an internal refactor that
   enables future group aliasing.
 
-- **Output mode variable**: replaced internal boolean `clime--json-mode-p`
-  with symbol-valued `clime-output-mode` (`'text` / `'json`).  Handlers can
-  check `(clime-output-mode-json-p)` to vary output format.  Extensible to
-  future output modes.  The `:json-mode` DSL keyword is unchanged.
+- **Format-driven output**: replaced `clime-output-mode` symbol variable
+  with `clime--active-output-format` (always a `clime-output-format` struct).
+  Every output mode — including default text — is a format struct with
+  `:encoder`, `:error-fn`, `:finalize`, and `:streaming` slots.  No if/else
+  branching in output functions.  Handlers check `(clime-output-mode-json-p)`
+  (unchanged public API).  The `:json-mode` DSL keyword is unchanged.
 
 - **DSL forms are real macros**: `clime-option`, `clime-arg`,
   `clime-command`, `clime-group`, `clime-alias-for`, `clime-handler`
@@ -29,7 +31,9 @@
   (1 item) after the handler returns.  Replaces the previous NDJSON
   behavior.  Use `clime-output-stream` for explicit NDJSON when needed.
   Handler return-value wrapping in `{success, data}` envelope is
-  preserved when no `clime-output` calls are made.
+  preserved when no `clime-output` calls are made.  Errors accumulate
+  via `clime-output-error` and are passed to finalize — errors take
+  priority over items and retval in the default envelope.
 
 - **`clime-output-format` DSL form**: declares output modes as first-class
   CLI options.  Derives from `clime-option`, inheriting `:mutex`,
@@ -100,7 +104,17 @@
   accumulator.  For streaming use cases where per-call emission is
   desired.
 - `clime--output-finalize-default`: named default finalize function.
-  items → array/bare, retval → `{success, data}`, nil → nil.
+  Signature: `(items retval errors)`.  Priority: errors → `{error}`
+  envelope, items → array/bare, retval → `{success, data}`, nil → nil.
+- `clime-output-error`: report errors via the active format.  Streaming
+  formats dispatch immediately; buffered formats accumulate errors for
+  finalize.
+
+### Removed
+
+- `clime-format-error` defvar and `clime--format-error-default`: error
+  formatting is now handled by the `:error-fn` slot on each
+  `clime-output-format` struct.
 
 ### Fixed
 
