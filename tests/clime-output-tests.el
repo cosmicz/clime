@@ -164,10 +164,10 @@
          (parsed (json-read-from-string (string-trim output))))
     (should (equal (cdr (assq 'data parsed)) ["x" "y"]))))
 
-;;; ─── NDJSON ─────────────────────────────────────────────────────────
+;;; ─── NDJSON (unbuffered) ─────────────────────────────────────────────
 
 (ert-deftest clime-test-output/ndjson-multiple-calls ()
-  "Multiple output calls in JSON mode produce NDJSON."
+  "Multiple output calls without buffer produce NDJSON."
   (let* ((output (with-output-to-string
                    (let ((clime-output-mode 'json))
                      (clime-output "line1")
@@ -176,6 +176,162 @@
     (should (= (length lines) 2))
     (should (equal (json-read-from-string (nth 0 lines)) "line1"))
     (should (equal (json-read-from-string (nth 1 lines)) "line2"))))
+
+;;; ─── Output Accumulation ────────────────────────────────────────────
+
+(ert-deftest clime-test-output/accumulate-multi-items ()
+  "Multiple clime-output calls with buffer produce JSON array on flush."
+  (let* ((output (with-output-to-string
+                   (let ((clime-output-mode 'json)
+                         (clime--output-buffer '(:buffer)))
+                     (clime-output '((name . "a")))
+                     (clime-output '((name . "b")))
+                     (clime--output-flush))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (vectorp parsed))
+    (should (= (length parsed) 2))
+    (should (equal (cdr (assq 'name (aref parsed 0))) "a"))
+    (should (equal (cdr (assq 'name (aref parsed 1))) "b"))))
+
+(ert-deftest clime-test-output/accumulate-single-item ()
+  "Single clime-output call with buffer produces bare object on flush."
+  (let* ((output (with-output-to-string
+                   (let ((clime-output-mode 'json)
+                         (clime--output-buffer '(:buffer)))
+                     (clime-output '((key . "val")))
+                     (clime--output-flush))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (not (vectorp parsed)))
+    (should (equal (cdr (assq 'key parsed)) "val"))))
+
+(ert-deftest clime-test-output/accumulate-empty ()
+  "No clime-output calls with buffer produces no output on flush."
+  (let ((output (with-output-to-string
+                  (let ((clime-output-mode 'json)
+                        (clime--output-buffer '(:buffer)))
+                    (clime--output-flush)))))
+    (should (equal output ""))))
+
+(ert-deftest clime-test-output/accumulate-text-mode-unchanged ()
+  "clime-output in text mode ignores buffer, prints immediately."
+  (let ((output (with-output-to-string
+                  (let ((clime-output-mode 'text)
+                        (clime--output-buffer '(:buffer)))
+                    (clime-output "hello")))))
+    (should (equal output "hello"))))
+
+(ert-deftest clime-test-output/accumulate-success-buffered ()
+  "clime-output-success pushes to buffer in JSON mode."
+  (let* ((output (with-output-to-string
+                   (let ((clime-output-mode 'json)
+                         (clime--output-buffer '(:buffer)))
+                     (clime-output-success "done")
+                     (clime--output-flush))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (equal (cdr (assq 'success parsed)) t))
+    (should (equal (cdr (assq 'data parsed)) "done"))))
+
+(ert-deftest clime-test-output/accumulate-list-buffered ()
+  "clime-output-list pushes to buffer in JSON mode."
+  (let* ((output (with-output-to-string
+                   (let ((clime-output-mode 'json)
+                         (clime--output-buffer '(:buffer)))
+                     (clime-output-list '("x" "y"))
+                     (clime--output-flush))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (equal (cdr (assq 'success parsed)) t))
+    (should (equal (cdr (assq 'data parsed)) ["x" "y"]))))
+
+(ert-deftest clime-test-output/error-never-buffered ()
+  "clime-output-error always emits immediately, even with buffer."
+  (let* ((output (with-output-to-string
+                   (let ((clime-output-mode 'json)
+                         (clime--output-buffer '(:buffer)))
+                     (clime-output-error "bad"))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (equal (cdr (assq 'error parsed)) "bad"))))
+
+(ert-deftest clime-test-output/stream-bypasses-buffer ()
+  "clime-output-stream emits NDJSON immediately, bypassing accumulator."
+  (let* ((output (with-output-to-string
+                   (let ((clime-output-mode 'json)
+                         (clime--output-buffer '(:buffer)))
+                     (clime-output-stream '((a . 1)))
+                     (clime-output-stream '((b . 2))))))
+         (lines (split-string (string-trim output) "\n" t)))
+    (should (= (length lines) 2))
+    (should (equal (cdr (assq 'a (json-read-from-string (nth 0 lines)))) 1))
+    (should (equal (cdr (assq 'b (json-read-from-string (nth 1 lines)))) 2))))
+
+(ert-deftest clime-test-output/stream-returns-data ()
+  "clime-output-stream returns its data argument."
+  (with-output-to-string
+    (let ((clime-output-mode 'json))
+      (should (equal (clime-output-stream "val") "val")))))
+
+;;; ─── clime-run Accumulation Integration ─────────────────────────────
+
+(ert-deftest clime-test-output/run-json-accumulates-output-calls ()
+  "clime-run buffers multiple clime-output calls into JSON array."
+  (let* ((cmd (clime-make-command
+               :name "multi"
+               :handler (lambda (_ctx)
+                          (clime-output '((x . 1)))
+                          (clime-output '((x . 2)))
+                          nil)))
+         (app (clime-make-app :name "t" :version "1" :json-mode t
+                               :children (list (cons "multi" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("multi" "--json"))))
+                     (should (= code 0)))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (vectorp parsed))
+    (should (= (length parsed) 2))))
+
+(ert-deftest clime-test-output/run-json-single-output-bare ()
+  "clime-run with single clime-output call emits bare object."
+  (let* ((cmd (clime-make-command
+               :name "one"
+               :handler (lambda (_ctx)
+                          (clime-output '((key . "val")))
+                          nil)))
+         (app (clime-make-app :name "t" :version "1" :json-mode t
+                               :children (list (cons "one" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("one" "--json"))))
+                     (should (= code 0)))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (not (vectorp parsed)))
+    (should (equal (cdr (assq 'key parsed)) "val"))))
+
+(ert-deftest clime-test-output/run-json-return-value-when-no-output ()
+  "clime-run still wraps return value in success envelope when no output calls."
+  (let* ((cmd (clime-make-command
+               :name "ret"
+               :handler (lambda (_ctx) "hello")))
+         (app (clime-make-app :name "t" :version "1" :json-mode t
+                               :children (list (cons "ret" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("ret" "--json"))))
+                     (should (= code 0)))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (equal (cdr (assq 'success parsed)) t))
+    (should (equal (cdr (assq 'data parsed)) "hello"))))
+
+(ert-deftest clime-test-output/run-json-output-takes-precedence-over-return ()
+  "When handler calls clime-output AND returns a value, buffer wins."
+  (let* ((cmd (clime-make-command
+               :name "both"
+               :handler (lambda (_ctx)
+                          (clime-output '((buffered . t)))
+                          "ignored")))
+         (app (clime-make-app :name "t" :version "1" :json-mode t
+                               :children (list (cons "both" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("both" "--json"))))
+                     (should (= code 0)))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (equal (cdr (assq 'buffered parsed)) t))))
 
 ;;; ─── clime-run Integration ──────────────────────────────────────────
 

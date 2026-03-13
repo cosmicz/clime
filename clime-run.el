@@ -88,11 +88,18 @@ auto-injected into the app."
                          (clime-node-name node)
                          (if (stringp dep) (format ". %s" dep) ""))))
             (when handler
-              (let ((retval (funcall handler ctx)))
-                (when retval
-                  (if (clime-output-mode-json-p)
-                      (clime-output-success retval)
-                    (princ retval)))))
+              (let* ((clime--output-buffer (and json-p '(:buffer)))
+                     (retval (funcall handler ctx)))
+                (if (and json-p (cdr clime--output-buffer))
+                    ;; Handler called clime-output — flush accumulated items
+                    (clime--output-flush)
+                  ;; No buffered output — use return value directly
+                  (when retval
+                    (if json-p
+                        (princ (concat (clime-json-encode
+                                        `((success . t) (data . ,retval)))
+                                       "\n"))
+                      (princ retval))))))
             0))
       (clime-help-requested
        (clime--print-help (cdr err))
