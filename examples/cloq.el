@@ -1,6 +1,6 @@
 #!/bin/sh
-":"; CLIME_ARGV0="$0" CLIME_MAIN_APP=oq exec emacs --batch -Q -L "/Users/cosmic/dev/clime/" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
-;;; oq.el --- Query org files from the command line  -*- lexical-binding: t; -*-
+":"; CLIME_ARGV0="$0" CLIME_MAIN_APP=cloq exec emacs --batch -Q -L "/Users/cosmic/dev/clime/" -L "/Users/cosmic/.emacs.d/.local/straight/repos/org-ql" -L "/Users/cosmic/.emacs.d/.local/straight/repos/dash.el" -L "/Users/cosmic/.emacs.d/.local/straight/repos/ts.el" -L "/Users/cosmic/.emacs.d/.local/straight/repos/s.el" --eval "(setq load-file-name \"$0\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+;;; cloq.el --- Query org files from the command line  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
 
@@ -16,16 +16,18 @@
 ;;; Code:
 
 (require 'clime)
+
+(add-to-list 'load-path "~/.emacs.d/.local/straight/repos/org-ql/")
 (require 'org-ql)
 
-(clime-app oq
+(clime-app cloq
   :version "1.0"
   :help "Query org files from the command line."
-  :env-prefix "OQ"
+  :env-prefix "CLOQ"
   :epilog "Examples:
-  oq query -f tasks.org --todo TODO
-  oq query -f tasks.org --sexp '(deadline :to today)' --json
-  oq waiting -f tasks.org"
+  cloq query -f tasks.org --todo TODO
+  cloq query -f tasks.org --sexp '(deadline :to today)' --json
+  cloq waiting -f tasks.org"
 
   (clime-output-format json ("--json") :help "Output as JSON")
 
@@ -62,25 +64,25 @@
                         (todo `(todo ,todo))
                         (t '(todo))))
                (results (org-ql-select file q
-                                       :action (if tags
-                                                   '(org-get-heading t nil t t)
-                                                 '(org-get-heading t t t t))
-                                       :sort (when sort (intern sort)))))
+                          :action (if tags
+                                      '(org-get-heading t nil t t)
+                                    '(org-get-heading t t t t))
+                          :sort (when sort (intern sort)))))
           (when limit (setq results (seq-take results limit)))
           (when (and verbose (> verbose 0))
-            (message "oq: %d hit%s" (length results)
+            (message "cloq: %d hit%s" (length results)
                      (if (= 1 (length results)) "" "s")))
           (if (eq (clime-output-name) 'json)
               (mapcar (lambda (h) `((heading . ,h))) results)
-            (mapconcat #'identity results "\n")))))))
+            (mapconcat #'identity results "\n"))))))
 
   (clime-group shortcuts :inline t :category "Shortcuts"
                (clime-alias-for waiting (query)
-                 :help "Show WAITING items"
-                 :vals '((todo . "WAITING")))))
+               :help "Show WAITING items"
+               :vals '((todo . "WAITING")))))
 
-(provide 'oq)
+(provide 'cloq)
 ;;; Entrypoint:
-(when (clime-main-script-p 'oq)
-  (clime-run-batch oq))
-;;; oq.el ends here
+(when (clime-main-script-p 'cloq)
+  (clime-run-batch cloq))
+;;; cloq.el ends here
