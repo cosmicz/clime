@@ -21,12 +21,13 @@
 (clime-app oq
   :version "1.0"
   :help "Query org files from the command line."
-  :json-mode t
   :env-prefix "OQ"
   :epilog "Examples:
   oq query -f tasks.org --todo TODO
   oq query -f tasks.org --sexp '(deadline :to today)' --json
   oq waiting -f tasks.org"
+
+  (clime-output-format json ("--json") :help "Output as JSON")
 
   (clime-option verbose ("-v" "--verbose") :count t
                 :help "Increase verbosity")

@@ -18,6 +18,25 @@
   check `(clime-output-mode-json-p)` to vary output format.  Extensible to
   future output modes.  The `:json-mode` DSL keyword is unchanged.
 
+- **DSL forms are real macros**: `clime-option`, `clime-arg`,
+  `clime-command`, `clime-group`, `clime-alias-for`, `clime-handler`
+  are now `defmacro`/`cl-defmacro` forms.  Each produces its struct
+  when evaluated standalone (REPL-friendly).  Standard `emacs-lisp-mode`
+  keyword completion works inside any DSL form — no custom capf needed.
+
+- **JSON output accumulation**: in JSON mode, `clime-output` calls are
+  buffered and flushed as a single JSON array (2+ items) or bare object
+  (1 item) after the handler returns.  Replaces the previous NDJSON
+  behavior.  Use `clime-output-stream` for explicit NDJSON when needed.
+  Handler return-value wrapping in `{success, data}` envelope is
+  preserved when no `clime-output` calls are made.
+
+- **`clime-output-format` DSL form**: declares output modes as first-class
+  CLI options.  Derives from `clime-option`, inheriting `:mutex`,
+  `:hidden`, `:category`, etc.  Supports `:finalize` for custom envelope
+  shapes and `:streaming` to bypass the accumulator.  `:json-mode t` is
+  kept as deprecated sugar.  Multiple output formats are auto-mutexed.
+
 ### Added
 
 - `clime-alias-for` DSL form: declare a command as an alias for a nested
@@ -73,6 +92,15 @@
   options must be used the same number of times.  Values are zipped into
   a list of alists available in ctx under the group name.  Implies
   `:multiple t`.
+- `clime-output-format`: DSL form for declaring output formats.  Derives
+  from `clime-option` — supports `:finalize` (custom envelope function),
+  `:streaming` (bypass accumulator for NDJSON), and all standard option
+  keywords (`:mutex`, `:hidden`, `:category`, etc.).
+- `clime-output-stream`: emit NDJSON immediately, bypassing the output
+  accumulator.  For streaming use cases where per-call emission is
+  desired.
+- `clime--output-finalize-default`: named default finalize function.
+  items → array/bare, retval → `{success, data}`, nil → nil.
 
 ### Fixed
 

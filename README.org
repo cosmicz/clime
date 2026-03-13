@@ -108,7 +108,7 @@ So ~./myapp.el hello world~ just works from your shell.
 - Deprecation warnings (~:deprecated~) with migration hints
 - Environment variables with auto-derived or per-option names
 - Stdin via ~-~ sentinel
-- JSON output mode (~:json-mode t~)
+- Output formats with accumulation, custom envelopes, and streaming (~clime-output-format~)
 - Epilog text for extra help content
 - Category sections in help output (options, commands, inline groups)
 - Terminal-width-aware help wrapping
@@ -777,23 +777,64 @@ Nested inline groups compose category paths --- an inner group with
 ~:category "Config"~ inside an outer ~:category "Admin"~ produces
 "Admin / Config:" in help.
 
-*** JSON output mode
+*** Output formats
 
-Set ~:json-mode t~ on the app to auto-inject a ~--json~ flag.
-When ~--json~ is set, ~clime-output-mode~ is bound to ~'json~ and handler
-return values are encoded as JSON.  Handlers can check
-~(clime-output-mode-json-p)~ to vary their output format:
+Declare output formats with ~clime-output-format~.  Each format is a
+CLI flag that controls how output is encoded.  The form derives from
+~clime-option~, so it supports ~:mutex~, ~:hidden~, ~:category~, etc.
 
 #+begin_src emacs-lisp
 (clime-app myapp
   :version "1.0"
-  :json-mode t
+
+  (clime-output-format json ("--json")
+    :help "Output as JSON")
+
   ...)
 #+end_src
 
 #+begin_src bash
 ./myapp.el show --json 123
 #+end_src
+
+In JSON mode, ~clime-output-mode~ is bound to the format name and
+handler return values are JSON-encoded in a ~{success, data}~ envelope.
+Handlers calling ~clime-output~ per-item get automatic accumulation ---
+multiple items become a JSON array, a single item is a bare object.
+
+**** Custom envelopes
+
+Use ~:finalize~ to control the JSON envelope shape:
+
+#+begin_src emacs-lisp
+(clime-output-format json ("--json")
+  :finalize (lambda (items retval)
+              (let ((data (or (and items (vconcat items)) retval)))
+                (when data `((result . ,data) (status . "ok"))))))
+#+end_src
+
+The finalize function receives ~(items retval)~ where ~items~ is the
+list of accumulated ~clime-output~ calls and ~retval~ is the handler's
+return value.
+
+**** Streaming (NDJSON)
+
+For streaming output, set ~:streaming t~ on the format.  This bypasses
+the accumulator --- each ~clime-output~ call emits one JSON object per
+line immediately:
+
+#+begin_src emacs-lisp
+(clime-output-format json ("--json") :streaming t)
+#+end_src
+
+Handlers can also call ~clime-output-stream~ explicitly to bypass the
+accumulator in a non-streaming format.
+
+**** Legacy: ~:json-mode~
+
+~:json-mode t~ on ~clime-app~ still works as shorthand for
+~(clime-output-format json ("--json") :help "Output as JSON")~.
+Prefer the explicit form for new code.
 
 ** Advanced
 
@@ -976,7 +1017,7 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 
 | Macro              | Purpose                          | Distinctive arguments                                                 |
 |--------------------+----------------------------------+-----------------------------------------------------------------------|
-| ~clime-app~        | Define a CLI application         | ~:version~, ~:env-prefix~, ~:json-mode~, ~:setup~                    |
+| ~clime-app~        | Define a CLI application         | ~:version~, ~:env-prefix~, ~:json-mode~ (deprecated), ~:setup~       |
 | ~clime-command~    | Define a subcommand              | (uses shared command slots)                                           |
 | ~clime-group~      | Nest related commands            | ~:inline~                                                             |
 | ~clime-option~     | Declare a named option           | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:requires~, ~:mutex~, ~:zip~, ~:env~, ~:category~ |
@@ -984,6 +1025,7 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 | ~clime-defopt~     | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
 | ~clime-defarg~     | Reusable arg template            | Any arg slot except ~:name~                                           |
 | ~clime-alias-for~  | Alias for a nested command       | Path to target command, ~:defaults~, ~:vals~                         |
+| ~clime-output-format~ | Declare an output format      | ~:finalize~, ~:streaming~, ~:encoder~, plus all option slots          |
 | ~clime-handler~    | Attach a handler                 | ~(ctx)~ --- receives the parse context                                |
 | ~clime-let~        | Destructure context in a handler | ~ctx (var1 var2 ...)~ --- binds option/arg values                     |
 
