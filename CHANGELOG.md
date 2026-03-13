@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-03-13
 
 ### Changed
 
@@ -17,8 +17,7 @@
   with `clime--active-output-format` (always a `clime-output-format` struct).
   Every output mode — including default text — is a format struct with
   `:encoder`, `:error-handler`, `:finalize`, and `:streaming` slots.  No if/else
-  branching in output functions.  Handlers check `(clime-output-mode-json-p)`
-  Handlers query the active format via `(clime-output-name)`.
+  branching in output functions.  Handlers query the active format via `(clime-output-name)`.
   The `:json-mode` DSL keyword is unchanged (deprecated).
 
 - **DSL forms are real macros**: `clime-option`, `clime-arg`,
@@ -113,14 +112,16 @@
 - `clime-output-error`: report errors via the active format.  Streaming
   formats dispatch immediately; buffered formats accumulate errors for
   finalize.
+- `examples/cloq.el`: demo app wrapping org-ql into a CLI tool,
+  showcasing output formats, aliases, and JSON mode.
 
 ### Removed
 
 - `clime-format-error` defvar and `clime--format-error-default`: error
   formatting is now handled by the `:error-handler` slot on each
   `clime-output-format` struct.
-- `clime-output-mode-json-p` (deprecated): use `clime-output-json-p`
-  or `(eq (clime-output-name) 'json)` instead.
+- `clime-output-mode-json-p` (deprecated): use
+  `(eq (clime-output-name) 'json)` instead.
 
 ### Fixed
 

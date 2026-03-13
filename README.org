@@ -1035,7 +1035,9 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 
 ~:bool t~ is shorthand for ~:nargs 0~ (boolean flag, DSL only).
 
-See =examples/pkm.el= for a comprehensive demo covering all major features.
+See =examples/pkm.el= for a comprehensive demo covering all major features,
+and =examples/cloq.el= for an org-ql CLI showcasing output formats, aliases,
+and JSON mode.
 
 * Bundling & Distribution
 
@@ -1196,6 +1198,10 @@ The bundler extracts only the library section (=;;; Code:= to
 each source file run standalone during development while bundling
 cleanly.  Files without the marker are extracted up to
 =;;; ... ends here= as usual.
+
+~clime-run-batch~ is a no-op in interactive Emacs (emits a warning
+instead of calling ~kill-emacs~), so loading a script with
+~(require 'myapp)~ during development is safe.
 
 If ~(clime-run-batch ...)~ appears in a source file's library section
 (above the marker or without one), ~bundle~ signals an error --- move

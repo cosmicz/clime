@@ -6,7 +6,7 @@
 ;; URL: https://github.com/cosmicz/clime
 ;; Keywords: tools, processes
 ;; Package-Requires: ((emacs "29.1"))
-;; Version: 0.2.0
+;; Version: 0.3.0
 
 ;; This file is not part of GNU Emacs.
 
@@ -37,7 +37,7 @@
 (require 'clime-output)
 (require 'clime-run)
 
-(defconst clime-version "0.2.0"
+(defconst clime-version "0.3.0"
   "The clime package version string.")
 
 (defconst clime--modules

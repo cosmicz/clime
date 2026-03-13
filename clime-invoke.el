@@ -202,7 +202,7 @@ PATH is a list of command name strings, or nil for root."
 
 ;;; ─── Spec Builders ─────────────────────────────────────────────────────
 
-(defun clime-invoke--option-to-spec (option key prefix-sym)
+(defun clime-invoke--option-to-spec (option key _prefix-sym)
   "Build a transient suffix spec for OPTION with KEY under PREFIX-SYM.
 Returns a shorthand spec list consumable by `transient-parse-suffixes'."
   (let* ((name (clime-option-name option))

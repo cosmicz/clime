@@ -17,6 +17,8 @@
 
 (require 'cl-lib)
 
+(declare-function json-encode "json")
+
 ;;; ─── Option ─────────────────────────────────────────────────────────────
 
 (cl-defstruct (clime-option (:constructor clime-option--create)
