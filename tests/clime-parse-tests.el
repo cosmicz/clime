@@ -437,6 +437,36 @@
     (should-error (clime-parse app '("deploy"))
                   :type 'clime-usage-error)))
 
+(ert-deftest clime-test-parse/required-option-satisfied-by-cli ()
+  "Required option satisfied via CLI succeeds."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                 :required t))
+         (cmd (clime-make-command :name "deploy"
+                                  :handler (lambda (ctx)
+                                             (clime-ctx-get ctx 'token))
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "deploy" cmd))))
+         (output (with-output-to-string
+                   (clime-run app '("deploy" "--token" "abc")))))
+    (should (equal output "abc"))))
+
+(ert-deftest clime-test-parse/required-option-satisfied-by-env ()
+  "Required option satisfied via env var succeeds."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                 :required t))
+         (cmd (clime-make-command :name "deploy"
+                                  :handler (lambda (ctx)
+                                             (clime-ctx-get ctx 'token))
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1" :env-prefix "TEST_RO"
+                              :children (list (cons "deploy" cmd)))))
+    (let ((process-environment (append '("TEST_RO_TOKEN=from-env")
+                                       process-environment)))
+      (let ((output (with-output-to-string
+                      (clime-run app '("deploy")))))
+        (should (equal output "from-env"))))))
+
 (ert-deftest clime-test-parse/short-bundle-non-boolean-error ()
   "Short bundle with non-boolean flag signals usage error."
   (let* ((opt-v (clime-make-option :name 'verbose :flags '("-v") :count t))
@@ -1192,6 +1222,164 @@
          (result (clime-parse app '("repo" "add" "myrepo"))))
     (should (equal (clime-parse-result-path result)
                    '("t" "repo" "add")))))
+
+;;; ─── :conform Slot ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/conform-option-pass ()
+  "Option :conform returning value keeps it unchanged."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :conform (lambda (v)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--id" "42"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id)
+                   "42"))))
+
+(ert-deftest clime-test-parse/conform-option-fail ()
+  "Option :conform that signals error produces clime-usage-error."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :conform (lambda (v)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--id" "abc"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/conform-transforms-value ()
+  "Option :conform return value replaces the param."
+  (let* ((opt (clime-make-option :name 'status :flags '("--status")
+                                  :conform #'upcase))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "list" cmd))))
+         (result (clime-parse app '("list" "--status" "todo"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'status)
+                   "TODO"))))
+
+(ert-deftest clime-test-parse/conform-nil-skipped ()
+  "Option :conform is skipped when value is nil (not supplied)."
+  (let* ((called nil)
+         (opt (clime-make-option :name 'id :flags '("--id")
+                                  :conform (lambda (_v) (setq called t))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (clime-parse app '("show"))
+    (should-not called)))
+
+(ert-deftest clime-test-parse/conform-arg ()
+  "Arg :conform that signals error produces clime-usage-error."
+  (let* ((arg (clime-make-arg :name 'file :required t
+                               :conform (lambda (v)
+                                          (unless (string-suffix-p ".el" v)
+                                            (error "Must be an .el file"))
+                                          v)))
+         (cmd (clime-make-command :name "load" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "load" cmd)))))
+    (should-error (clime-parse app '("load" "foo.py"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/conform-arg-transforms ()
+  "Arg :conform return value replaces the param."
+  (let* ((arg (clime-make-arg :name 'name :required t
+                               :conform #'downcase))
+         (cmd (clime-make-command :name "greet" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "greet" cmd))))
+         (result (clime-parse app '("greet" "WORLD"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name)
+                   "world"))))
+
+(ert-deftest clime-test-parse/conform-after-choices ()
+  "Option :conform runs after dynamic :choices validation."
+  (let* ((order '())
+         (opt (clime-make-option :name 'fmt :flags '("--fmt")
+                                  :choices (lambda ()
+                                             (push 'choices order)
+                                             '("json" "csv"))
+                                  :conform (lambda (v)
+                                             (push 'conform order)
+                                             v)))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd)))))
+    (clime-parse app '("show" "--fmt" "json"))
+    (should (equal (nreverse order) '(choices conform)))))
+
+(ert-deftest clime-test-parse/conform-multiple-option ()
+  "Option :conform receives the full list for :multiple options."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag") :multiple t
+                                  :conform (lambda (vs) (mapcar #'upcase vs))))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "show" cmd))))
+         (result (clime-parse app '("show" "--tag" "a" "--tag" "b"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("A" "B")))))
+
+;;; ─── Inline Group Error Path ────────────────────────────────────────────
+
+(ert-deftest clime-test-parse/inline-group-error-excludes-group-name ()
+  "Error messages for commands reached through inline groups exclude the group name."
+  (let* ((cmd (clime-make-command :name "log" :handler #'ignore
+                                   :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "ops" :inline t
+                                :children (list (cons "log" cmd))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "ops" grp)))))
+    (condition-case err
+        (clime-parse app '("log"))
+      (clime-usage-error
+       ;; The error message should say "myapp log", not "myapp ops log"
+       (should (string-match-p "for myapp log" (cadr err)))
+       ;; The hint path (third element) should also exclude "ops"
+       (should (equal (caddr err) '("myapp" "log")))))))
+
+(ert-deftest clime-test-parse/inline-group-error-nested ()
+  "Nested inline groups are all excluded from error paths."
+  (let* ((cmd (clime-make-command :name "start" :handler #'ignore
+                                   :args (list (clime-make-arg :name 'svc))))
+         (inner (clime-make-group :name "inner" :inline t
+                                  :children (list (cons "start" cmd))))
+         (outer (clime-make-group :name "outer" :inline t
+                                  :children (list (cons "inner" inner))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "outer" outer)))))
+    (condition-case err
+        (clime-parse app '("start"))
+      (clime-usage-error
+       (should (string-match-p "for myapp start" (cadr err)))
+       (should (equal (caddr err) '("myapp" "start")))))))
+
+(ert-deftest clime-test-parse/non-inline-group-error-includes-name ()
+  "Non-inline group names still appear in error paths."
+  (let* ((cmd (clime-make-command :name "log" :handler #'ignore
+                                   :args (list (clime-make-arg :name 'name))))
+         (grp (clime-make-group :name "ops"
+                                :children (list (cons "log" cmd))))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "ops" grp)))))
+    (condition-case err
+        (clime-parse app '("ops" "log"))
+      (clime-usage-error
+       (should (string-match-p "for myapp ops log" (cadr err)))
+       (should (equal (caddr err) '("myapp" "ops" "log")))))))
 
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

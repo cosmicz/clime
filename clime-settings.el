@@ -18,5 +18,11 @@
   :group 'tools
   :prefix "clime-")
 
+(defvar clime-help-width nil
+  "Terminal width for help text wrapping.
+When nil, auto-detect from COLUMNS env var, fallback 80.
+When a positive integer, use that width directly.
+Clamped to a minimum of 40.")
+
 (provide 'clime-settings)
 ;;; clime-settings.el ends here

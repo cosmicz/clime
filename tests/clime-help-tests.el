@@ -328,12 +328,12 @@
          (app (clime-make-app :name "t" :version "1"
                               :children (list (cons "admin" grp))))
          (help (clime-format-help app '("t"))))
-    ;; Option composes: Admin / Auth
-    (should (string-match-p "^Admin / Auth:" help))
-    (should (string-match-p "--token" help))
-    ;; Command inherits: Admin
+    ;; Top-level: Admin heading
     (should (string-match-p "^Admin:" help))
-    (should (string-match-p "status" help))))
+    (should (string-match-p "status" help))
+    ;; Option sub-category indented with scope annotation
+    (should (string-match-p "^  Auth (status):" help))
+    (should (string-match-p "--token" help))))
 
 ;; 13. Nested inline groups → paths compose
 (ert-deftest clime-test-help/cat-13-nested-inline-compose ()
@@ -355,7 +355,7 @@
          (app (clime-make-app :name "t" :version "1"
                               :children (list (cons "admin" admin-grp))))
          (help (clime-format-help app '("t"))))
-    (should (string-match-p "^Admin / Config:" help))
+    (should (string-match-p "^  Config:" help))
     (should (string-match-p "^Admin:" help))
     (should (string-match-p "get" help))
     (should (string-match-p "set" help))
@@ -471,13 +471,14 @@
                               :children (list (cons "admin1" admin-a)
                                               (cons "admin2" admin-b))))
          (help (clime-format-help app '("t"))))
-    ;; Both get and set under single "Admin / Config:" heading
-    (should (string-match-p "^Admin / Config:" help))
+    ;; Both get and set under single "Config:" sub-heading within "Admin:"
+    (should (string-match-p "^Admin:" help))
+    (should (string-match-p "^  Config:" help))
     (should (string-match-p "get" help))
     (should (string-match-p "set" help))
-    ;; Only one such heading
+    ;; Only one Config: sub-heading
     (should (= 1 (let ((count 0) (start 0))
-                   (while (string-match "^Admin / Config:" help start)
+                   (while (string-match "^  Config:" help start)
                      (cl-incf count)
                      (setq start (match-end 0)))
                    count)))))
@@ -557,7 +558,8 @@
          (app (clime-make-app :name "t" :version "1"
                               :children (list (cons "admin" l1))))
          (help (clime-format-help app '("t"))))
-    (should (string-match-p "^Admin / Config / Keys:" help))
+    (should (string-match-p "^Admin:" help))
+    (should (string-match-p "^  Config / Keys:" help))
     (should (string-match-p "get" help))))
 
 ;;; ─── Version ──────────────────────────────────────────────────────────
@@ -794,6 +796,237 @@
                                   :options (list opt)))
          (help (clime-format-help cmd '("app" "show"))))
     (should (string-match-p "choices: json, table" help))))
+
+;;; ─── Nested Category Sections ───────────────────────────────────────────
+
+(ert-deftest clime-test-help/nested-categories-merged ()
+  "Options with sub-categories and commands with parent category merge
+into one section with indented sub-headings."
+  (let* ((sect-opt (clime-make-option :name 'design :flags '("--design")
+                                       :help "Set Design section"
+                                       :category "Sections"))
+         (note-opt (clime-make-option :name 'note :flags '("--note")
+                                      :help "Append a note"
+                                      :category "Notes"))
+         (mutate (clime-make-group :name "mutate" :inline t
+                                   :category "Lifecycle"
+                                   :options (list sect-opt note-opt)
+                                   :children (list
+                                              (cons "update"
+                                                    (clime-make-command
+                                                     :name "update"
+                                                     :handler #'ignore
+                                                     :help "Update fields"))
+                                              (cons "close"
+                                                    (clime-make-command
+                                                     :name "close"
+                                                     :handler #'ignore
+                                                     :help "Close bead")))))
+         (claim (clime-make-command :name "claim" :handler #'ignore
+                                    :help "Claim a bead"
+                                    :category "Lifecycle"))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "mutate" mutate)
+                                              (cons "claim" claim)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help app '("t"))))
+      ;; Single "Lifecycle:" heading (not "Lifecycle / Sections:")
+      (should (string-match-p "^Lifecycle:" help))
+      (should-not (string-match-p "Lifecycle / " help))
+      ;; Commands at standard indent under Lifecycle
+      (should (string-match-p "^  update " help))
+      (should (string-match-p "^  claim " help))
+      ;; Sub-headings indented, with scope annotation
+      (should (string-match-p "^  Sections (update, close):" help))
+      (should (string-match-p "^  Notes (update, close):" help))
+      ;; Options double-indented under sub-headings
+      (should (string-match-p "^    --design " help))
+      (should (string-match-p "^    --note " help)))))
+
+(ert-deftest clime-test-help/flat-category-no-nesting ()
+  "Category with no sub-categories renders flat (no sub-headings)."
+  (let* ((cmd-a (clime-make-command :name "init" :handler #'ignore
+                                     :help "Initialize" :category "Admin"))
+         (cmd-b (clime-make-command :name "setup" :handler #'ignore
+                                    :help "Setup wizard" :category "Admin"))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "init" cmd-a)
+                                              (cons "setup" cmd-b)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help app '("t"))))
+      ;; Single flat "Admin:" section
+      (should (string-match-p "^Admin:" help))
+      ;; Commands at standard indent
+      (should (string-match-p "^  init " help))
+      (should (string-match-p "^  setup " help)))))
+
+(ert-deftest clime-test-help/uncategorized-still-standard ()
+  "Uncategorized options go to 'Options:', commands to 'Commands:'."
+  (let* ((opt (clime-make-option :name 'json :flags '("--json")
+                                  :nargs 0 :help "JSON output"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show details"))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list opt)
+                              :children (list (cons "show" cmd)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help app '("t"))))
+      (should (string-match-p "^Options:" help))
+      (should (string-match-p "^Commands:" help)))))
+
+;;; ─── Command Footer ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/footer-shown-for-group ()
+  "Branch nodes with children show a command help footer."
+  (let ((help (clime-format-help clime-test--help-app '("myapp"))))
+    (should (string-match-p
+             "Run \"myapp COMMAND --help\" for more information on a command\\."
+             help))))
+
+(ert-deftest clime-test-help/footer-not-shown-for-leaf ()
+  "Leaf commands do not show a command help footer."
+  (let ((help (clime-format-help clime-test--help-cmd '("myapp" "show"))))
+    (should-not (string-match-p "for more information on a command" help))))
+
+(ert-deftest clime-test-help/footer-nested-group-path ()
+  "Nested group footer uses full path."
+  (let* ((cmd (clime-make-command :name "keys" :handler #'ignore
+                                   :help "Manage keys"))
+         (grp (clime-make-group :name "config" :help "Config management"
+                                 :children (list (cons "keys" cmd))))
+         (app (clime-make-app :name "myapp" :version "1"
+                               :children (list (cons "config" grp)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help grp '("myapp" "config"))))
+      (should (string-match-p
+               "Run \"myapp config COMMAND --help\" for more information"
+               help)))))
+
+(ert-deftest clime-test-help/footer-after-epilog ()
+  "Footer appears after epilog text."
+  (let* ((cmd (clime-make-command :name "sub" :handler #'ignore
+                                   :help "A sub"))
+         (app (clime-make-app :name "myapp" :version "1"
+                               :epilog "See https://example.com"
+                               :children (list (cons "sub" cmd)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help app '("myapp"))))
+      (should (string-match-p "See https://example\\.com" help))
+      (should (string-match-p "for more information on a command" help))
+      ;; Footer comes after epilog
+      (let ((epilog-pos (string-match "See https://example\\.com" help))
+            (footer-pos (string-match "for more information" help)))
+        (should (> footer-pos epilog-pos))))))
+
+;;; ─── Text Wrapping ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/wrap-text-basic ()
+  "clime-help--wrap-text wraps at word boundaries."
+  (let ((result (clime-help--wrap-text "one two three four five" 12)))
+    (should (equal result "one two\nthree four\nfive"))))
+
+(ert-deftest clime-test-help/wrap-text-preserves-newlines ()
+  "clime-help--wrap-text preserves existing line breaks."
+  (let ((result (clime-help--wrap-text "line one\nline two has words" 15)))
+    (should (equal result "line one\nline two has\nwords"))))
+
+(ert-deftest clime-test-help/wrap-text-with-prefix ()
+  "clime-help--wrap-text prepends prefix to continuation lines.
+Width applies to content; prefix is extra visual indentation."
+  (let ((result (clime-help--wrap-text "one two three four" 10 "    ")))
+    ;; "one two" (7) fits, "one two three" (13) doesn't → wrap
+    (should (equal result "one two\n    three four"))))
+
+(ert-deftest clime-test-help/wrap-text-long-word ()
+  "Words longer than width are not broken."
+  (let ((result (clime-help--wrap-text "short verylongwordhere end" 10)))
+    (should (string-match-p "verylongwordhere" result))))
+
+(ert-deftest clime-test-help/wrap-text-fits ()
+  "Text that fits within width is not modified."
+  (let ((result (clime-help--wrap-text "short text" 80)))
+    (should (equal result "short text"))))
+
+(ert-deftest clime-test-help/terminal-width-default ()
+  "Default terminal width is 80 when COLUMNS is unset."
+  (let ((clime-help-width nil)
+        (process-environment (cl-remove-if
+                              (lambda (e) (string-prefix-p "COLUMNS=" e))
+                              process-environment)))
+    (should (= 80 (clime-help--terminal-width)))))
+
+(ert-deftest clime-test-help/terminal-width-from-var ()
+  "clime-help-width overrides auto-detection."
+  (let ((clime-help-width 60))
+    (should (= 60 (clime-help--terminal-width)))))
+
+(ert-deftest clime-test-help/terminal-width-from-columns ()
+  "COLUMNS env var is used for auto-detection."
+  (let ((clime-help-width nil)
+        (process-environment (cons "COLUMNS=120" process-environment)))
+    (should (= 120 (clime-help--terminal-width)))))
+
+(ert-deftest clime-test-help/terminal-width-minimum ()
+  "Width is clamped to minimum 40."
+  (let ((clime-help-width 20))
+    (should (= 40 (clime-help--terminal-width)))))
+
+(ert-deftest clime-test-help/table-wraps-help-column ()
+  "Table help text wraps when it would exceed terminal width."
+  (let* ((clime-help-width 50)
+         (opt (clime-make-option :name 'output
+                                 :flags '("--output" "-o")
+                                 :help "Set the output format for all commands in the system"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show"
+                                  :options (list opt)))
+         (help (clime-format-help cmd '("app" "show"))))
+    ;; No line in the options section should exceed 50 chars
+    (let ((lines (split-string help "\n")))
+      (dolist (line lines)
+        (should (<= (length line) 50))))))
+
+(ert-deftest clime-test-help/description-wraps ()
+  "Description paragraph wraps at terminal width."
+  (let* ((clime-help-width 40)
+         (cmd (clime-make-command
+               :name "show" :handler #'ignore
+               :help "This is a long description that should be wrapped at the terminal width boundary")))
+    (let ((help (clime-format-help cmd '("app" "show"))))
+      (dolist (line (split-string help "\n"))
+        (should (<= (length line) 40))))))
+
+(ert-deftest clime-test-help/epilog-wraps ()
+  "Epilog text wraps at terminal width."
+  (let* ((clime-help-width 40)
+         (cmd (clime-make-command :name "sub" :handler #'ignore :help "Sub"))
+         (app (clime-make-app :name "app" :version "1"
+                               :epilog "This is an epilog with enough words to require wrapping at narrow widths"
+                               :children (list (cons "sub" cmd)))))
+    (clime--set-parent-refs app)
+    (let* ((help (clime-format-help app '("app")))
+           (lines (split-string help "\n")))
+      ;; Check epilog lines are wrapped (skip usage, footer, and empty lines)
+      (let ((epilog-lines (cl-remove-if
+                           (lambda (l) (or (string-prefix-p "Usage:" l)
+                                           (string-prefix-p "Run \"" l)
+                                           (string-empty-p l)))
+                           lines)))
+        (dolist (line epilog-lines)
+          (should (<= (length line) 40)))))))
+
+(ert-deftest clime-test-help/usage-not-wrapped ()
+  "Usage line is not wrapped even when it exceeds terminal width."
+  (let* ((clime-help-width 40)
+         (cmd (clime-make-command
+               :name "deploy" :handler #'ignore
+               :help "Deploy"
+               :args (list (clime-make-arg :name 'target)
+                           (clime-make-arg :name 'environment)))))
+    (let* ((help (clime-format-help cmd '("myapp" "infra" "deploy")))
+           (usage-line (car (split-string help "\n"))))
+      ;; Usage line should be intact, not wrapped
+      (should (string-match-p "^Usage: myapp infra deploy" usage-line)))))
 
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

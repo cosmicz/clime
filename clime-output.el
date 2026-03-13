@@ -9,28 +9,30 @@
 
 ;;; Commentary:
 
-;; Dual text/JSON output protocol.  Handlers call clime-output-* helpers
-;; which dispatch to plain text or JSON based on the current mode.
+;; Format-driven output protocol.  Every output mode is a
+;; `clime-output-format' — including the default text mode.  The active
+;; format struct encapsulates all output behavior: encoding, error
+;; handling, accumulation, finalization.
+;;
+;; `clime--active-output-format' is always non-nil (defaults to text).
+;; Handlers call `clime-output', `clime-output-error', and
+;; `clime-output-stream' which dispatch through the active format.
+;;
+;; In buffered mode (streaming=nil), items and errors accumulate in
+;; `clime--output-items' and `clime--output-errors'.  After the handler
+;; returns, `clime--output-flush' passes both to the format's finalize
+;; function which controls the output envelope.
 ;;
 ;; JSON encoding conventions:
 ;;   nil     → JSON null
 ;;   :json-false → JSON false
 ;;   vectors → JSON arrays (use [] for empty array, NOT nil)
 ;;   plists/alists → JSON objects
-;;
-;; Multiple output calls emit NDJSON (one JSON object per line).
-;; For a single clean JSON response, use the callback return protocol.
 
 ;;; Code:
 
 (require 'json)
 (require 'clime-core)
-
-;;; ─── Mode Variable ────────────────────────────────────────────────────
-
-(defvar clime--json-mode-p nil
-  "Non-nil when --json output mode is active.
-Bound dynamically by `clime-run' based on pre-parse --json detection.")
 
 ;;; ─── JSON Encoding ────────────────────────────────────────────────────
 
@@ -40,50 +42,110 @@ Thin wrapper around `json-encode'.  See commentary for encoding
 conventions (nil→null, vectors→arrays, :json-false→false)."
   (json-encode data))
 
-;;; ─── Pre-parse Helpers ────────────────────────────────────────────────
+;;; ─── Default Format ───────────────────────────────────────────────────
 
-(defun clime--pre-parse-json-p (argv)
-  "Return non-nil if ARGV contains \"--json\"."
-  (member "--json" argv))
+(defconst clime-output-default-format
+  (clime-make-output-format
+   :name 'text
+   :flags '("--text")
+   :streaming t
+   :encoder (lambda (data) (format "%s" data))
+   :error-handler (lambda (msg) (message "Error: %s" msg)))
+  "Default text output format.  Always-streaming, princ-based.
+Not a CLI option — just a behavior container for text mode.")
 
-;;; ─── Output Helpers ───────────────────────────────────────────────────
+;;; ─── Dynamic State ────────────────────────────────────────────────────
+
+(defvar clime--active-output-format clime-output-default-format
+  "The active output format struct.
+Always non-nil.  Bound by `clime-run' to the detected format or
+the default text format.")
+
+(defvar clime--output-items nil
+  "Accumulated output items (buffered mode only).
+Items are appended in emission order.")
+
+(defvar clime--output-errors nil
+  "Accumulated error strings (buffered mode only).
+Errors are appended in chronological order.")
+
+;;; ─── Active Format Query ──────────────────────────────────────────────
+
+(defun clime-output-name ()
+  "Return the name symbol of the active output format.
+E.g. `text', `json', `yaml'.  Handlers use this to branch on
+output format: (eq (clime-output-name) \\='json)."
+  (clime-output-format-name clime--active-output-format))
+
+(make-obsolete 'clime-output-mode-json-p "use (eq (clime-output-name) 'json)" "0.3.0")
+(defun clime-output-mode-json-p ()
+  "Deprecated.  Use (eq (clime-output-name) \\='json) instead."
+  (eq (clime-output-name) 'json))
+
+;;; ─── Output Functions ─────────────────────────────────────────────────
 
 (defun clime-output (data)
-  "Output DATA in the current mode.
-JSON mode: print JSON-encoded data + newline (NDJSON).
-Text mode: print data as string."
-  (if clime--json-mode-p
-      (princ (concat (clime-json-encode data) "\n"))
-    (princ (format "%s" data)))
-  data)
-
-(defun clime-output-success (data)
-  "Output DATA as a success result.
-JSON mode: {\"success\": true, \"data\": DATA} + newline.
-Text mode: print data as-is."
-  (if clime--json-mode-p
-      (princ (concat (clime-json-encode `((success . t) (data . ,data))) "\n"))
-    (princ (format "%s" data)))
+  "Output DATA via the active format.
+Streaming: encode and princ immediately.
+Buffered: append to `clime--output-items' (flushed later)."
+  (let ((fmt clime--active-output-format))
+    (if (clime-output-format-streaming fmt)
+        (princ (funcall (clime-output-format-encoder fmt) data))
+      (setq clime--output-items (nconc clime--output-items (list data)))))
   data)
 
 (defun clime-output-error (msg)
-  "Output MSG as an error.
-JSON mode: {\"error\": MSG} + newline to stdout.
-Text mode: \"Error: MSG\" to stderr."
-  (if clime--json-mode-p
-      (princ (concat (clime-json-encode `((error . ,msg))) "\n"))
-    (message "Error: %s" msg)))
+  "Report error MSG via the active format.
+Streaming: dispatches to the format's error-handler (immediate).
+Buffered: appends to `clime--output-errors' (handled at finalize)."
+  (let ((fmt clime--active-output-format))
+    (if (clime-output-format-streaming fmt)
+        (funcall (clime-output-format-error-handler fmt) msg)
+      (setq clime--output-errors (nconc clime--output-errors (list msg))))))
 
-(defun clime-output-list (items)
-  "Output ITEMS as a list result.
-JSON mode: {\"success\": true, \"data\": [...]} + newline.
-Text mode: print each item on its own line."
-  (if clime--json-mode-p
-      (let ((arr (if (vectorp items) items (vconcat items))))
-        (princ (concat (clime-json-encode `((success . t) (data . ,arr))) "\n")))
-    (dolist (item items)
-      (princ (format "%s\n" item))))
-  items)
+(defun clime-output-stream (data)
+  "Emit DATA immediately, bypassing the accumulator.
+Always encodes via the active format's encoder."
+  (princ (funcall (clime-output-format-encoder clime--active-output-format) data))
+  data)
+
+;;; ─── Finalize ─────────────────────────────────────────────────────────
+
+(defun clime--output-finalize-default (items retval errors)
+  "Default finalize: wrap output for emission.
+ITEMS is a list of accumulated `clime-output' items (may be nil).
+RETVAL is the handler's return value.
+ERRORS is a list of error strings (may be nil).
+Returns data to encode, or nil for no output.
+
+Priority: errors > items > retval.
+- errors non-nil → ((error . first-msg))
+- items 2+       → [item1, item2, ...]
+- items 1        → bare item
+- retval non-nil → ((success . t) (data . retval))
+- all nil        → nil"
+  (cond
+   (errors
+    `((error . ,(car errors))))
+   (items
+    (if (cdr items) (vconcat items) (car items)))
+   (retval
+    `((success . t) (data . ,retval)))))
+
+(defun clime--output-flush (finalize retval)
+  "Flush accumulated output using FINALIZE function.
+FINALIZE receives (items retval errors) and returns data to encode.
+Defaults to `clime--output-finalize-default'.
+RETVAL is the handler's return value (passed through to finalize).
+Reads items from `clime--output-items' and errors from `clime--output-errors'."
+  (let* ((items clime--output-items)
+         (errors clime--output-errors)
+         (fn (or finalize #'clime--output-finalize-default))
+         (data (funcall fn items retval errors)))
+    (setq clime--output-items nil)
+    (setq clime--output-errors nil)
+    (when data
+      (princ (funcall (clime-output-format-encoder clime--active-output-format) data)))))
 
 (provide 'clime-output)
 ;;; clime-output.el ends here

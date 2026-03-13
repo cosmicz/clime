@@ -1,5 +1,5 @@
 #!/bin/sh
-":"; S="$(realpath "$0")";D="$(dirname "$S")"; CLIME_ARGV0="$0" exec emacs --batch -Q -L "$D" --eval "(setq load-file-name \"$S\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+":"; S="$(realpath "$0")";D="$(dirname "$S")"; CLIME_ARGV0="$0" CLIME_MAIN_APP=clime-make exec emacs --batch -Q -L "$D" --eval "(setq load-file-name \"$S\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -11,13 +11,17 @@
 
 ;;; Commentary:
 
-;; Command-line interface for clime itself.  Provides `init' (add
-;; shebang to an Elisp file) and `bundle' (concatenate multiple
-;; source files into a single distributable).
+;; Command-line interface for clime itself.  Provides:
+;;   `init'      — add shebang to an Elisp file
+;;   `bundle'    — concatenate multiple source files into a single distributable
+;;   `scaffold'  — insert ;;; Entrypoint: boilerplate into an Elisp file
+;;   `quickstart' — scaffold + init in one shot (auto CLIME_MAIN_APP)
 ;;
 ;; Usage:
 ;;   ./clime-make.el init myapp.el
 ;;   ./clime-make.el init myapp.el -L ./lib
+;;   ./clime-make.el scaffold myapp.el
+;;   ./clime-make.el quickstart myapp.el --self-dir
 ;;   ./clime-make.el bundle -o bundle.el --provide mylib src/*.el
 ;;   ./clime-make.el --help
 
@@ -208,6 +212,26 @@ or nil if FILE has no `;;; Entrypoint:' marker."
                                 (file-name-nondirectory file)))))
         (buffer-substring start end)))))
 
+(defun clime-make--detect-app (file-path)
+  "Detect the clime-app symbol in FILE-PATH.
+Reads the file and finds the first `(clime-app SYMBOL ...)' form.
+Returns SYMBOL as a symbol, or nil if not found."
+  (with-temp-buffer
+    (insert-file-contents file-path)
+    (goto-char (point-min))
+    (when (re-search-forward "^(clime-app[[:space:]]+\\([^ \t\n)]+\\)" nil t)
+      (intern (match-string 1)))))
+
+(defun clime-make--detect-feature (file-path)
+  "Detect the provide feature symbol in FILE-PATH.
+Reads the file and finds the first `(provide \\='FEATURE)' form.
+Returns FEATURE as a symbol, or nil if not found."
+  (with-temp-buffer
+    (insert-file-contents file-path)
+    (goto-char (point-min))
+    (when (re-search-forward "^(provide '\\([^ \t\n)]+\\))" nil t)
+      (intern (match-string 1)))))
+
 ;;; ─── Handlers ──────────────────────────────────────────────────────────
 
 (defun clime-make--init-handler (ctx)
@@ -302,60 +326,158 @@ CTX is the clime context."
         (write-region nil nil out))
       (format "Wrote %s" out))))
 
+(defun clime-make--scaffold-handler (ctx)
+  "Handle the `scaffold' command: insert entrypoint boilerplate.
+CTX is the clime context."
+  (clime-let ctx (file)
+    (let* ((target (expand-file-name file)))
+      (unless (file-exists-p target)
+        (signal 'clime-usage-error
+                (list (format "%s does not exist" file))))
+      (let* ((app-sym (clime-make--detect-app target))
+             (feature (or (clime-make--detect-feature target) app-sym)))
+        (unless app-sym
+          (signal 'clime-usage-error
+                  (list (format "no clime-app form found in %s"
+                                (file-name-nondirectory file)))))
+        ;; Check for existing entrypoint
+        (with-temp-buffer
+          (insert-file-contents target)
+          (goto-char (point-min))
+          (if (re-search-forward "^;;; Entrypoint:" nil t)
+              (format "skipped: %s already has ;;; Entrypoint: section" target)
+            ;; Check for unguarded clime-run-batch in the file
+            (goto-char (point-min))
+            (let ((has-bare-run-batch
+                   (re-search-forward "^(clime-run-batch " nil t)))
+              ;; Build entrypoint text
+              (let ((entry (format ";;; Entrypoint:\n(when (clime-main-script-p '%s)\n  (clime-run-batch %s))\n"
+                                   feature app-sym)))
+                (goto-char (point-max))
+                (if (re-search-backward "^;;; .* ends here" nil t)
+                    (progn
+                      (goto-char (line-beginning-position))
+                      (insert entry))
+                  (goto-char (point-max))
+                  (unless (bolp) (insert "\n"))
+                  (insert entry))
+                (write-region nil nil target))
+              (let ((msg (format "done: added entrypoint to %s" target)))
+                (if has-bare-run-batch
+                    (format "%s\nwarning: %s has (clime-run-batch ...) outside ;;; Entrypoint: section — it will run unconditionally alongside the guarded entrypoint"
+                            msg (file-name-nondirectory file))
+                  msg)))))))))
+
+(defun clime-make--quickstart-handler (ctx)
+  "Handle the `quickstart' command: scaffold + init with auto CLIME_MAIN_APP.
+CTX is the clime context."
+  (clime-let ctx (file env)
+    (let* ((target (expand-file-name file))
+           (app-sym (clime-make--detect-app target)))
+      ;; Scaffold first
+      (let ((scaffold-result (clime-make--scaffold-handler ctx)))
+        ;; Auto-inject CLIME_MAIN_APP unless user already passed it
+        (when (and app-sym
+                   (not (cl-some (lambda (e) (string-prefix-p "CLIME_MAIN_APP=" e))
+                                 (or env '()))))
+          (let ((new-env (cons (format "CLIME_MAIN_APP=%s" app-sym)
+                               (or env '()))))
+            (setf (clime-context-params ctx)
+                  (plist-put (clime-context-params ctx) 'env new-env))))
+        ;; Delegate to init
+        (let ((init-result (clime-make--init-handler ctx)))
+          (format "%s\n%s" scaffold-result init-result))))))
+
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
 (clime-app clime-make
-           :version clime-version
-           :help "clime — declarative CLI framework for Emacs Lisp."
+  :version clime-version
+  :help "clime — declarative CLI framework for Emacs Lisp."
 
-           ;; ── init ─────────────────────────────────────────────────────────────
-           (clime-command
-            init
-            :help "Add a polyglot shebang header to an Emacs Lisp file"
+  ;; ── init ─────────────────────────────────────────────────────────────
+  (clime-command
+   init
+   :help "Add a polyglot shebang header to an Emacs Lisp file"
 
-            (clime-arg file :help "The .el file to initialize")
+   (clime-arg file :help "The .el file to initialize")
 
-            (clime-option extra-load-path ("--load-path" "-L") :multiple t
-                          :help "Additional load paths to include in the shebang")
+   (clime-option extra-load-path ("--load-path" "-L") :multiple t
+                 :help "Additional load paths to include in the shebang")
 
-            (clime-option self-dir ("--self-dir") :flag t
-                          :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
+   (clime-option self-dir ("--self-dir") :bool t
+                 :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
-            (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
-                          :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
+   (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
+                 :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
 
-            (clime-option standalone ("--standalone") :flag t
-                          :help "Skip the automatic clime load path (for vendored/bundled setups)")
+   (clime-option standalone ("--standalone") :bool t
+                 :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-            (clime-option force ("--force" "-f") :flag t
-                          :help "Replace an existing non-clime shebang")
+   (clime-option force ("--force" "-f") :bool t
+                 :help "Replace an existing non-clime shebang")
 
-            (clime-option env ("--env" "-e") :multiple t
-                          :help "Set environment variable in shebang (NAME=VALUE)")
+   (clime-option env ("--env" "-e") :multiple t
+                 :help "Set environment variable in shebang (NAME=VALUE)")
 
-            (clime-handler (ctx) (clime-make--init-handler ctx)))
+   (clime-handler (ctx) (clime-make--init-handler ctx)))
 
-           ;; ── bundle ──────────────────────────────────────────────────────────
-           (clime-command bundle
-                          :help "Concatenate multiple Elisp source files into a single file"
+  ;; ── bundle ──────────────────────────────────────────────────────────
+  (clime-command bundle
+                 :help "Concatenate multiple Elisp source files into a single file"
 
-                          (clime-arg files :nargs :rest :help "Source files in dependency order")
+                 (clime-arg files :nargs :rest :help "Source files in dependency order")
 
-                          (clime-option output ("--output" "-o") :required t
-                                        :help "Output file path")
+                 (clime-option output ("--output" "-o") :required t
+                               :help "Output file path")
 
-                          (clime-option provide ("--provide" "-p")
-                                        :help "Feature name for (provide 'FEATURE) (default: output filename)")
+                 (clime-option provide ("--provide" "-p")
+                               :help "Feature name for (provide 'FEATURE) (default: output filename)")
 
-                          (clime-option main ("--main" "-m")
-                                        :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
+                 (clime-option main ("--main" "-m")
+                               :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
 
-                          (clime-option description ("--description" "-d")
-                                        :help "One-line description for the file header")
+                 (clime-option description ("--description" "-d")
+                               :help "One-line description for the file header")
 
-                          (clime-handler (ctx) (clime-make--bundle-handler ctx))))
+                 (clime-handler (ctx) (clime-make--bundle-handler ctx)))
+
+  ;; ── scaffold ───────────────────────────────────────────────────────
+  (clime-command scaffold
+    :help "Insert ;;; Entrypoint: boilerplate into an Elisp file"
+
+    (clime-arg file :help "The .el file to scaffold")
+
+    (clime-handler (ctx) (clime-make--scaffold-handler ctx)))
+
+  ;; ── quickstart ──────────────────────────────────────────────────────
+  (clime-command
+   quickstart
+   :help "Scaffold entrypoint + add shebang (scaffold + init)"
+
+   (clime-arg file :help "The .el file to set up")
+
+   (clime-option extra-load-path ("--load-path" "-L") :multiple t
+                 :help "Additional load paths to include in the shebang")
+
+   (clime-option self-dir ("--self-dir") :bool t
+                 :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
+
+   (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
+                 :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
+
+   (clime-option standalone ("--standalone") :bool t
+                 :help "Skip the automatic clime load path (for vendored/bundled setups)")
+
+   (clime-option force ("--force" "-f") :bool t
+                 :help "Replace an existing non-clime shebang")
+
+   (clime-option env ("--env" "-e") :multiple t
+                 :help "Set environment variable in shebang (NAME=VALUE)")
+
+   (clime-handler (ctx) (clime-make--quickstart-handler ctx))))
 
 (provide 'clime-make)
 ;;; Entrypoint:
-(clime-run-batch clime-make)
+(when (clime-main-script-p 'clime-make)
+  (clime-run-batch clime-make))
 ;;; clime-make.el ends here

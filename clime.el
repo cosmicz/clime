@@ -6,7 +6,7 @@
 ;; URL: https://github.com/cosmicz/clime
 ;; Keywords: tools, processes
 ;; Package-Requires: ((emacs "29.1"))
-;; Version: 0.2.0
+;; Version: 0.3.0
 
 ;; This file is not part of GNU Emacs.
 
@@ -37,8 +37,44 @@
 (require 'clime-output)
 (require 'clime-run)
 
-(defconst clime-version "0.2.0"
+(defconst clime-version "0.3.0"
   "The clime package version string.")
+
+(defconst clime--modules
+  '(clime-settings clime-core clime-parse clime-dsl
+    clime-help clime-output clime-run)
+  "Clime modules in dependency order.")
+
+(defconst clime--optional-modules
+  '(clime-invoke clime-make)
+  "Optional clime modules, reloaded only if already loaded.")
+
+;;;###autoload
+(defun clime-reload ()
+  "Force-reload all clime modules and invalidate caches.
+Use this during development to pick up changes without restarting Emacs.
+Reloads modules in dependency order to avoid stale definitions."
+  (interactive)
+  (let ((dir (file-name-directory (or load-file-name
+                                      (locate-library "clime")
+                                      buffer-file-name
+                                      default-directory))))
+    (unless (member dir load-path)
+      (add-to-list 'load-path dir))
+    (dolist (mod clime--modules)
+      (let ((file (locate-library (symbol-name mod))))
+        (when file
+          (load file nil t t))))
+    ;; Reload optional modules that were previously loaded
+    (dolist (mod clime--optional-modules)
+      (when (featurep mod)
+        (let ((file (locate-library (symbol-name mod))))
+          (when file
+            (load file nil t t))))))
+  ;; Clear invoke cache so regenerated prefixes use fresh code
+  (when (boundp 'clime-invoke--cache)
+    (clrhash clime-invoke--cache))
+  (message "Reloaded %d clime modules" (length clime--modules)))
 
 (provide 'clime)
 ;;; clime.el ends here

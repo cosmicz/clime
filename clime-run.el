@@ -20,18 +20,6 @@
 (require 'clime-help)
 (require 'clime-output)
 
-;;; ─── Error Formatter ───────────────────────────────────────────────────
-
-(defvar clime-format-error #'clime--format-error-default
-  "Function called to format error messages before output.
-Signature: (FORMAT-FN MESSAGE) where MESSAGE is the error string.
-Default implementation prints plain text to stderr via `message'.
-Rebound to `clime-output-error' in JSON mode.")
-
-(defun clime--format-error-default (msg)
-  "Print MSG as a plain-text error to stderr."
-  (message "Error: %s" msg))
-
 ;;; ─── Context Builder ───────────────────────────────────────────────────
 
 (defun clime--build-context (app parse-result)
@@ -55,22 +43,27 @@ Rebound to `clime-output-error' in JSON mode.")
 
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
+(defun clime--detect-output-format (app argv)
+  "Detect active output format from APP's output-formats and ARGV.
+Returns the matching `clime-output-format' struct, or nil for text mode."
+  (cl-find-if (lambda (fmt)
+                (cl-some (lambda (flag) (member flag argv))
+                         (clime-option-flags fmt)))
+              (clime-app-output-formats app)))
+
 (defun clime-run (app argv)
   "Run APP with ARGV, returning an exit code.
 Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error.
 Does NOT call `kill-emacs'; the caller decides what to do with the code.
 
-When APP has :json-mode t and ARGV contains \"--json\", output is
-JSON-encoded.  The --json option is auto-injected into the app."
+Output format detection: checks `clime-app-output-formats' for a matching
+flag in ARGV.  When matched, `clime--active-output-format' is bound to
+the format and drives all output behavior through the format struct."
   ;; Reset stdin cache so each invocation reads fresh
   (setq clime--stdin-content nil)
-  ;; Pre-parse --json before full parse so even parse errors emit JSON
-  (let* ((json-p (and (clime-app-json-mode app)
-                      (clime--pre-parse-json-p argv)))
-         (clime--json-mode-p json-p)
-         (clime-format-error (if json-p
-                                 #'clime-output-error
-                               clime-format-error)))
+  ;; Pre-parse output format before full parse so even parse errors emit correctly
+  (let* ((active-fmt (clime--detect-output-format app argv))
+         (clime--active-output-format (or active-fmt clime--active-output-format)))
     (condition-case err
         (let* ((setup (clime-app-setup app))
                (result (clime-parse app argv (and setup t))))
@@ -81,21 +74,54 @@ JSON-encoded.  The --json option is auto-injected into the app."
           (let* ((node (clime-parse-result-node result))
                  (handler (clime-node-handler node))
                  (ctx (clime--build-context app result)))
-            (when handler
-              (let ((retval (funcall handler ctx)))
-                (when retval
-                  (if clime--json-mode-p
-                      (clime-output-success retval)
-                    (princ retval)))))
-            0))
+            (let ((dep (clime-node-deprecated node)))
+              (when dep
+                (message "Warning: %s is deprecated%s"
+                         (clime-node-name node)
+                         (if (stringp dep) (format ". %s" dep) ""))))
+            (if (not handler)
+                0
+              (let* ((streaming (clime-output-format-streaming clime--active-output-format))
+                     (clime--output-items nil)
+                     (clime--output-errors nil)
+                     (retval nil)
+                     (exit-code
+                      (condition-case herr
+                          (progn (setq retval (funcall handler ctx)) 0)
+                        (clime-usage-error
+                         ;; Re-signal so outer handler returns exit code 2
+                         (signal (car herr) (cdr herr)))
+                        (clime-help-requested
+                         ;; Re-signal so outer handler prints help
+                         (signal (car herr) (cdr herr)))
+                        (error
+                         (if debug-on-error
+                             (signal (car herr) (cdr herr))
+                           (if streaming
+                               (funcall (clime-output-format-error-handler clime--active-output-format) (error-message-string herr))
+                             (setq clime--output-errors
+                                   (nconc clime--output-errors
+                                          (list (error-message-string herr)))))
+                           1)))))
+                (let ((has-errors (or clime--output-errors (> exit-code 0))))
+                  (if streaming
+                      ;; Streaming: print retval directly if non-nil
+                      (when retval
+                        (princ (funcall (clime-output-format-encoder clime--active-output-format)
+                                        retval)))
+                    ;; Buffered: flush items/errors through finalize
+                    (clime--output-flush
+                     (clime-output-format-finalize clime--active-output-format)
+                     retval))
+                  (if has-errors 1 0))))))
       (clime-help-requested
        (clime--print-help (cdr err))
        0)
       (clime-usage-error
-       (funcall clime-format-error (cadr err))
+       (funcall (clime-output-format-error-handler clime--active-output-format) (cadr err))
        (let ((err-path (caddr err)))
          (when err-path
-           (funcall clime-format-error
+           (funcall (clime-output-format-error-handler clime--active-output-format)
                     (format "Try '%s --help' for more information."
                             (string-join err-path " ")))))
        2)
@@ -103,7 +129,7 @@ JSON-encoded.  The --json option is auto-injected into the app."
        (if debug-on-error
            ;; Re-signal so backtrace prints
            (signal (car err) (cdr err))
-         (funcall clime-format-error (error-message-string err))
+         (funcall (clime-output-format-error-handler clime--active-output-format) (error-message-string err))
          1)))))
 
 (defun clime-main-script-p (app-name)
@@ -122,22 +148,27 @@ APP-NAME (a symbol).  When a file is loaded transitively via
 Read argv from `command-line-args-left', strip leading \"--\",
 call `clime-run', then `kill-emacs' with the exit code.
 When CLIME_ARGV0 is set (by the shebang), uses its basename
-as the program name in usage output instead of the DSL symbol."
-  ;; Copy args before clearing.  Use `args' not `argv' — the latter
-  ;; is a defvaralias for `command-line-args-left' and would be
-  ;; clobbered by the setq below under dynamic binding.
-  (let ((args command-line-args-left)
-        (argv0 (getenv "CLIME_ARGV0")))
-    ;; Override usage program name with the executable filename
-    (when (and argv0 (not (string-empty-p argv0)))
-      (setf (clime-app-argv0 app)
-            (file-name-nondirectory argv0)))
-    ;; Strip leading "--" inserted by the shell wrapper
-    (when (and args (string= (car args) "--"))
-      (setq args (cdr args)))
-    ;; Prevent Emacs from processing these args itself
-    (setq command-line-args-left nil)
-    (kill-emacs (clime-run app args))))
+as the program name in usage output instead of the DSL symbol.
+No-op when called from an interactive Emacs session."
+  (unless noninteractive
+    (message "Warning: (clime-run-batch %s) ignored in interactive mode"
+             (clime-node-name app)))
+  (when noninteractive
+    ;; Copy args before clearing.  Use `args' not `argv' — the latter
+    ;; is a defvaralias for `command-line-args-left' and would be
+    ;; clobbered by the setq below under dynamic binding.
+    (let ((args command-line-args-left)
+          (argv0 (getenv "CLIME_ARGV0")))
+      ;; Override usage program name with the executable filename
+      (when (and argv0 (not (string-empty-p argv0)))
+        (setf (clime-app-argv0 app)
+              (file-name-nondirectory argv0)))
+      ;; Strip leading "--" inserted by the shell wrapper
+      (when (and args (string= (car args) "--"))
+        (setq args (cdr args)))
+      ;; Prevent Emacs from processing these args itself
+      (setq command-line-args-left nil)
+      (kill-emacs (clime-run app args)))))
 
 (provide 'clime-run)
 ;;; clime-run.el ends here

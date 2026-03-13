@@ -31,6 +31,7 @@
   (command nil :documentation "Resolved leaf command, or nil for group.")
   (node nil :documentation "Terminal node where parsing ended.")
   (path nil :type list :documentation "List of node names from root to command.")
+  (display-path nil :type list :documentation "User-facing path excluding inline group names.")
   (params nil :type list :documentation "Plist of (param-name value) for all scopes.")
   (visited-nodes nil :type list :documentation "Nodes visited during parse (for finalization).")
   (finalized nil :type boolean :documentation "Non-nil after pass-2 finalization."))
@@ -54,10 +55,20 @@ Matches anything starting with \"-\" that isn't just \"-\" alone."
         (cons (substring token 0 pos)
               (substring token (1+ pos)))))))
 
+(defun clime--negated-flag-p (flag)
+  "If FLAG is a --no-X negation, return the positive flag --X, else nil.
+Only applies to long flags.  Does not double-negate --no-no-X."
+  (when (and (> (length flag) 5)  ;; longer than "--no-"
+             (string-prefix-p "--no-" flag)
+             (not (string-prefix-p "--no-no-" flag)))
+    (concat "--" (substring flag 5))))
+
 (defun clime--find-option-in-scope (flag current-node _root)
   "Find option matching FLAG, first in CURRENT-NODE then in ancestors.
 Walk the parent chain from CURRENT-NODE upward.
-Return (OPTION . SCOPE) where SCOPE is \\='current or \\='ancestor, or nil."
+For --no-X flags, checks if the positive --X option is negatable.
+Return (OPTION . SCOPE) where SCOPE is \\='current, \\='ancestor,
+\\='negated-current, or \\='negated-ancestor.  Returns nil if not found."
   (let ((opt (clime-node-find-option current-node flag)))
     (if opt
         (cons opt 'current)
@@ -65,8 +76,20 @@ Return (OPTION . SCOPE) where SCOPE is \\='current or \\='ancestor, or nil."
         (while (and node (not opt))
           (setq opt (clime-node-find-option node flag))
           (unless opt (setq node (clime-node-parent node))))
-        (when opt
-          (cons opt 'ancestor))))))
+        (if opt
+            (cons opt 'ancestor)
+          ;; Try --no-X → --X negation lookup
+          (let ((pos-flag (clime--negated-flag-p flag)))
+            (when pos-flag
+              (let ((pos-opt (clime-node-find-option current-node pos-flag))
+                    (pos-node nil))
+                (unless pos-opt
+                  (setq pos-node (clime-node-parent current-node))
+                  (while (and pos-node (not pos-opt))
+                    (setq pos-opt (clime-node-find-option pos-node pos-flag))
+                    (unless pos-opt (setq pos-node (clime-node-parent pos-node)))))
+                (when (and pos-opt (clime-option-negatable pos-opt))
+                  (cons pos-opt (if pos-node 'negated-ancestor 'negated-current)))))))))))
 
 (defun clime--expand-short-bundle (token current-node root)
   "Try to expand TOKEN as a short flag bundle like \"-abc\".
@@ -153,20 +176,22 @@ PATH is the command path for help signals."
            (value (clime--resolve-stdin-value (cdr split)))
            (found (clime--find-option-in-scope flag current-node root)))
       (when found
-        (when (clime-option-boolean-p (car found))
+        (when (or (clime-option-boolean-p (car found))
+                  (clime--negated-scope-p (cdr found)))
           (signal 'clime-usage-error
                   (list (format "Option %s does not take a value" flag))))
         (list (clime--consume-option (car found) params value)
               (1+ i)
               option-parsing))))
-   ;; Known single option
+   ;; Known single option (including --no-X negation)
    ((and option-parsing
          (clime--option-like-p tok)
          (clime--find-option-in-scope tok current-node root))
     (let* ((found (clime--find-option-in-scope tok current-node root))
-           (opt (car found)))
-      (if (clime-option-boolean-p opt)
-          (list (clime--consume-option opt params nil)
+           (opt (car found))
+           (negated (clime--negated-scope-p (cdr found))))
+      (if (or negated (clime-option-boolean-p opt))
+          (list (clime--consume-option opt params nil negated)
                 (1+ i)
                 option-parsing)
         ;; Value option: consume next token
@@ -179,14 +204,28 @@ PATH is the command path for help signals."
                 (+ i 2)
                 option-parsing)))))))
 
-(defun clime--consume-option (opt params token-value)
+(defun clime--negated-scope-p (scope)
+  "Return non-nil if SCOPE indicates a negated option lookup."
+  (memq scope '(negated-current negated-ancestor)))
+
+(defun clime--consume-option (opt params token-value &optional negated)
   "Consume option OPT into PARAMS plist, returning updated plist.
-TOKEN-VALUE is the string value for value-taking options, or nil for booleans."
+TOKEN-VALUE is the string value for value-taking options, or nil for booleans.
+When NEGATED is non-nil, explicitly set the param to nil (for --no-X flags)."
+  (let ((dep (clime-option-deprecated opt)))
+    (when dep
+      (let ((flag (car (clime-option-flags opt))))
+        (message "Warning: %s is deprecated%s"
+                 flag
+                 (if (stringp dep) (format ". %s" dep) "")))))
   (let ((name (clime-option-name opt))
         (type (clime-option-type opt))
         (choices (clime-option-choices opt))
         (coerce (clime-option-coerce opt)))
     (cond
+     ;; Negated flag (--no-X): explicitly set to nil
+     (negated
+      (plist-put params name nil))
      ;; Count option: increment
      ((clime-option-count opt)
       (let ((current (or (plist-get params name) 0)))
@@ -337,6 +376,21 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
                               env-var)))))))))
   params)
 
+(defun clime--mutex-sibling-set-p (opt nodes params)
+  "Return non-nil if a mutex sibling of OPT already has a value in PARAMS.
+Searches all options in NODES sharing the same :mutex group symbol."
+  (let ((mx (clime-option-mutex opt)))
+    (when mx
+      (cl-some
+       (lambda (node)
+         (cl-some
+          (lambda (o)
+            (and (not (eq o opt))
+                 (eq (clime-option-mutex o) mx)
+                 (plist-member params (clime-option-name o))))
+          (clime-node-options node)))
+       nodes))))
+
 (defun clime--apply-defaults (nodes params)
   "Apply default values for all options and args in NODES not already in PARAMS.
 NODES is a list of nodes whose params to process.  Returns updated PARAMS."
@@ -345,7 +399,8 @@ NODES is a list of nodes whose params to process.  Returns updated PARAMS."
       (let ((name (clime-option-name opt)))
         (unless (plist-member params name)
           (let ((default (clime-option-default opt)))
-            (when default
+            (when (and default
+                       (not (clime--mutex-sibling-set-p opt nodes params)))
               (setq params (plist-put params name
                                       (clime--resolve-value default))))))))
     (dolist (arg (clime-node-args node))
@@ -376,6 +431,127 @@ PATH is the command path for error messages.  Signals `clime-usage-error'."
                               (clime-arg-name arg)
                               (string-join path " "))))))))
 
+;;; ─── Mutex Validation ──────────────────────────────────────────────────
+
+(defun clime--check-mutex (nodes params)
+  "Check mutual exclusion constraints across NODES for PARAMS.
+Signal `clime-usage-error' if multiple options in the same mutex group are set."
+  (let ((groups (make-hash-table :test #'eq)))
+    ;; Collect options by mutex group
+    (dolist (node nodes)
+      (dolist (opt (clime-node-options node))
+        (when-let* ((mx (clime-option-mutex opt)))
+          (push opt (gethash mx groups)))))
+    ;; Check each group
+    (maphash
+     (lambda (_group opts)
+       (let ((set-opts (cl-remove-if-not
+                        (lambda (opt)
+                          (plist-member params (clime-option-name opt)))
+                        opts)))
+         (when (> (length set-opts) 1)
+           (signal 'clime-usage-error
+                   (list (format "Options %s are mutually exclusive"
+                                 (mapconcat (lambda (o) (car (clime-option-flags o)))
+                                            set-opts ", ")))))))
+     groups)))
+
+(defun clime--check-requires (nodes params)
+  "Check :requires constraints across NODES for PARAMS.
+Signal `clime-usage-error' if an option with :requires is set but any
+of its required options are absent from PARAMS."
+  (let ((all-opts '()))
+    ;; Collect all options for flag lookup
+    (dolist (node nodes)
+      (dolist (opt (clime-node-options node))
+        (push opt all-opts)))
+    ;; Check each option with :requires
+    (dolist (node nodes)
+      (dolist (opt (clime-node-options node))
+        (when-let* ((reqs (clime-option-requires opt)))
+          (when (plist-member params (clime-option-name opt))
+            (let ((missing (cl-remove-if
+                            (lambda (req-name)
+                              (plist-member params req-name))
+                            reqs)))
+              (when missing
+                (let* ((flag (car (clime-option-flags opt)))
+                       (missing-flags
+                        (mapcar (lambda (name)
+                                  (let ((req-opt (cl-find-if
+                                                  (lambda (o)
+                                                    (eq (clime-option-name o) name))
+                                                  all-opts)))
+                                    (if req-opt
+                                        (car (clime-option-flags req-opt))
+                                      (format "--%s" name))))
+                                missing)))
+                  (signal 'clime-usage-error
+                          (list (format "%s requires %s"
+                                        flag
+                                        (mapconcat #'identity missing-flags ", ")))))))))))))
+
+(defun clime--check-and-zip (nodes params)
+  "Check :zip constraints across NODES and build zipped alists in PARAMS.
+Signal `clime-usage-error' if zip group members have unequal cardinality
+or partial presence.  Returns updated PARAMS with zip group entries added."
+  (let ((groups (make-hash-table :test #'eq)))
+    ;; Collect options by zip group
+    (dolist (node nodes)
+      (dolist (opt (clime-node-options node))
+        (when-let* ((zg (clime-option-zip opt)))
+          (push opt (gethash zg groups)))))
+    ;; Validate and zip each group
+    (maphash
+     (lambda (group opts)
+       (let* ((opts (nreverse opts))
+              (counts (mapcar (lambda (opt)
+                                (let ((val (plist-get params (clime-option-name opt))))
+                                  (if (listp val) (length val) 0)))
+                              opts))
+              (set-opts (cl-remove-if-not
+                         (lambda (opt)
+                           (plist-member params (clime-option-name opt)))
+                         opts))
+              (any-set (> (length set-opts) 0))
+              (all-set (= (length set-opts) (length opts))))
+         ;; Partial presence check
+         (when (and any-set (not all-set))
+           (let ((missing (cl-remove-if
+                           (lambda (opt)
+                             (plist-member params (clime-option-name opt)))
+                           opts)))
+             (signal 'clime-usage-error
+                     (list (format "%s requires %s"
+                                   (car (clime-option-flags (car set-opts)))
+                                   (mapconcat (lambda (o) (car (clime-option-flags o)))
+                                              missing ", "))))))
+         ;; Cardinality check
+         (when (and all-set (not (apply #'= counts)))
+           (let ((parts (mapcar (lambda (opt)
+                                  (format "%s (%d)"
+                                          (car (clime-option-flags opt))
+                                          (let ((val (plist-get params (clime-option-name opt))))
+                                            (if (listp val) (length val) 0))))
+                                opts)))
+             (signal 'clime-usage-error
+                     (list (format "Zip group options must be used the same number of times: %s"
+                                   (mapconcat #'identity parts ", "))))))
+         ;; Build zipped alist
+         (when all-set
+           (let* ((n (car counts))
+                  (zipped '()))
+             (dotimes (i n)
+               (let ((row '()))
+                 (dolist (opt opts)
+                   (let* ((name (clime-option-name opt))
+                          (vals (plist-get params name)))
+                     (push (cons name (nth i vals)) row)))
+                 (push (nreverse row) zipped)))
+             (setq params (plist-put params group (nreverse zipped)))))))
+     groups)
+    params))
+
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
 (defun clime-parse (app argv &optional skip-finalize)
@@ -392,6 +568,7 @@ This enables a setup hook to run between passes."
         (option-parsing t)
         (params '())
         (path (list (or (clime-app-argv0 app) (clime-app-name app))))
+        (display-path (list (or (clime-app-argv0 app) (clime-app-name app))))
         (arg-index 0)
         (visited-nodes (list app))
         (i 0)
@@ -399,11 +576,13 @@ This enables a setup hook to run between passes."
         (clime--stdin-app app))
     ;; Set parent refs for direct children (if not already set)
     (clime--set-parent-refs app)
+    ;; Resolve alias commands (idempotent)
+    (clime--resolve-aliases app)
     (condition-case err
         (progn
     (while (< i len)
       (let* ((token (nth i argv))
-             (child-path (and (clime-group-only-p current-node)
+             (child-path (and (clime-branch-p current-node)
                               (clime--required-args-satisfied-p current-node params)
                               (clime-group-find-child-path current-node token)))
              (child (car (last child-path))))
@@ -422,7 +601,7 @@ This enables a setup hook to run between passes."
                 (j (1+ i)))
             (while (< j len)
               (let* ((next (nth j argv))
-                     (found (and (clime-group-only-p help-node)
+                     (found (and (clime-branch-p help-node)
                                  (clime-group-find-child-path help-node next))))
                 (if found
                     (progn
@@ -484,13 +663,15 @@ This enables a setup hook to run between passes."
                   (signal 'clime-usage-error
                           (list (format "Unknown option %s for %s"
                                         (if split (car split) token)
-                                        (string-join path " ")))))))))
+                                        (string-join display-path " ")))))))))
 
          ;; 4. Try group descent (child-path includes inline groups)
          (child
           (dolist (node child-path)
             (setq current-node node)
             (setq path (append path (list (clime-node-name node))))
+            (unless (clime-node-inline node)
+              (setq display-path (append display-path (list (clime-node-name node)))))
             (push node visited-nodes))
           (setq arg-index 0)
           (cl-incf i))
@@ -512,11 +693,11 @@ This enables a setup hook to run between passes."
               ;; No more arg specs
               (signal 'clime-usage-error
                       (list (format "Unexpected argument \"%s\" for %s"
-                                    token (string-join path " "))))))))))
+                                    token (string-join display-path " "))))))))))
 
     ;; Post-parse: if we ended on a group (not a leaf command), check
     ;; if it has an invoke handler, otherwise it's missing a subcommand
-    (when (and (clime-group-only-p current-node)
+    (when (and (clime-branch-p current-node)
                (not (clime-app-p current-node))
                (clime-group-children current-node)
                (not (clime-node-handler current-node)))
@@ -536,6 +717,7 @@ This enables a setup hook to run between passes."
                    :command (if (clime-command-p current-node) current-node nil)
                    :node current-node
                    :path path
+                   :display-path display-path
                    :params params
                    :visited-nodes visited-nodes)))
       (if skip-finalize
@@ -544,23 +726,7 @@ This enables a setup hook to run between passes."
       ;; Enrich usage errors with the current parse path for hints
       (clime-usage-error
        (signal 'clime-usage-error
-               (list (cadr err) path))))))
-
-;;; ─── Parent Ref Setup ───────────────────────────────────────────────────
-
-(defun clime--set-parent-refs (node)
-  "Recursively set parent refs for children of NODE.
-Also runs ancestor collision checks after parent refs are established."
-  (clime--set-parent-refs-1 node)
-  (clime-check-ancestor-collisions node))
-
-(defun clime--set-parent-refs-1 (node)
-  "Set parent refs for children of NODE (internal recursive helper)."
-  (when (clime-group-p node)
-    (dolist (entry (clime-group-children node))
-      (let ((child (cdr entry)))
-        (setf (clime-node-parent child) node)
-        (clime--set-parent-refs-1 child)))))
+               (list (cadr err) display-path))))))
 
 ;;; ─── Pass-2 Finalization ────────────────────────────────────────────────
 
@@ -595,22 +761,70 @@ since static choices were already validated in pass 1."
                                     (mapconcat (lambda (c) (format "%s" c))
                                                resolved ", ")))))))))))
 
+(defun clime--run-conformers (nodes params)
+  "Run :conform functions for options and args in NODES against PARAMS.
+Called in pass 2 after dynamic choices validation and env var application.
+Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
+the current value and returns the conformed value; signaled errors become
+`clime-usage-error'."
+  (dolist (node nodes)
+    (dolist (opt (clime-node-options node))
+      (let ((cfn (clime-option-conform opt)))
+        (when cfn
+          (let* ((name (clime-option-name opt))
+                 (val (plist-get params name)))
+            (when val
+              (condition-case err
+                  (let ((conformed (funcall cfn val)))
+                    (setq params (plist-put params name conformed)))
+                (error
+                 (signal 'clime-usage-error
+                         (list (format "Invalid value for %s: %s"
+                                       (car (clime-option-flags opt))
+                                       (error-message-string err)))))))))))
+    (dolist (arg (clime-node-args node))
+      (let ((cfn (clime-arg-conform arg)))
+        (when cfn
+          (let* ((name (clime-arg-name arg))
+                 (val (plist-get params name)))
+            (when val
+              (condition-case err
+                  (let ((conformed (funcall cfn val)))
+                    (setq params (plist-put params name conformed)))
+                (error
+                 (signal 'clime-usage-error
+                         (list (format "Invalid value for <%s>: %s"
+                                       (clime-arg-name arg)
+                                       (error-message-string err))))))))))))
+  params)
+
 (defun clime-parse-finalize (result)
   "Finalize RESULT from pass-1 parse (pass 2).
-Validates dynamic choices, applies env vars, applies defaults,
-and checks required params.  Returns the updated RESULT."
+Validates dynamic choices, applies env vars, runs conformers, applies
+defaults, and checks required params.  Returns the updated RESULT."
   (when (clime-parse-result-finalized result)
     (error "clime-parse-finalize: result already finalized"))
   (let* ((visited-nodes (clime-parse-result-visited-nodes result))
          (params (clime-parse-result-params result))
-         (path (clime-parse-result-path result))
+         (display-path (clime-parse-result-display-path result))
          (root (cl-find-if #'clime-app-p visited-nodes)))
+    ;; Inject locked vals (from alias :vals resolution)
+    (dolist (entry (clime-node-locked-vals (clime-parse-result-node result)))
+      (setq params (plist-put params (car entry) (cdr entry))))
     ;; Validate dynamic choices (functions resolved now, after setup)
     (clime--validate-dynamic-choices visited-nodes params)
-    ;; Apply env vars, then defaults, then check required
+    ;; Apply env vars (external input, needs conforming)
     (setq params (clime--apply-env visited-nodes params root))
+    ;; Run :conform functions (after env, before defaults — defaults
+    ;; are developer-authored and should already be valid)
+    (setq params (clime--run-conformers visited-nodes params))
+    ;; Mutex check (after env+conform, before defaults)
+    (clime--check-mutex visited-nodes params)
+    (clime--check-requires visited-nodes params)
+    (setq params (clime--check-and-zip visited-nodes params))
+    ;; Apply defaults (mutex-aware: skips defaults when a sibling is set)
     (setq params (clime--apply-defaults visited-nodes params))
-    (clime--check-required visited-nodes params path)
+    (clime--check-required visited-nodes params display-path)
     ;; Update and mark finalized
     (setf (clime-parse-result-params result) params)
     (setf (clime-parse-result-finalized result) t)

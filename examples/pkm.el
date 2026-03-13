@@ -16,12 +16,12 @@
 ;; Features demonstrated (in order of appearance):
 ;;
 ;;   1.  Root count flag         -v/--verbose (stackable: -vvv = 3)
-;;   2.  Root boolean flag       -q/--quiet (:flag t shorthand)
+;;   2.  Root boolean flag       -q/--quiet (:bool t shorthand)
 ;;   3.  Hidden option           --internal-trace (omitted from help)
-;;   4.  JSON mode               :json-mode t → auto-injected --json
+;;   4.  JSON output format      clime-output-format with --json flag
 ;;   5.  Command with args       install <package>
 ;;   6.  Aliases                 install → i, search → s, list → ls (symbols)
-;;   7.  Boolean flags           --force, --dry-run (:flag t shorthand)
+;;   7.  Boolean flags           --force, --dry-run (:bool t shorthand)
 ;;   8.  Multiple option         --tag (repeatable) on install
 ;;   9.  Default value           --registry defaults to "default"
 ;;  10.  Optional arg            search [query]
@@ -33,6 +33,12 @@
 ;;  16.  Context destructuring   clime-let macro in handlers
 ;;  17.  Command categories      search/list under "Discovery"
 ;;  18.  Inline group category   admin inline group with option + command
+;;  19.  Parameter template      clime-defopt for shared --force flag
+;;  20.  Command alias           clime-alias-for exposes nested cmd at top level
+;;  21.  Negatable flag          --color/--no-color with ternary state
+;;  22.  Mutual exclusion        --format-table/--format-csv via :mutex
+;;  23.  Deprecated option       --output with migration hint
+;;  24.  clime-param accessor    ternary access for negatable flags
 ;;
 ;; Run it (this file is directly executable via the shebang header):
 ;;   chmod +x examples/pkm.el
@@ -41,6 +47,7 @@
 ;;   ./examples/pkm.el -vv search
 ;;   ./examples/pkm.el config
 ;;   ./examples/pkm.el repo add myrepo https://example.com
+;;   ./examples/pkm.el add-repo myrepo https://example.com
 ;;
 ;; Or without the shebang:
 ;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- --help
@@ -53,12 +60,18 @@
 
 (require 'clime)
 
+;; ─── Parameter Templates ────────────────────────────────────────────────
+;; [19] Define once, reuse via :from — shared across install and repo remove
+
+(clime-defopt force-flag
+  :bool t
+  :help "Force the operation (skip safety checks)")
+
 ;; ─── App Definition ──────────────────────────────────────────────────────
 
 (clime-app pkm
   :version "0.5.0"
   :help "A package manager for Emacs Lisp projects."
-  :json-mode t                                  ; [4] auto-injects --json
   :epilog "Examples:
   pkm install foo --tag dev
   pkm -vv search
@@ -69,13 +82,21 @@
   (clime-option verbose ("-v" "--verbose") :count t
     :help "Increase output verbosity")
 
-  ;; [2] Boolean flag — :flag t is shorthand for :nargs 0
-  (clime-option quiet ("-q" "--quiet") :flag t
+  ;; [2] Boolean flag — :bool t is shorthand for :nargs 0
+  (clime-option quiet ("-q" "--quiet") :bool t
     :help "Suppress non-essential output")
 
   ;; [3] Hidden option — internal use only, omitted from --help
-  (clime-option internal-trace ("--internal-trace") :flag t
+  (clime-option internal-trace ("--internal-trace") :bool t
     :help "Enable internal tracing" :hidden t)
+
+  ;; [4] Output format — explicit clime-output-format with --json flag
+  (clime-output-format json ("--json")
+    :help "Output as JSON")
+
+  ;; [21] Negatable flag — --color / --no-color with ternary state
+  (clime-option color ("--color") :negatable t :default t
+    :help "Colorize output")
 
   ;; ── install ──────────────────────────────────────────────────────────
   ;; [5] Command with required arg, [6] symbol alias, [7] booleans,
@@ -86,10 +107,10 @@
 
     (clime-arg package :help "Package name or URL")
 
-    (clime-option force ("--force" "-f") :flag t  ; [7] :flag t shorthand
+    (clime-option force ("--force" "-f") :from force-flag  ; [19] from template
       :help "Overwrite existing installation")
 
-    (clime-option dry-run ("--dry-run" "-n") :flag t
+    (clime-option dry-run ("--dry-run" "-n") :bool t
       :help "Show what would be installed without doing it")
 
     (clime-option tag ("--tag" "-t") :multiple t
@@ -128,7 +149,8 @@
           (format "Listing all packages (limit %s)" limit)))))
 
   ;; ── list ─────────────────────────────────────────────────────────────
-  ;; [11] Option groups in help, [6] symbol alias, [17] command category
+  ;; [11] Option groups in help, [6] symbol alias, [17] command category,
+  ;; [22] mutex for format, [23] deprecated option
   (clime-command list
     :help "List installed packages"
     :aliases (ls)
@@ -147,12 +169,31 @@
       :choices '("name" "date" "size")
       :default "name")
 
+    ;; [22] Mutually exclusive output format options
+    (clime-option format-table ("--table") :bool t :mutex 'list-format
+      :help "Output as table (default)"
+      :category "Format")
+
+    (clime-option format-csv ("--csv") :bool t :mutex 'list-format
+      :help "Output as CSV"
+      :category "Format")
+
+    ;; [23] Deprecated option with migration hint
+    (clime-option output ("--output" "-o")
+      :deprecated "Use --table or --csv instead"
+      :help "Output format"
+      :hidden t)
+
     (clime-handler (ctx)
-      (clime-let ctx (author since sort)
-        (format "Listing packages (sort=%s%s%s)"
-                sort
-                (if author (format ", author=%s" author) "")
-                (if since (format ", since=%s" since) "")))))
+      ;; [24] clime-param for ternary access to negatable --color
+      (let ((color (clime-param ctx 'color 'auto)))
+        (clime-let ctx (author since sort format-table format-csv)
+          (format "Listing packages (sort=%s, fmt=%s, color=%s%s%s)"
+                  sort
+                  (cond (format-csv "csv") (format-table "table") (t "table"))
+                  color
+                  (if author (format ", author=%s" author) "")
+                  (if since (format ", since=%s" since) ""))))))
 
   ;; ── run ──────────────────────────────────────────────────────────────
   ;; [12] Rest args — collects everything after script name
@@ -191,7 +232,7 @@
       :help "Remove a repository"
       :aliases (rm)
       (clime-arg name :help "Repository name")
-      (clime-option force ("--force" "-f") :flag t
+      (clime-option force ("--force" "-f") :from force-flag  ; [19] reused
         :help "Remove even if packages depend on it")
       (clime-handler (ctx)
         (clime-let ctx (name force)
@@ -251,7 +292,16 @@
         (format "App: pkm v%s\nVerbosity: %s\nTrace: %s"
                 (clime-app-version (clime-context-app ctx))
                 (or verbose 0)
-                (if internal-trace "on" "off"))))))
+                (if internal-trace "on" "off")))))
+
+  ;; ── shortcuts (alias-for) ─────────────────────────────────────────────
+  ;; [20] Command alias — expose nested commands at top level without
+  ;; duplicating args, options, or handler
+  (clime-group shortcuts :inline t :category "Shortcuts"
+    (clime-alias-for add-repo (repo add)
+      :help "Add a repository (shortcut)")
+    (clime-alias-for rm-repo (repo remove)
+      :help "Remove a repository (shortcut)")))
 
 (provide 'pkm)
 ;;; Entrypoint:

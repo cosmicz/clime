@@ -513,6 +513,69 @@
     (should (equal (sort (copy-sequence (clime-node-all-ancestor-flags cmd)) #'string<)
                    '("--json" "--verbose")))))
 
+;;; ─── Branch Predicate ───────────────────────────────────────────────────
+
+(ert-deftest clime-test-branch-p/command-is-not-branch ()
+  "Commands are leaves, not branches."
+  (let ((cmd (clime-make-command :name "show" :handler #'ignore)))
+    (should-not (clime-branch-p cmd))))
+
+(ert-deftest clime-test-branch-p/group-is-branch ()
+  "Groups are branches."
+  (let ((grp (clime-make-group :name "dep")))
+    (should (clime-branch-p grp))))
+
+(ert-deftest clime-test-branch-p/app-is-branch ()
+  "Apps are branches (extend group)."
+  (let ((app (clime-make-app :name "t" :version "1")))
+    (should (clime-branch-p app))))
+
+;;; ─── Ancestors ─────────────────────────────────────────────────────────
+
+(ert-deftest clime-test-node-ancestors/no-parent ()
+  "Node with no parent has empty ancestor list."
+  (let ((cmd (clime-make-command :name "x" :handler #'ignore)))
+    (should (null (clime-node-ancestors cmd)))))
+
+(ert-deftest clime-test-node-ancestors/single-parent ()
+  "Returns list with just the parent."
+  (let* ((app (clime-make-app :name "t" :version "1"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :parent app)))
+    (should (equal (clime-node-ancestors cmd) (list app)))))
+
+(ert-deftest clime-test-node-ancestors/multi-level ()
+  "Returns parent chain from immediate parent to root."
+  (let* ((app (clime-make-app :name "t" :version "1"))
+         (grp (clime-make-group :name "dep" :parent app))
+         (cmd (clime-make-command :name "add" :handler #'ignore
+                                  :parent grp)))
+    (should (equal (clime-node-ancestors cmd) (list grp app)))))
+
+;;; ─── Set Parent Refs (moved to core) ───────────────────────────────────
+
+(ert-deftest clime-test-set-parent-refs/sets-recursive ()
+  "clime--set-parent-refs recursively sets parent on all descendants."
+  (let* ((cmd (clime-make-command :name "add" :handler #'ignore))
+         (grp (clime-make-group :name "dep"
+                                :children (list (cons "add" cmd))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "dep" grp)))))
+    (clime--set-parent-refs app)
+    (should (eq (clime-node-parent grp) app))
+    (should (eq (clime-node-parent cmd) grp))))
+
+(ert-deftest clime-test-set-parent-refs/runs-collision-check ()
+  "clime--set-parent-refs signals on ancestor flag collision."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose")))
+         (cmd-opt (clime-make-option :name 'verbose :flags '("--verbose")))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list cmd-opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :options (list root-opt)
+                              :children (list (cons "show" cmd)))))
+    (should-error (clime--set-parent-refs app) :type 'error)))
+
 ;;; ─── Params Plist ──────────────────────────────────────────────────────
 
 (ert-deftest clime-test-params-plist/all-params ()
@@ -561,6 +624,33 @@
   "clime-version looks like a semver string."
   (require 'clime)
   (should (string-match-p "^[0-9]+\\.[0-9]+\\.[0-9]" clime-version)))
+
+;;; ─── Merge Template ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-merge-template/overrides-win ()
+  "Explicit overrides take precedence over template values."
+  (let ((tpl '(:type string :help "Template help" :required t)))
+    (should (equal (clime--merge-template tpl :help "Override" :required nil)
+                   '(:type string :help "Override" :required nil)))))
+
+(ert-deftest clime-test-merge-template/template-preserved ()
+  "Template values carry through when not overridden."
+  (let ((tpl '(:type integer :conform identity)))
+    (let ((result (clime--merge-template tpl :name 'id :flags '("--id"))))
+      (should (eq (plist-get result :type) 'integer))
+      (should (eq (plist-get result :conform) 'identity))
+      (should (eq (plist-get result :name) 'id)))))
+
+(ert-deftest clime-test-merge-template/empty-template ()
+  "Empty template just returns overrides."
+  (should (equal (clime--merge-template '() :name 'x :flags '("--x"))
+                 '(:name x :flags ("--x")))))
+
+(ert-deftest clime-test-merge-template/no-mutation ()
+  "Merge does not mutate the original template."
+  (let ((tpl (list :type 'string :help "orig")))
+    (clime--merge-template tpl :help "changed")
+    (should (equal (plist-get tpl :help) "orig"))))
 
 (provide 'clime-core-tests)
 ;;; clime-core-tests.el ends here

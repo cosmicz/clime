@@ -393,6 +393,41 @@
     (should (clime-option-boolean-p opt))
     (should (eql (clime-option-nargs opt) 0))))
 
+(ert-deftest clime-test-dsl/bool-shorthand ()
+  ":bool t in DSL produces a boolean option (nargs=0)."
+  (eval '(clime-app clime-test--dsl-bool
+           :version "1"
+           (clime-command test
+             :help "Test"
+             (clime-option force ("--force") :bool t)
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (assoc "test" (clime-group-children clime-test--dsl-bool))))
+         (opt (car (clime-command-options cmd))))
+    (should (clime-option-boolean-p opt))
+    (should (eql (clime-option-nargs opt) 0))))
+
+(ert-deftest clime-test-dsl/defopt-bool-shorthand ()
+  "clime-defopt normalizes :bool t to :nargs 0."
+  (eval '(clime-defopt test-bool-tmpl
+           :bool t
+           :help "A boolean template")
+        t)
+  (should (eql (plist-get clime--opt-test-bool-tmpl :nargs) 0))
+  (should-not (plist-member clime--opt-test-bool-tmpl :bool)))
+
+(ert-deftest clime-test-dsl/flag-deprecated-warning ()
+  ":flag t emits a deprecation warning."
+  (let ((msgs (clime-test-with-messages
+                (eval '(clime-app clime-test--dsl-flag-depr
+                         :version "1"
+                         (clime-command test
+                           :help "Test"
+                           (clime-option force ("--force") :flag t)
+                           (clime-handler (ctx) nil)))
+                      t))))
+    (should (cl-some (lambda (m) (string-match-p ":bool" m)) msgs))))
+
 ;;; ─── Separator Shorthand ────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/separator-implies-multiple ()
@@ -510,6 +545,363 @@
               (clime-handler (_ctx) nil)))
          t)
    :type 'error))
+
+;;; ─── clime-defopt: Option Templates ────────────────────────────────────
+
+(ert-deftest clime-test-dsl/defopt-basic ()
+  "clime-defopt creates a clime--opt-NAME variable holding option slot defaults."
+  (eval '(clime-defopt test-basic
+           :type 'string
+           :conform #'identity
+           :help "A basic template")
+        t)
+  (should (listp clime--opt-test-basic))
+  (should (eq (plist-get clime--opt-test-basic :type) 'string))
+  (should (functionp (plist-get clime--opt-test-basic :conform)))
+  (should (equal (plist-get clime--opt-test-basic :help) "A basic template")))
+
+(ert-deftest clime-test-dsl/defopt-flag-shorthand ()
+  "clime-defopt normalizes :flag t to :nargs 0."
+  (eval '(clime-defopt test-flag
+           :flag t
+           :help "A boolean template")
+        t)
+  (should (eql (plist-get clime--opt-test-flag :nargs) 0))
+  (should-not (plist-member clime--opt-test-flag :flag)))
+
+(ert-deftest clime-test-dsl/defopt-separator-implies-multiple ()
+  "clime-defopt normalizes :separator to imply :multiple t."
+  (eval '(clime-defopt test-sep
+           :separator ",")
+        t)
+  (should (eq (plist-get clime--opt-test-sep :multiple) t))
+  (should (equal (plist-get clime--opt-test-sep :separator) ",")))
+
+(ert-deftest clime-test-dsl/defopt-rejects-name ()
+  "clime-defopt errors if :name is included."
+  (should-error
+   (eval '(clime-defopt test-bad-name
+            :name 'foo
+            :help "Bad")
+         t)
+   :type 'error))
+
+(ert-deftest clime-test-dsl/defopt-rejects-flags ()
+  "clime-defopt errors if :flags is included."
+  (should-error
+   (eval '(clime-defopt test-bad-flags
+            :flags '("--foo")
+            :help "Bad")
+         t)
+   :type 'error))
+
+;;; ─── :from in clime-option ────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/from-basic ()
+  ":from inherits template defaults into an option."
+  (eval '(progn
+           (clime-defopt test-id
+             :type 'string
+             :conform #'identity
+             :help "A verified ID")
+           (clime-app clime-test--from-basic
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-option id ("--id") :from test-id)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--from-basic))))
+         (opt (car (clime-command-options cmd))))
+    (should (eq (clime-option-name opt) 'id))
+    (should (equal (clime-option-flags opt) '("--id")))
+    (should (eq (clime-option-type opt) 'string))
+    (should (functionp (clime-option-conform opt)))
+    (should (equal (clime-option-help opt) "A verified ID"))))
+
+(ert-deftest clime-test-dsl/from-override ()
+  ":from values are overridden by explicit slot values."
+  (eval '(progn
+           (clime-defopt test-ovr
+             :type 'string
+             :help "Template help"
+             :required t)
+           (clime-app clime-test--from-override
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-option id ("--id") :from test-ovr
+                 :help "Overridden help" :required nil)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--from-override))))
+         (opt (car (clime-command-options cmd))))
+    (should (equal (clime-option-help opt) "Overridden help"))
+    (should-not (clime-option-required opt))
+    ;; Non-overridden slot inherits from template
+    (should (eq (clime-option-type opt) 'string))))
+
+(ert-deftest clime-test-dsl/from-multiple-commands ()
+  "Multiple commands can share the same template."
+  (eval '(progn
+           (clime-defopt test-shared
+             :type 'string
+             :conform #'identity)
+           (clime-app clime-test--from-shared
+             :version "1"
+             (clime-command copy
+               :help "Copy"
+               (clime-option src ("--src") :from test-shared :multiple t)
+               (clime-option dst ("--dst") :from test-shared)
+               (clime-handler (ctx) nil))
+             (clime-command move
+               :help "Move"
+               (clime-option src ("--src") :from test-shared)
+               (clime-option dst ("--dst") :from test-shared)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((copy (cdr (assoc "copy" (clime-group-children clime-test--from-shared))))
+         (move (cdr (assoc "move" (clime-group-children clime-test--from-shared))))
+         (copy-src (cl-find-if (lambda (o) (eq (clime-option-name o) 'src))
+                               (clime-command-options copy)))
+         (copy-dst (cl-find-if (lambda (o) (eq (clime-option-name o) 'dst))
+                               (clime-command-options copy)))
+         (move-src (cl-find-if (lambda (o) (eq (clime-option-name o) 'src))
+                               (clime-command-options move))))
+    ;; copy --src has :multiple from override
+    (should (clime-option-multiple copy-src))
+    ;; copy --dst does not
+    (should-not (clime-option-multiple copy-dst))
+    ;; move --src does not
+    (should-not (clime-option-multiple move-src))
+    ;; All share the conform from template
+    (should (functionp (clime-option-conform copy-src)))
+    (should (functionp (clime-option-conform move-src)))))
+
+(ert-deftest clime-test-dsl/from-parse-integration ()
+  ":from options parse correctly end-to-end."
+  (eval '(progn
+           (clime-defopt test-parse
+             :type 'string
+             :help "An ID param")
+           (clime-app clime-test--from-parse
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-option id ("--id" "-i") :from test-parse)
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((result (clime-parse clime-test--from-parse '("show" "--id" "abc"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "abc")))
+  ;; Short flag works too
+  (let ((result (clime-parse clime-test--from-parse '("show" "-i" "xyz"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "xyz"))))
+
+;;; ─── clime-defarg: Arg Templates ───────────────────────────────────────
+
+(ert-deftest clime-test-dsl/defarg-basic ()
+  "clime-defarg creates a clime--arg-NAME variable holding arg slot defaults."
+  (eval '(clime-defarg test-arg-basic
+           :type 'string
+           :conform #'identity
+           :help "A reusable arg")
+        t)
+  (should (listp clime--arg-test-arg-basic))
+  (should (eq (plist-get clime--arg-test-arg-basic :type) 'string))
+  (should (functionp (plist-get clime--arg-test-arg-basic :conform)))
+  (should (equal (plist-get clime--arg-test-arg-basic :help) "A reusable arg")))
+
+(ert-deftest clime-test-dsl/defarg-rejects-name ()
+  "clime-defarg errors if :name is included."
+  (should-error
+   (eval '(clime-defarg test-arg-bad
+            :name 'foo
+            :help "Bad")
+         t)
+   :type 'error))
+
+(ert-deftest clime-test-dsl/defarg-from-basic ()
+  ":from inherits arg template defaults."
+  (eval '(progn
+           (clime-defarg test-arg-id
+             :type 'string
+             :conform #'identity
+             :help "A verified ID")
+           (clime-app clime-test--arg-from-basic
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-arg id :from test-arg-id)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--arg-from-basic))))
+         (arg (car (clime-command-args cmd))))
+    (should (eq (clime-arg-name arg) 'id))
+    (should (eq (clime-arg-type arg) 'string))
+    (should (functionp (clime-arg-conform arg)))
+    (should (equal (clime-arg-help arg) "A verified ID"))))
+
+(ert-deftest clime-test-dsl/defarg-from-override ()
+  ":from arg values are overridden by explicit slot values."
+  (eval '(progn
+           (clime-defarg test-arg-ovr
+             :type 'string
+             :help "Template help"
+             :required t)
+           (clime-app clime-test--arg-from-override
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-arg id :from test-arg-ovr :help "Overridden" :required nil)
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "show" (clime-group-children clime-test--arg-from-override))))
+         (arg (car (clime-command-args cmd))))
+    (should (equal (clime-arg-help arg) "Overridden"))
+    (should-not (clime-arg-required arg))
+    (should (eq (clime-arg-type arg) 'string))))
+
+(ert-deftest clime-test-dsl/defarg-from-parse-integration ()
+  ":from arg templates parse correctly end-to-end."
+  (eval '(progn
+           (clime-defarg test-arg-parse
+             :type 'string
+             :help "An ID param")
+           (clime-app clime-test--arg-from-parse
+             :version "1"
+             (clime-command show
+               :help "Show"
+               (clime-arg id :from test-arg-parse)
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((result (clime-parse clime-test--arg-from-parse '("show" "abc"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "abc"))))
+
+;;; ─── Standalone Macro Evaluation ────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/standalone-option ()
+  "clime-option produces a clime-option struct standalone."
+  (let ((opt (eval '(clime-option verbose ("-v" "--verbose")
+                      :count t :help "Verbosity")
+                   t)))
+    (should (clime-option-p opt))
+    (should (eq (clime-option-name opt) 'verbose))
+    (should (equal (clime-option-flags opt) '("-v" "--verbose")))
+    (should (clime-option-count opt))
+    (should (equal (clime-option-help opt) "Verbosity"))))
+
+(ert-deftest clime-test-dsl/standalone-option-bool ()
+  "clime-option with :bool t produces boolean option standalone."
+  (let ((opt (eval '(clime-option force ("--force") :bool t :help "Force") t)))
+    (should (clime-option-p opt))
+    (should (clime-option-boolean-p opt))
+    (should (eql (clime-option-nargs opt) 0))))
+
+(ert-deftest clime-test-dsl/standalone-arg ()
+  "clime-arg produces a clime-arg struct standalone."
+  (let ((arg (eval '(clime-arg name :help "Person" :required nil) t)))
+    (should (clime-arg-p arg))
+    (should (eq (clime-arg-name arg) 'name))
+    (should (equal (clime-arg-help arg) "Person"))
+    (should-not (clime-arg-required arg))))
+
+(ert-deftest clime-test-dsl/standalone-handler ()
+  "clime-handler produces a callable lambda standalone."
+  (let ((h (eval '(clime-handler (ctx) (format "hello %s" ctx)) t)))
+    (should (functionp h))
+    (should (equal (funcall h "world") "hello world"))))
+
+(ert-deftest clime-test-dsl/standalone-command ()
+  "clime-command produces a (name . struct) cons standalone."
+  (let ((result (eval '(clime-command greet
+                         :help "Say hello"
+                         :aliases (g)
+                         (clime-arg name :help "Who")
+                         (clime-handler (ctx) "hi"))
+                      t)))
+    (should (consp result))
+    (should (equal (car result) "greet"))
+    (should (clime-command-p (cdr result)))
+    (should (equal (clime-node-help (cdr result)) "Say hello"))
+    (should (equal (clime-node-aliases (cdr result)) '("g")))
+    (should (= (length (clime-command-args (cdr result))) 1))))
+
+(ert-deftest clime-test-dsl/standalone-group ()
+  "clime-group produces a (name . struct) cons standalone."
+  (let ((result (eval '(clime-group admin
+                         :help "Admin commands"
+                         :inline t
+                         (clime-command status
+                           :help "Status"
+                           (clime-handler (ctx) "ok")))
+                      t)))
+    (should (consp result))
+    (should (equal (car result) "admin"))
+    (should (clime-group-p (cdr result)))
+    (should (clime-node-inline (cdr result)))
+    (should (= (length (clime-group-children (cdr result))) 1))))
+
+(ert-deftest clime-test-dsl/standalone-alias-for ()
+  "clime-alias-for produces a (name . clime-alias) cons standalone."
+  (let ((result (eval '(clime-alias-for waiting (query)
+                         :help "Show WAITING"
+                         :vals '((todo . "WAITING")))
+                      t)))
+    (should (consp result))
+    (should (equal (car result) "waiting"))
+    (should (clime-alias-p (cdr result)))
+    (should (equal (clime-node-help (cdr result)) "Show WAITING"))
+    (should (equal (clime-alias-vals (cdr result)) '((todo . "WAITING"))))))
+
+(ert-deftest clime-test-dsl/standalone-output-format ()
+  "clime-output-format produces a clime-output-format struct standalone."
+  (let ((fmt (eval '(clime-output-format json ("--json")
+                      :help "JSON output"
+                      :streaming t)
+                   t)))
+    (should (clime-output-format-p fmt))
+    (should (clime-option-p fmt))
+    (should (eq (clime-output-format-name fmt) 'json))
+    (should (equal (clime-option-flags fmt) '("--json")))
+    (should (clime-output-format-streaming fmt))
+    (should (equal (clime-option-help fmt) "JSON output"))))
+
+(ert-deftest clime-test-dsl/app-with-output-format ()
+  "clime-app with clime-output-format generates option and stores format."
+  (eval '(clime-app clime-test--output-fmt-app
+           :version "1.0"
+           :help "Test app"
+           (clime-output-format json ("--json") :help "JSON")
+           (clime-command test
+             :help "Test"
+             (clime-handler (_ctx) "ok")))
+        t)
+  (let ((app (symbol-value 'clime-test--output-fmt-app)))
+    (should (= (length (clime-app-output-formats app)) 1))
+    (should (clime-node-find-option app "--json"))
+    (should (eq (clime-output-format-name (car (clime-app-output-formats app))) 'json))))
+
+;;; ─── Indent Rules ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/indent-option ()
+  "clime-option has lisp-indent-function 2 (name + flags)."
+  (should (equal 2 (get 'clime-option 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-arg ()
+  "clime-arg has lisp-indent-function 1 (name)."
+  (should (equal 1 (get 'clime-arg 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-command ()
+  "clime-command has lisp-indent-function 1 (name)."
+  (should (equal 1 (get 'clime-command 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-group ()
+  "clime-group has lisp-indent-function 1 (name)."
+  (should (equal 1 (get 'clime-group 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-handler ()
+  "clime-handler has lisp-indent-function 1 (arglist)."
+  (should (equal 1 (get 'clime-handler 'lisp-indent-function))))
 
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here
