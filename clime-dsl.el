@@ -342,17 +342,151 @@ Child forms:
         ,@(when (plist-get classified :handler)
             `(:handler ,(plist-get classified :handler)))))))
 
-;;; ─── Indent Rules ──────────────────────────────────────────────────────
+;;; ─── DSL Form Macros ───────────────────────────────────────────────────
 
-;; DSL forms are consumed by `clime--classify-body' at macro-expansion
-;; time — they are not real macros, so we set indent properties directly.
+;; Each DSL form is a real macro that produces its struct when evaluated
+;; standalone.  Inside `clime-app', `clime--classify-body' still
+;; processes forms by pattern matching — these macros are not expanded
+;; there.  The macro definitions serve two purposes:
+;;   1. Standalone evaluation (REPL, testing, programmatic construction)
+;;   2. Keyword completion in `emacs-lisp-mode' (Emacs discovers &key args)
 
-(put 'clime-option    'lisp-indent-function 2) ; name flags &rest plist
-(put 'clime-arg       'lisp-indent-function 1) ; name &rest plist
-(put 'clime-command   'lisp-indent-function 1) ; name &rest body
-(put 'clime-alias-for 'lisp-indent-function 2) ; name path &rest keywords
-(put 'clime-group     'lisp-indent-function 1) ; name &rest body
-(put 'clime-handler 'lisp-indent-function 1) ; arglist &rest body
+;; Leaf forms use `cl-defmacro' with &key for keyword completion.
+;; Container forms use `defmacro' with &rest body (keywords interleaved
+;; with child forms prevent &key usage).
+
+(cl-defmacro clime-option (name flags
+                           &rest plist
+                           &key bool flag from type help required default
+                           nargs env count multiple choices coerce conform
+                           separator category hidden deprecated mutex
+                           negatable requires zip
+                           &allow-other-keys)
+  "Define a CLI option NAME with FLAGS.
+NAME is a symbol — the canonical parameter name.
+FLAGS is a list of flag strings, e.g. (\"--verbose\" \"-v\").
+
+Keyword arguments:
+  :bool t           Boolean flag (shorthand for :nargs 0)
+  :count t          Stackable counter flag (-vvv = 3)
+  :multiple t       Collect repeated values into a list
+  :separator SEP    Split value by SEP (implies :multiple)
+  :negatable t      Generate --no-X variant
+  :required t       Option must be provided
+  :requires SYMS    Other options that must also be set
+  :mutex SYM        Mutual exclusion group
+  :zip SYM          Paired option group
+  :nargs N          Number of arguments (0 = boolean)
+  :type SYM         Type converter (\\='string, \\='integer, \\='number)
+  :choices LIST     Allowed values or function
+  :coerce FN        Transform after type coercion
+  :conform FN       Pass-2 validation/normalization
+  :default VAL      Default value when not provided
+  :env STR          Override env var name
+  :category STR     Help display category
+  :hidden t         Omit from help
+  :deprecated STR   Deprecation message or t
+  :help STR         One-line help text
+  :from SYM         Inherit from `clime-defopt' template"
+  (declare (indent 2))
+  (ignore bool flag from type help required default nargs env count
+          multiple choices coerce conform separator category hidden
+          deprecated mutex negatable requires zip)
+  (clime--build-option (cons name (cons flags plist))))
+
+(cl-defmacro clime-arg (name
+                        &rest plist
+                        &key from type help required default nargs
+                        choices coerce conform deprecated
+                        &allow-other-keys)
+  "Define a positional argument NAME.
+NAME is a symbol — the canonical parameter name.
+
+Keyword arguments:
+  :type SYM         Type converter (\\='string, \\='integer, \\='number)
+  :choices LIST     Allowed values or function
+  :coerce FN        Transform after type coercion
+  :conform FN       Pass-2 validation/normalization
+  :default VAL      Default value when not provided
+  :nargs N          Number of arguments (:rest for rest args)
+  :required BOOL    Whether arg is required (default t)
+  :deprecated STR   Deprecation message or t
+  :help STR         One-line help text
+  :from SYM         Inherit from `clime-defarg' template"
+  (declare (indent 1))
+  (ignore from type help required default nargs choices coerce conform
+          deprecated)
+  (clime--build-arg (cons name plist)))
+
+(defmacro clime-command (name &rest body)
+  "Define a subcommand NAME with BODY.
+NAME is a symbol — the command name.
+
+BODY is a mix of keyword args and child forms:
+  :help STRING       — command description
+  :aliases LIST      — alternative names
+  :hidden BOOL       — omit from help
+  :epilog STRING     — text after help
+  :category STRING   — help display category
+  :deprecated STRING — deprecation message or t
+
+Child forms:
+  (clime-option NAME FLAGS &rest PLIST)
+  (clime-arg NAME &rest PLIST)
+  (clime-handler (CTX) &rest BODY)"
+  (declare (indent 1))
+  (clime--build-command (cons name body)))
+
+(cl-defmacro clime-alias-for (name path
+                              &rest plist
+                              &key help doc aliases hidden category
+                              deprecated defaults vals
+                              &allow-other-keys)
+  "Define an alias NAME for the command at PATH.
+NAME is a symbol — the alias name.
+PATH is a list of symbols naming the target command.
+
+Keyword arguments:
+  :help STR         Help text (inherits from target if omitted)
+  :aliases LIST     Alternative names
+  :hidden t         Omit from help
+  :category STR     Help display category
+  :deprecated STR   Deprecation message or t
+  :defaults ALIST   Preset option values (user can override)
+  :vals ALIST       Locked option values (hidden from CLI)"
+  (declare (indent 2))
+  (ignore help doc aliases hidden category deprecated defaults vals)
+  (clime--build-alias-for (cons name (cons path plist))))
+
+(defmacro clime-group (name &rest body)
+  "Define a command group NAME with BODY.
+NAME is a symbol — the group name.
+
+BODY is a mix of keyword args and child forms:
+  :help STRING       — group description
+  :aliases LIST      — alternative names
+  :hidden BOOL       — omit from help
+  :inline BOOL       — promote children to parent level
+  :epilog STRING     — text after help
+  :category STRING   — help display category
+  :deprecated STRING — deprecation message or t
+
+Child forms:
+  (clime-option NAME FLAGS &rest PLIST)
+  (clime-arg NAME &rest PLIST)
+  (clime-command NAME &rest BODY)
+  (clime-group NAME &rest BODY)
+  (clime-alias-for NAME PATH &rest KEYWORDS)
+  (clime-handler (CTX) &rest BODY)"
+  (declare (indent 1))
+  (clime--build-group (cons name body)))
+
+(defmacro clime-handler (arglist &rest body)
+  "Define a command handler with ARGLIST and BODY.
+ARGLIST is typically (CTX) — receives the parse context.
+BODY is the handler implementation."
+  (declare (indent 1))
+  `(lambda ,arglist ,@body))
 
 (provide 'clime-dsl)
 ;;; clime-dsl.el ends here

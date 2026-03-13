@@ -777,6 +777,82 @@
   (let ((result (clime-parse clime-test--arg-from-parse '("show" "abc"))))
     (should (equal (plist-get (clime-parse-result-params result) 'id) "abc"))))
 
+;;; ─── Standalone Macro Evaluation ────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/standalone-option ()
+  "clime-option produces a clime-option struct standalone."
+  (let ((opt (eval '(clime-option verbose ("-v" "--verbose")
+                      :count t :help "Verbosity")
+                   t)))
+    (should (clime-option-p opt))
+    (should (eq (clime-option-name opt) 'verbose))
+    (should (equal (clime-option-flags opt) '("-v" "--verbose")))
+    (should (clime-option-count opt))
+    (should (equal (clime-option-help opt) "Verbosity"))))
+
+(ert-deftest clime-test-dsl/standalone-option-bool ()
+  "clime-option with :bool t produces boolean option standalone."
+  (let ((opt (eval '(clime-option force ("--force") :bool t :help "Force") t)))
+    (should (clime-option-p opt))
+    (should (clime-option-boolean-p opt))
+    (should (eql (clime-option-nargs opt) 0))))
+
+(ert-deftest clime-test-dsl/standalone-arg ()
+  "clime-arg produces a clime-arg struct standalone."
+  (let ((arg (eval '(clime-arg name :help "Person" :required nil) t)))
+    (should (clime-arg-p arg))
+    (should (eq (clime-arg-name arg) 'name))
+    (should (equal (clime-arg-help arg) "Person"))
+    (should-not (clime-arg-required arg))))
+
+(ert-deftest clime-test-dsl/standalone-handler ()
+  "clime-handler produces a callable lambda standalone."
+  (let ((h (eval '(clime-handler (ctx) (format "hello %s" ctx)) t)))
+    (should (functionp h))
+    (should (equal (funcall h "world") "hello world"))))
+
+(ert-deftest clime-test-dsl/standalone-command ()
+  "clime-command produces a (name . struct) cons standalone."
+  (let ((result (eval '(clime-command greet
+                         :help "Say hello"
+                         :aliases (g)
+                         (clime-arg name :help "Who")
+                         (clime-handler (ctx) "hi"))
+                      t)))
+    (should (consp result))
+    (should (equal (car result) "greet"))
+    (should (clime-command-p (cdr result)))
+    (should (equal (clime-node-help (cdr result)) "Say hello"))
+    (should (equal (clime-node-aliases (cdr result)) '("g")))
+    (should (= (length (clime-command-args (cdr result))) 1))))
+
+(ert-deftest clime-test-dsl/standalone-group ()
+  "clime-group produces a (name . struct) cons standalone."
+  (let ((result (eval '(clime-group admin
+                         :help "Admin commands"
+                         :inline t
+                         (clime-command status
+                           :help "Status"
+                           (clime-handler (ctx) "ok")))
+                      t)))
+    (should (consp result))
+    (should (equal (car result) "admin"))
+    (should (clime-group-p (cdr result)))
+    (should (clime-node-inline (cdr result)))
+    (should (= (length (clime-group-children (cdr result))) 1))))
+
+(ert-deftest clime-test-dsl/standalone-alias-for ()
+  "clime-alias-for produces a (name . clime-alias) cons standalone."
+  (let ((result (eval '(clime-alias-for waiting (query)
+                         :help "Show WAITING"
+                         :vals '((todo . "WAITING")))
+                      t)))
+    (should (consp result))
+    (should (equal (car result) "waiting"))
+    (should (clime-alias-p (cdr result)))
+    (should (equal (clime-node-help (cdr result)) "Show WAITING"))
+    (should (equal (clime-alias-vals (cdr result)) '((todo . "WAITING"))))))
+
 ;;; ─── Indent Rules ──────────────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/indent-option ()
