@@ -69,11 +69,18 @@ Items are appended in emission order.")
   "Accumulated error strings (buffered mode only).
 Errors are appended in chronological order.")
 
-;;; ─── Predicate ────────────────────────────────────────────────────────
+;;; ─── Active Format Query ──────────────────────────────────────────────
 
+(defun clime-output-name ()
+  "Return the name symbol of the active output format.
+E.g. `text', `json', `yaml'.  Handlers use this to branch on
+output format: (eq (clime-output-name) \\='json)."
+  (clime-output-format-name clime--active-output-format))
+
+(make-obsolete 'clime-output-mode-json-p "use (eq (clime-output-name) 'json)" "0.3.0")
 (defun clime-output-mode-json-p ()
-  "Return non-nil when the active output format is JSON."
-  (eq (clime-output-format-name clime--active-output-format) 'json))
+  "Deprecated.  Use (eq (clime-output-name) \\='json) instead."
+  (eq (clime-output-name) 'json))
 
 ;;; ─── Output Functions ─────────────────────────────────────────────────
 

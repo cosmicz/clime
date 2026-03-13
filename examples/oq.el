@@ -70,7 +70,7 @@
           (when (and verbose (> verbose 0))
             (message "oq: %d hit%s" (length results)
                      (if (= 1 (length results)) "" "s")))
-          (if (clime-output-mode-json-p)
+          (if (eq (clime-output-name) 'json)
               (mapcar (lambda (h) `((heading . ,h))) results)
             (mapconcat #'identity results "\n")))))))
 

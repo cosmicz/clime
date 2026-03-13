@@ -107,21 +107,23 @@
   "clime--active-output-format defaults to clime-output-default-format."
   (should (eq clime--active-output-format clime-output-default-format)))
 
-(ert-deftest clime-test-output/json-p-true-with-json-format ()
-  "clime-output-mode-json-p returns non-nil with active json format."
+(ert-deftest clime-test-output/output-name-returns-format-name ()
+  "clime-output-name returns the active format's name symbol."
   (let ((clime--active-output-format
          (clime-make-output-format :name 'json :flags '("--json"))))
-    (should (clime-output-mode-json-p))))
-
-(ert-deftest clime-test-output/json-p-false-with-text-format ()
-  "clime-output-mode-json-p returns nil with default text format."
+    (should (eq (clime-output-name) 'json)))
   (let ((clime--active-output-format clime-output-default-format))
-    (should-not (clime-output-mode-json-p))))
-
-(ert-deftest clime-test-output/json-p-false-with-other-format ()
-  "clime-output-mode-json-p returns nil with non-json format."
+    (should (eq (clime-output-name) 'text)))
   (let ((clime--active-output-format
          (clime-make-output-format :name 'yaml :flags '("--yaml"))))
+    (should (eq (clime-output-name) 'yaml))))
+
+(ert-deftest clime-test-output/deprecated-mode-json-p-still-works ()
+  "Deprecated clime-output-mode-json-p still works as compat shim."
+  (let ((clime--active-output-format
+         (clime-make-output-format :name 'json :flags '("--json"))))
+    (should (clime-output-mode-json-p)))
+  (let ((clime--active-output-format clime-output-default-format))
     (should-not (clime-output-mode-json-p))))
 
 ;;; ─── Output Dispatch (Text Mode) ───────────────────────────────────
