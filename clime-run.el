@@ -98,7 +98,7 @@ the format and drives all output behavior through the format struct."
                          (if debug-on-error
                              (signal (car herr) (cdr herr))
                            (if streaming
-                               (funcall (clime-output-format-error-fn clime--active-output-format) (error-message-string herr))
+                               (funcall (clime-output-format-error-handler clime--active-output-format) (error-message-string herr))
                              (setq clime--output-errors
                                    (nconc clime--output-errors
                                           (list (error-message-string herr)))))
@@ -118,10 +118,10 @@ the format and drives all output behavior through the format struct."
        (clime--print-help (cdr err))
        0)
       (clime-usage-error
-       (funcall (clime-output-format-error-fn clime--active-output-format) (cadr err))
+       (funcall (clime-output-format-error-handler clime--active-output-format) (cadr err))
        (let ((err-path (caddr err)))
          (when err-path
-           (funcall (clime-output-format-error-fn clime--active-output-format)
+           (funcall (clime-output-format-error-handler clime--active-output-format)
                     (format "Try '%s --help' for more information."
                             (string-join err-path " ")))))
        2)
@@ -129,7 +129,7 @@ the format and drives all output behavior through the format struct."
        (if debug-on-error
            ;; Re-signal so backtrace prints
            (signal (car err) (cdr err))
-         (funcall (clime-output-format-error-fn clime--active-output-format) (error-message-string err))
+         (funcall (clime-output-format-error-handler clime--active-output-format) (error-message-string err))
          1)))))
 
 (defun clime-main-script-p (app-name)

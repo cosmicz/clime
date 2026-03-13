@@ -496,7 +496,7 @@ Child forms:
 
 (cl-defmacro clime-output-format (name flags
                                   &rest plist
-                                  &key help finalize streaming encoder
+                                  &key help finalize streaming encoder error-handler
                                   mutex hidden category deprecated
                                   &allow-other-keys)
   "Declare an output format NAME with FLAGS.
@@ -508,15 +508,16 @@ since output formats ARE options.
 
 Keyword arguments:
   :help STR         Help text for the flag
-  :finalize FN      Envelope function: (items retval) → data | nil
+  :finalize FN      Envelope function: (items retval errors) → data | nil
   :streaming t      Emit immediately, bypass accumulator
-  :encoder FN       Data → string encoder (reserved for future use)
+  :encoder FN       Data → string encoder
+  :error-handler FN Error handler: (msg) → side effect
   :mutex SYM        Mutual exclusion group
   :hidden t         Omit from help
   :category STR     Help display category
   :deprecated STR   Deprecation message or t"
   (declare (indent 2))
-  (ignore help finalize streaming encoder mutex hidden category deprecated)
+  (ignore help finalize streaming encoder error-handler mutex hidden category deprecated)
   (clime--build-output-format (cons name (cons flags plist))))
 
 (defmacro clime-handler (arglist &rest body)

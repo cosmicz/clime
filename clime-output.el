@@ -50,7 +50,7 @@ conventions (nil→null, vectors→arrays, :json-false→false)."
    :flags '("--text")
    :streaming t
    :encoder (lambda (data) (format "%s" data))
-   :error-fn (lambda (msg) (message "Error: %s" msg)))
+   :error-handler (lambda (msg) (message "Error: %s" msg)))
   "Default text output format.  Always-streaming, princ-based.
 Not a CLI option — just a behavior container for text mode.")
 
@@ -89,11 +89,11 @@ Buffered: append to `clime--output-items' (flushed later)."
 
 (defun clime-output-error (msg)
   "Report error MSG via the active format.
-Streaming: dispatches to the format's error-fn (immediate).
+Streaming: dispatches to the format's error-handler (immediate).
 Buffered: appends to `clime--output-errors' (handled at finalize)."
   (let ((fmt clime--active-output-format))
     (if (clime-output-format-streaming fmt)
-        (funcall (clime-output-format-error-fn fmt) msg)
+        (funcall (clime-output-format-error-handler fmt) msg)
       (setq clime--output-errors (nconc clime--output-errors (list msg))))))
 
 (defun clime-output-stream (data)

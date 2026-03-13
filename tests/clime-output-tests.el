@@ -94,10 +94,10 @@
     (should (equal (funcall enc "hello") "hello"))
     (should (equal (funcall enc 42) "42"))))
 
-(ert-deftest clime-test-output/default-format-error-fn ()
-  "Default format error-fn sends to stderr via message."
+(ert-deftest clime-test-output/default-format-error-handler ()
+  "Default format error-handler sends to stderr via message."
   (let ((msgs (clime-test-with-messages
-                (funcall (clime-output-format-error-fn clime-output-default-format)
+                (funcall (clime-output-format-error-handler clime-output-default-format)
                          "bad input"))))
     (should (cl-some (lambda (m) (string-match-p "Error: bad input" m)) msgs))))
 
@@ -133,7 +133,7 @@
       (should (equal output "hello")))))
 
 (ert-deftest clime-test-output/text-error ()
-  "clime-output-error in text mode uses format's error-fn (stderr)."
+  "clime-output-error in text mode uses format's error-handler (stderr)."
   (let ((clime--active-output-format clime-output-default-format))
     (let ((msgs (clime-test-with-messages
                   (clime-output-error "bad input"))))

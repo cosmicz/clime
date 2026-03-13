@@ -16,7 +16,7 @@
 - **Format-driven output**: replaced `clime-output-mode` symbol variable
   with `clime--active-output-format` (always a `clime-output-format` struct).
   Every output mode — including default text — is a format struct with
-  `:encoder`, `:error-fn`, `:finalize`, and `:streaming` slots.  No if/else
+  `:encoder`, `:error-handler`, `:finalize`, and `:streaming` slots.  No if/else
   branching in output functions.  Handlers check `(clime-output-mode-json-p)`
   (unchanged public API).  The `:json-mode` DSL keyword is unchanged.
 
@@ -113,7 +113,7 @@
 ### Removed
 
 - `clime-format-error` defvar and `clime--format-error-default`: error
-  formatting is now handled by the `:error-fn` slot on each
+  formatting is now handled by the `:error-handler` slot on each
   `clime-output-format` struct.
 
 ### Fixed
