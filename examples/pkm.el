@@ -18,7 +18,7 @@
 ;;   1.  Root count flag         -v/--verbose (stackable: -vvv = 3)
 ;;   2.  Root boolean flag       -q/--quiet (:bool t shorthand)
 ;;   3.  Hidden option           --internal-trace (omitted from help)
-;;   4.  JSON mode               :json-mode t → auto-injected --json
+;;   4.  JSON output format      clime-output-format with --json flag
 ;;   5.  Command with args       install <package>
 ;;   6.  Aliases                 install → i, search → s, list → ls (symbols)
 ;;   7.  Boolean flags           --force, --dry-run (:bool t shorthand)
@@ -72,7 +72,6 @@
 (clime-app pkm
   :version "0.5.0"
   :help "A package manager for Emacs Lisp projects."
-  :json-mode t                                  ; [4] auto-injects --json
   :epilog "Examples:
   pkm install foo --tag dev
   pkm -vv search
@@ -90,6 +89,10 @@
   ;; [3] Hidden option — internal use only, omitted from --help
   (clime-option internal-trace ("--internal-trace") :bool t
     :help "Enable internal tracing" :hidden t)
+
+  ;; [4] Output format — explicit clime-output-format with --json flag
+  (clime-output-format json ("--json")
+    :help "Output as JSON")
 
   ;; [21] Negatable flag — --color / --no-color with ternary state
   (clime-option color ("--color") :negatable t :default t

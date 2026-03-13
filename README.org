@@ -1021,7 +1021,7 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 
 | Macro              | Purpose                          | Distinctive arguments                                                 |
 |--------------------+----------------------------------+-----------------------------------------------------------------------|
-| ~clime-app~        | Define a CLI application         | ~:version~, ~:env-prefix~, ~:json-mode~ (deprecated), ~:setup~       |
+| ~clime-app~        | Define a CLI application         | ~:version~, ~:env-prefix~, ~:setup~                                  |
 | ~clime-command~    | Define a subcommand              | (uses shared command slots)                                           |
 | ~clime-group~      | Nest related commands            | ~:inline~                                                             |
 | ~clime-option~     | Declare a named option           | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:requires~, ~:mutex~, ~:zip~, ~:env~, ~:category~ |
@@ -1029,7 +1029,7 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 | ~clime-defopt~     | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
 | ~clime-defarg~     | Reusable arg template            | Any arg slot except ~:name~                                           |
 | ~clime-alias-for~  | Alias for a nested command       | Path to target command, ~:defaults~, ~:vals~                         |
-| ~clime-output-format~ | Declare an output format      | ~:finalize~, ~:streaming~, ~:encoder~, plus all option slots          |
+| ~clime-output-format~ | Declare an output format      | ~:finalize~, ~:streaming~, ~:encoder~, ~:error-handler~, plus all option slots |
 | ~clime-handler~    | Attach a handler                 | ~(ctx)~ --- receives the parse context                                |
 | ~clime-let~        | Destructure context in a handler | ~ctx (var1 var2 ...)~ --- binds option/arg values                     |
 
