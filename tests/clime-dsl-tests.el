@@ -903,5 +903,58 @@
   "clime-handler has lisp-indent-function 1 (arglist)."
   (should (equal 1 (get 'clime-handler 'lisp-indent-function))))
 
+;;; ─── Emit Helpers ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/emit-kw-basic ()
+  "emit-kw returns flat plist of present keys."
+  (let ((kw '(:help "desc" :hidden t :epilog "end")))
+    (should (equal (clime--emit-kw kw '(:help :hidden))
+                   '(:help "desc" :hidden t)))))
+
+(ert-deftest clime-test-dsl/emit-kw-absent-keys-omitted ()
+  "emit-kw omits keys not in the keywords plist."
+  (let ((kw '(:help "desc")))
+    (should (equal (clime--emit-kw kw '(:help :hidden :epilog))
+                   '(:help "desc")))))
+
+(ert-deftest clime-test-dsl/emit-kw-preserves-explicit-nil ()
+  "emit-kw preserves explicitly-false values via plist-member."
+  (let ((kw '(:hidden nil :help "desc")))
+    (should (equal (clime--emit-kw kw '(:hidden :help))
+                   '(:hidden nil :help "desc")))))
+
+(ert-deftest clime-test-dsl/emit-kw-empty ()
+  "emit-kw returns nil when no keys match."
+  (should (null (clime--emit-kw '(:help "x") '(:hidden :epilog)))))
+
+(ert-deftest clime-test-dsl/emit-body-collections ()
+  "emit-body wraps collection values in (list ...)."
+  (let* ((opt-form '(clime-make-option :name 'v :flags '("-v")))
+         (classified (list :options (list opt-form) :args nil :handler nil)))
+    (should (equal (clime--emit-body classified '(:options :args))
+                   `(:options (list ,opt-form))))))
+
+(ert-deftest clime-test-dsl/emit-body-handler-bare ()
+  "emit-body emits :handler value without list wrapping."
+  (let ((handler-form '(lambda (ctx) "ok")))
+    (should (equal (clime--emit-body (list :handler handler-form) '(:handler))
+                   `(:handler ,handler-form)))))
+
+(ert-deftest clime-test-dsl/emit-body-skips-nil ()
+  "emit-body omits keys with nil values."
+  (should (null (clime--emit-body '(:options nil :args nil) '(:options :args)))))
+
+(ert-deftest clime-test-dsl/prepare-aliases-normalizes ()
+  "prepare-aliases normalizes symbol aliases to quoted string lists."
+  (let* ((kw '(:help "desc" :aliases (foo bar)))
+         (result (clime--prepare-aliases kw)))
+    (should (equal (plist-get result :aliases) '(quote ("foo" "bar"))))
+    (should (equal (plist-get result :help) "desc"))))
+
+(ert-deftest clime-test-dsl/prepare-aliases-no-op ()
+  "prepare-aliases returns keywords unchanged when no :aliases."
+  (let ((kw '(:help "desc")))
+    (should (eq (clime--prepare-aliases kw) kw))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

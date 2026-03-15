@@ -132,6 +132,40 @@ Must not contain :name (per-instance)."
       (error "clime-defarg %s: :name is per-instance, not allowed in templates" name))
     `(defvar ,var-sym (list ,@plist))))
 
+;;; ─── Emit Helpers ──────────────────────────────────────────────────────
+
+(defun clime--emit-kw (keywords keys)
+  "Return a flat plist of non-nil entries from KEYWORDS for KEYS.
+Uses `plist-member' so explicitly-false values (e.g. :hidden nil)
+are preserved.  Only truly absent keys are omitted."
+  (let (result)
+    (dolist (key keys)
+      (when (plist-member keywords key)
+        (push key result)
+        (push (plist-get keywords key) result)))
+    (nreverse result)))
+
+(defun clime--emit-body (classified keys)
+  "Return constructor pairs for non-nil classified body KEYS.
+Collections (:options, :args, :children, :output-formats) wrap
+values in (list ...).  :handler emits its value bare."
+  (let (result)
+    (dolist (key keys)
+      (let ((val (plist-get classified key)))
+        (when val
+          (push key result)
+          (push (if (eq key :handler) val `(list ,@val))
+                result))))
+    (nreverse result)))
+
+(defun clime--prepare-aliases (keywords)
+  "Return a copy of KEYWORDS with :aliases normalized and quoted.
+If :aliases is absent, returns KEYWORDS unchanged."
+  (if (plist-get keywords :aliases)
+      (plist-put (cl-copy-list keywords) :aliases
+                 `',(clime--normalize-aliases (plist-get keywords :aliases)))
+    keywords))
+
 ;;; ─── Form Builders ──────────────────────────────────────────────────────
 
 (defun clime--build-option (args)
@@ -210,26 +244,13 @@ ARGS is (NAME &rest BODY)."
          (handler (plist-get classified :handler)))
     (unless handler
       (error "clime-command %s: missing clime-handler" name))
+    (setq keywords (clime--prepare-aliases keywords))
     `(cons ,name-str
            (clime-make-command
             :name ,name-str
             :handler ,handler
-            ,@(when (plist-get keywords :help)
-                `(:help ,(plist-get keywords :help)))
-            ,@(when (plist-get keywords :aliases)
-                `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
-            ,@(when (plist-get keywords :hidden)
-                `(:hidden ,(plist-get keywords :hidden)))
-            ,@(when (plist-get keywords :epilog)
-                `(:epilog ,(plist-get keywords :epilog)))
-            ,@(when (plist-get keywords :category)
-                `(:category ,(plist-get keywords :category)))
-            ,@(when (plist-get keywords :deprecated)
-                `(:deprecated ,(plist-get keywords :deprecated)))
-            ,@(when (plist-get classified :options)
-                `(:options (list ,@(plist-get classified :options))))
-            ,@(when (plist-get classified :args)
-                `(:args (list ,@(plist-get classified :args))))))))
+            ,@(clime--emit-kw keywords '(:help :aliases :hidden :epilog :category :deprecated))
+            ,@(clime--emit-body classified '(:options :args))))))
 
 (defun clime--build-alias-for (args)
   "Build a `clime-command' alias-for form from DSL ARGS.
@@ -245,24 +266,12 @@ Supports :defaults and :vals alists for preset/locked option values."
                      '(:help :doc :aliases :hidden :category :deprecated
                        :defaults :vals)))
          (keywords (car extracted)))
+    (setq keywords (clime--prepare-aliases keywords))
     `(cons ,name-str
            (clime-alias--create
             :name ,name-str
             :target ',path-strings
-            ,@(when (plist-get keywords :defaults)
-                `(:defaults ,(plist-get keywords :defaults)))
-            ,@(when (plist-get keywords :vals)
-                `(:vals ,(plist-get keywords :vals)))
-            ,@(when (plist-get keywords :help)
-                `(:help ,(plist-get keywords :help)))
-            ,@(when (plist-get keywords :aliases)
-                `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
-            ,@(when (plist-get keywords :hidden)
-                `(:hidden ,(plist-get keywords :hidden)))
-            ,@(when (plist-get keywords :category)
-                `(:category ,(plist-get keywords :category)))
-            ,@(when (plist-get keywords :deprecated)
-                `(:deprecated ,(plist-get keywords :deprecated)))))))
+            ,@(clime--emit-kw keywords '(:defaults :vals :help :aliases :hidden :category :deprecated))))))
 
 (defun clime--build-group (args)
   "Build a `clime-group' constructor form from DSL ARGS.
@@ -275,31 +284,12 @@ ARGS is (NAME &rest BODY)."
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
+    (setq keywords (clime--prepare-aliases keywords))
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
-            ,@(when (plist-get keywords :help)
-                `(:help ,(plist-get keywords :help)))
-            ,@(when (plist-get keywords :aliases)
-                `(:aliases ',(clime--normalize-aliases (plist-get keywords :aliases))))
-            ,@(when (plist-get keywords :hidden)
-                `(:hidden ,(plist-get keywords :hidden)))
-            ,@(when (plist-get keywords :inline)
-                `(:inline ,(plist-get keywords :inline)))
-            ,@(when (plist-get keywords :epilog)
-                `(:epilog ,(plist-get keywords :epilog)))
-            ,@(when (plist-get keywords :category)
-                `(:category ,(plist-get keywords :category)))
-            ,@(when (plist-get keywords :deprecated)
-                `(:deprecated ,(plist-get keywords :deprecated)))
-            ,@(when (plist-get classified :options)
-                `(:options (list ,@(plist-get classified :options))))
-            ,@(when (plist-get classified :args)
-                `(:args (list ,@(plist-get classified :args))))
-            ,@(when (plist-get classified :children)
-                `(:children (list ,@(plist-get classified :children))))
-            ,@(when (plist-get classified :handler)
-                `(:handler ,(plist-get classified :handler)))))))
+            ,@(clime--emit-kw keywords '(:help :aliases :hidden :inline :epilog :category :deprecated))
+            ,@(clime--emit-body classified '(:options :args :children :handler))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
 
@@ -332,28 +322,8 @@ Child forms:
     `(defvar ,name
        (clime-make-app
         :name ,name-str
-        ,@(when (plist-get keywords :version)
-            `(:version ,(plist-get keywords :version)))
-        ,@(when (plist-get keywords :env-prefix)
-            `(:env-prefix ,(plist-get keywords :env-prefix)))
-        ,@(when (plist-get keywords :help)
-            `(:help ,(plist-get keywords :help)))
-        ,@(when (plist-get keywords :json-mode)
-            `(:json-mode ,(plist-get keywords :json-mode)))
-        ,@(when (plist-get keywords :epilog)
-            `(:epilog ,(plist-get keywords :epilog)))
-        ,@(when (plist-get keywords :setup)
-            `(:setup ,(plist-get keywords :setup)))
-        ,@(when (plist-get classified :output-formats)
-            `(:output-formats (list ,@(plist-get classified :output-formats))))
-        ,@(when (plist-get classified :options)
-            `(:options (list ,@(plist-get classified :options))))
-        ,@(when (plist-get classified :args)
-            `(:args (list ,@(plist-get classified :args))))
-        ,@(when (plist-get classified :children)
-            `(:children (list ,@(plist-get classified :children))))
-        ,@(when (plist-get classified :handler)
-            `(:handler ,(plist-get classified :handler)))))))
+        ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :setup))
+        ,@(clime--emit-body classified '(:output-formats :options :args :children :handler))))))
 
 ;;; ─── DSL Form Macros ───────────────────────────────────────────────────
 
