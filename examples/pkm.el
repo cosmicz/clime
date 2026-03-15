@@ -16,12 +16,12 @@
 ;; Features demonstrated (in order of appearance):
 ;;
 ;;   1.  Root count flag         -v/--verbose (stackable: -vvv = 3)
-;;   2.  Root boolean flag       -q/--quiet (:bool t shorthand)
+;;   2.  Root boolean flag       -q/--quiet (:bool shorthand)
 ;;   3.  Hidden option           --internal-trace (omitted from help)
 ;;   4.  JSON output format      clime-output-format with --json flag
 ;;   5.  Command with args       install <package>
 ;;   6.  Aliases                 install → i, search → s, list → ls (symbols)
-;;   7.  Boolean flags           --force, --dry-run (:bool t shorthand)
+;;   7.  Boolean flags           --force, --dry-run (:bool shorthand)
 ;;   8.  Multiple option         --tag (repeatable) on install
 ;;   9.  Default value           --registry defaults to "default"
 ;;  10.  Optional arg            search [query]
@@ -64,7 +64,7 @@
 ;; [19] Define once, reuse via :from — shared across install and repo remove
 
 (clime-defopt force-flag
-  :bool t
+  :bool
   :help "Force the operation (skip safety checks)")
 
 ;; ─── App Definition ──────────────────────────────────────────────────────
@@ -79,23 +79,23 @@
 
   ;; ── Root Options ─────────────────────────────────────────────────────
   ;; [1] Count flag — stackable verbosity (-v, -vv, -vvv)
-  (clime-option verbose ("-v" "--verbose") :count t
+  (clime-option verbose ("-v" "--verbose") :count
     :help "Increase output verbosity")
 
-  ;; [2] Boolean flag — :bool t is shorthand for :nargs 0
-  (clime-option quiet ("-q" "--quiet") :bool t
+  ;; [2] Boolean flag — :bool is shorthand for :nargs 0
+  (clime-option quiet ("-q" "--quiet") :bool
     :help "Suppress non-essential output")
 
   ;; [3] Hidden option — internal use only, omitted from --help
-  (clime-option internal-trace ("--internal-trace") :bool t
-    :help "Enable internal tracing" :hidden t)
+  (clime-option internal-trace ("--internal-trace") :bool :hidden
+    :help "Enable internal tracing")
 
   ;; [4] Output format — explicit clime-output-format with --json flag
   (clime-output-format json ("--json")
     :help "Output as JSON")
 
   ;; [21] Negatable flag — --color / --no-color with ternary state
-  (clime-option color ("--color") :negatable t :default t
+  (clime-option color ("--color") :negatable :default t
     :help "Colorize output")
 
   ;; ── install ──────────────────────────────────────────────────────────
@@ -110,10 +110,10 @@
     (clime-option force ("--force" "-f") :from force-flag  ; [19] from template
       :help "Overwrite existing installation")
 
-    (clime-option dry-run ("--dry-run" "-n") :bool t
+    (clime-option dry-run ("--dry-run" "-n") :bool
       :help "Show what would be installed without doing it")
 
-    (clime-option tag ("--tag" "-t") :multiple t
+    (clime-option tag ("--tag" "-t") :multiple
       :help "Add tag to installed package")
 
     (clime-option registry ("--registry" "-r")
@@ -170,11 +170,11 @@
       :default "name")
 
     ;; [22] Mutually exclusive output format options
-    (clime-option format-table ("--table") :bool t :mutex 'list-format
+    (clime-option format-table ("--table") :bool :mutex 'list-format
       :help "Output as table (default)"
       :category "Format")
 
-    (clime-option format-csv ("--csv") :bool t :mutex 'list-format
+    (clime-option format-csv ("--csv") :bool :mutex 'list-format
       :help "Output as CSV"
       :category "Format")
 
@@ -182,7 +182,7 @@
     (clime-option output ("--output" "-o")
       :deprecated "Use --table or --csv instead"
       :help "Output format"
-      :hidden t)
+      :hidden)
 
     (clime-handler (ctx)
       ;; [24] clime-param for ternary access to negatable --color
@@ -270,7 +270,7 @@
   ;; ── admin (inline group with category) ──────────────────────────────
   ;; [18] Inline group with :category — option and command share a section
   (clime-group admin
-    :inline t
+    :inline
     :category "Admin"
     :help "Administrative operations"
 
@@ -286,7 +286,7 @@
   ;; [15] Hidden command — not shown in help, but still callable
   (clime-command debug
     :help "Dump internal state"
-    :hidden t
+    :hidden
     (clime-handler (ctx)
       (clime-let ctx (verbose internal-trace)
         (format "App: pkm v%s\nVerbosity: %s\nTrace: %s"
@@ -297,7 +297,7 @@
   ;; ── shortcuts (alias-for) ─────────────────────────────────────────────
   ;; [20] Command alias — expose nested commands at top level without
   ;; duplicating args, options, or handler
-  (clime-group shortcuts :inline t :category "Shortcuts"
+  (clime-group shortcuts :inline :category "Shortcuts"
     (clime-alias-for add-repo (repo add)
       :help "Add a repository (shortcut)")
     (clime-alias-for rm-repo (repo remove)

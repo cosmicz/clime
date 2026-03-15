@@ -1014,6 +1014,17 @@
                   clime--boolean-keywords)
                  '(:nargs :rest :required nil :help "IDs"))))
 
+(ert-deftest clime-test-dsl/bare-bool-nargs-integer ()
+  "Non-boolean :nargs with integer value passes through."
+  (should (equal (clime--normalize-bare-booleans
+                  '(:nargs 0 :hidden)
+                  clime--boolean-keywords)
+                 '(:nargs 0 :hidden t)))
+  (should (equal (clime--normalize-bare-booleans
+                  '(:nargs 2 :help "stuff")
+                  clime--boolean-keywords)
+                 '(:nargs 2 :help "stuff"))))
+
 (ert-deftest clime-test-dsl/bare-bool-option-integration ()
   "Bare :bool in clime-option DSL produces :nargs 0 option."
   (eval '(clime-app clime-test--bare-bool-opt

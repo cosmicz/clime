@@ -31,10 +31,10 @@
 
   (clime-output-format json ("--json") :help "Output as JSON")
 
-  (clime-option verbose ("-v" "--verbose") :count t
+  (clime-option verbose ("-v" "--verbose") :count
                 :help "Increase verbosity")
 
-  (clime-option file ("--file" "-f") :multiple t :required t
+  (clime-option file ("--file" "-f") :multiple :required
                 :coerce #'expand-file-name
                 :help "Org file(s) to query")
 
@@ -54,7 +54,7 @@
       :help "Sort results" :category "Output")
     (clime-option limit ("--limit" "-n") :type 'integer
                   :help "Max results to return" :category "Output")
-    (clime-option tags ("--tags") :negatable t :default t
+    (clime-option tags ("--tags") :negatable :default t
                   :help "Include tags in output" :category "Output")
 
     (clime-handler (ctx)
@@ -76,7 +76,7 @@
               (mapcar (lambda (h) `((heading . ,h))) results)
             (mapconcat #'identity results "\n"))))))
 
-  (clime-group shortcuts :inline t :category "Shortcuts"
+  (clime-group shortcuts :inline :category "Shortcuts"
                (clime-alias-for waiting (query)
                :help "Show WAITING items"
                :vals '((todo . "WAITING")))))

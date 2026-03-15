@@ -27,7 +27,7 @@ Write an Elisp file using the clime DSL:
   :version "1.0.0"
   :help "A friendly greeter."
 
-  (clime-option shout ("--shout" "-s") :bool t
+  (clime-option shout ("--shout" "-s") :bool
     :help "SHOUT THE GREETING")
 
   (clime-command hello
@@ -130,10 +130,10 @@ single-file distribution via ~bundle~.
 
 *** Boolean flags
 
-Boolean flags consume no value.  Use ~:bool t~ (shorthand for ~:nargs 0~):
+Boolean flags consume no value.  Use ~:bool~ (shorthand for ~:nargs 0~):
 
 #+begin_src emacs-lisp
-(clime-option force ("--force" "-f") :bool t
+(clime-option force ("--force" "-f") :bool
   :help "Skip confirmation")
 #+end_src
 
@@ -142,7 +142,7 @@ Boolean flags consume no value.  Use ~:bool t~ (shorthand for ~:nargs 0~):
 Count flags increment on each occurrence:
 
 #+begin_src emacs-lisp
-(clime-option verbose ("-v" "--verbose") :count t
+(clime-option verbose ("-v" "--verbose") :count
   :help "Increase verbosity")
 ;; -v → 1, -vv → 2, -vvv → 3
 #+end_src
@@ -152,7 +152,7 @@ Count flags increment on each occurrence:
 Repeatable options collect values into a list:
 
 #+begin_src emacs-lisp
-(clime-option tag ("--tag" "-t") :multiple t
+(clime-option tag ("--tag" "-t") :multiple
   :help "Add tag")
 ;; --tag dev --tag ci → ("dev" "ci")
 #+end_src
@@ -169,7 +169,7 @@ Default values are used when an option isn't provided:
 
 *** Value separator
 
-Split a single value into a list by a delimiter.  Implies ~:multiple t~:
+Split a single value into a list by a delimiter.  Implies ~:multiple~:
 
 #+begin_src emacs-lisp
 (clime-option tags ("--tags" "-t") :separator ","
@@ -182,12 +182,12 @@ same result.
 
 *** Required options
 
-Mark an option as ~:required t~ to enforce that it must be provided.
+Mark an option as ~:required~ to enforce that it must be provided.
 Unlike positional args (which are required by default), options are
 optional by default --- ~:required~ makes them mandatory:
 
 #+begin_src emacs-lisp
-(clime-option token ("--token") :required t
+(clime-option token ("--token") :required
   :help "API authentication token")
 #+end_src
 
@@ -204,11 +204,11 @@ MYAPP_TOKEN=secret ./myapp.el deploy   # --token satisfied via env
 
 *** Negatable flags
 
-Use ~:negatable t~ to auto-generate ~--no-X~ variants for boolean flags.
-This implies boolean (no ~:bool t~ needed):
+Use ~:negatable~ to auto-generate ~--no-X~ variants for boolean flags.
+This implies boolean (no ~:bool~ needed):
 
 #+begin_src emacs-lisp
-(clime-option color ("--color") :negatable t :default t
+(clime-option color ("--color") :negatable :default t
   :help "Colorize output")
 #+end_src
 
@@ -240,9 +240,9 @@ sharing the same ~:mutex~ symbol are mutually exclusive --- at most one
 may be set per invocation:
 
 #+begin_src emacs-lisp
-(clime-option format-json ("--json") :bool t :mutex 'output-format)
-(clime-option format-csv  ("--csv")  :bool t :mutex 'output-format)
-(clime-option format-text ("--text") :bool t :mutex 'output-format)
+(clime-option format-json ("--json") :bool :mutex 'output-format)
+(clime-option format-csv  ("--csv")  :bool :mutex 'output-format)
+(clime-option format-text ("--text") :bool :mutex 'output-format)
 #+end_src
 
 Using more than one signals an error:
@@ -284,7 +284,7 @@ defaults do not.
 
 Use ~:zip~ to declare options that must be used the same number of
 times.  Values are paired by position and stored as a list of alists
-in ctx under the group name.  Implies ~:multiple t~:
+in ctx under the group name.  Implies ~:multiple~:
 
 #+begin_src emacs-lisp
 (clime-option skip ("--skip") :zip 'skip-reason)
@@ -312,7 +312,7 @@ Unequal counts signal an error:
 Error: Zip group options must be used the same number of times: --skip (2), --reason (1)
 #+end_example
 
-Combine with ~:required t~ on any member to require at least one pair.
+Combine with ~:required~ on any member to require at least one pair.
 
 ** Arguments
 
@@ -396,7 +396,7 @@ without duplicating its definition:
     (clime-option prompt ("--prompt") :help "Initial prompt")
     (clime-handler (ctx) (do-start ctx))))
 
-(clime-group shortcuts :inline t :category "Shortcuts"
+(clime-group shortcuts :inline :category "Shortcuts"
   (clime-alias-for start (agents start)
     :help "Start an agent (shortcut)"))
 #+end_src
@@ -449,12 +449,12 @@ Organize related commands under a group:
 
 *** Inline groups
 
-Mark a group with ~:inline t~ to promote its children to the parent
+Mark a group with ~:inline~ to promote its children to the parent
 level.  Both the group prefix and the short form work:
 
 #+begin_src emacs-lisp
 (clime-group repo
-  :inline t
+  :inline
   :help "Manage repositories"
 
   (clime-command add
@@ -504,17 +504,17 @@ given:
 
 *** Hidden commands and options
 
-Mark a command or option as ~:hidden t~ to omit it from ~--help~ while
+Mark a command or option as ~:hidden~ to omit it from ~--help~ while
 keeping it callable:
 
 #+begin_src emacs-lisp
 (clime-command debug
   :help "Dump internal state"
-  :hidden t
+  :hidden
   (clime-handler (ctx) ...))
 
-(clime-option trace ("--internal-trace") :bool t
-  :help "Enable tracing" :hidden t)
+(clime-option trace ("--internal-trace") :bool :hidden
+  :help "Enable tracing")
 #+end_src
 
 *** Deprecation warnings
@@ -523,7 +523,7 @@ Mark commands or options as ~:deprecated~ to emit a warning when used.
 The value can be ~t~ (generic) or a string (migration hint):
 
 #+begin_src emacs-lisp
-(clime-option old-flag ("--old") :bool t
+(clime-option old-flag ("--old") :bool
   :deprecated "Use --new instead"
   :help "Legacy option")
 
@@ -550,7 +550,7 @@ Warning: --old is deprecated. Use --new instead
 Warning: migrate is deprecated. Use 'upgrade' instead
 #+end_example
 
-Combine ~:hidden t~ with ~:deprecated~ for silent deprecation: hidden
+Combine ~:hidden~ with ~:deprecated~ for silent deprecation: hidden
 from help but still warns when used.
 
 ** Parsing
@@ -756,7 +756,7 @@ options:
 
 #+begin_src emacs-lisp
 (clime-group admin
-  :inline t :category "Admin"
+  :inline :category "Admin"
   :help "Administrative commands"
 
   (clime-option admin-token ("--admin-token")
@@ -845,12 +845,12 @@ return value, and ~errors~ is a list of error strings (may be nil).
 
 **** Streaming (NDJSON)
 
-For streaming output, set ~:streaming t~ on the format.  This bypasses
+For streaming output, set ~:streaming~ on the format.  This bypasses
 the accumulator --- each ~clime-output~ call emits one JSON object per
 line immediately:
 
 #+begin_src emacs-lisp
-(clime-output-format json ("--json") :streaming t)
+(clime-output-format json ("--json") :streaming)
 #+end_src
 
 Handlers can also call ~clime-output-stream~ explicitly to bypass the
@@ -919,7 +919,7 @@ Define reusable option or arg specs with ~clime-defopt~ and
 ;; Reuse across commands — explicit values override the template
 (clime-command copy
   :help "Copy a resource"
-  (clime-option src ("--src") :from verified-id :multiple t)
+  (clime-option src ("--src") :from verified-id :multiple)
   (clime-option dst ("--dst") :from verified-id)
   (clime-handler (ctx) ...))
 
@@ -935,7 +935,7 @@ Define reusable option or arg specs with ~clime-defopt~ and
 prefixing transparently --- you write the bare name in both places.
 
 Templates cannot contain ~:name~ or ~:flags~ (those are per-instance).
-All DSL shorthands (~:bool t~, ~:separator~) work in templates.
+All DSL shorthands (~:bool~, ~:separator~) work in templates.
 
 ~clime-defarg~ works the same way for positional args:
 
@@ -1035,7 +1035,7 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 | ~clime-handler~       | Command implementation           | ~(ctx)~ --- receives ~clime-context~                                  |
 | ~clime-let~           | Destructure context params       | ~ctx (var1 var2 (alias param) ...)~                                   |
 
-~:bool t~ is shorthand for ~:nargs 0~ (boolean flag, DSL only).
+~:bool~ (or ~:bool t~) is shorthand for ~:nargs 0~ (boolean flag, DSL only).
 
 See =examples/pkm.el= for a comprehensive demo covering all major features,
 and =examples/cloq.el= for an org-ql CLI showcasing output formats, aliases,
