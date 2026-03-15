@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Construction-time tree validation**: `clime-make-app` now validates
+  the entire tree at definition time — duplicate flags, duplicate option
+  names, duplicate child names, orphan zip groups (error), and orphan
+  mutex groups (warning).  Ancestor flag collision checks consolidated
+  here too.  Bugs in app definitions are caught immediately, not at
+  first parse.
+
+- **Alias resolution at construction**: `clime--resolve-aliases` now
+  runs in `clime-make-app`.  The tree is fully resolved when
+  construction returns.  Parse-time calls remain as idempotent safety
+  nets.
+
+### Changed
+
+- **DSL builder refactor**: extracted `clime--emit-kw`, `clime--emit-body`,
+  and `clime--prepare-aliases` helpers to eliminate repeated keyword-emit
+  boilerplate across all DSL builders.  No behavior change.
+
+- **Developer-facing deprecation warnings** now use `display-warning`
+  instead of bare `message`.  Affects the `:flag` → `:bool` DSL
+  deprecation and the `clime-run-batch` interactive-mode warning.
+  Runtime CLI-user-facing deprecation warnings are unchanged.
+
+### Fixed
+
+- **Resolved aliases now have correct parent refs**: `clime--resolve-aliases`
+  was replacing alias nodes with new command structs without setting
+  `:parent`, breaking ancestor option inheritance through aliases.
+
 ## 0.3.0 — 2026-03-13
 
 ### Changed
