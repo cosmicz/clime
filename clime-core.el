@@ -281,7 +281,9 @@ resolved command copies."
             (when vals
               (setf (clime-node-locked-vals resolved) vals))
             ;; Replace alias with resolved command in children
-            (setcdr entry resolved)))
+            (setcdr entry resolved)
+            ;; Set parent ref (set-parent-refs ran before resolution)
+            (setf (clime-node-parent resolved) node)))
          ;; Group: recurse
          ((clime-group-p child)
           (clime--resolve-aliases-walk child app)))))))

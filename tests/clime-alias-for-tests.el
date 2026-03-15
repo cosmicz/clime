@@ -527,5 +527,57 @@
            (params (clime-parse-result-params result)))
       (should (equal "csv" (plist-get params 'format))))))
 
+;;; ─── Parent Ref After Resolution ───────────────────────────────────────
+
+(ert-deftest clime-test-alias-for/resolved-alias-has-parent ()
+  "Resolved alias has non-nil parent pointing to its containing group."
+  (let* ((app (clime-make-app
+               :name "test"
+               :children
+               `(("show" . ,(clime-make-command :name "show"
+                              :handler #'ignore))
+                 ("s" . ,(clime-alias--create :name "s"
+                           :target '("show")))))))
+    (clime--set-parent-refs app)
+    (clime--resolve-aliases app)
+    (let ((resolved (cdr (assoc "s" (clime-group-children app)))))
+      (should (clime-command-p resolved))
+      (should (eq (clime-node-parent resolved) app)))))
+
+(ert-deftest clime-test-alias-for/resolved-alias-ancestor-walk ()
+  "Ancestor walk from resolved alias reaches root."
+  (let* ((app (clime-make-app
+               :name "test"
+               :children
+               `(("grp" . ,(clime-make-group
+                            :name "grp"
+                            :children
+                            `(("show" . ,(clime-make-command :name "show"
+                                           :handler #'ignore))
+                              ("s" . ,(clime-alias--create :name "s"
+                                        :target '("grp" "show"))))))))))
+    (clime--set-parent-refs app)
+    (clime--resolve-aliases app)
+    (let* ((grp (cdr (assoc "grp" (clime-group-children app))))
+           (resolved (cdr (assoc "s" (clime-group-children grp)))))
+      (should (eq (clime-node-parent resolved) grp))
+      (should (equal (mapcar #'clime-node-name (clime-node-ancestors resolved))
+                     '("grp" "test"))))))
+
+(ert-deftest clime-test-alias-for/resolved-alias-inherits-ancestor-options ()
+  "Resolved alias sees ancestor options during parse."
+  (let* ((app (clime-make-app
+               :name "test"
+               :options (list (clime-make-option :name 'verbose
+                                :flags '("--verbose") :nargs 0))
+               :children
+               `(("show" . ,(clime-make-command :name "show"
+                              :handler #'ignore))
+                 ("s" . ,(clime-alias--create :name "s"
+                           :target '("show")))))))
+    (let* ((result (clime-parse app '("s" "--verbose")))
+           (params (clime-parse-result-params result)))
+      (should (eq t (plist-get params 'verbose))))))
+
 (provide 'clime-alias-for-tests)
 ;;; clime-alias-for-tests.el ends here
