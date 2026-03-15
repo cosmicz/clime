@@ -36,7 +36,7 @@ REST is the remaining non-keyword forms.
 Resolves :doc as an alias for :help (error if both are present)."
   (let ((keywords '())
         (rest '())
-        (items body))
+        (items (clime--normalize-bare-booleans body clime--boolean-keywords)))
     (while items
       (let ((item (car items)))
         (if (and (keywordp item) (memq item valid-keys) (cdr items))
@@ -74,6 +74,49 @@ Returns a plist (:options :args :children :handler)."
           :output-formats (nreverse output-formats)
           :handler handler)))
 
+;;; ─── Bare Boolean Normalization ────────────────────────────────────────
+
+(defconst clime--boolean-keywords
+  '(:bool :flag :count :multiple :negatable :hidden :required
+    :optional :rest :inline :json-mode :streaming :deprecated)
+  "DSL keywords that accept bare form as shorthand for t.
+A bare boolean keyword (not followed by a non-keyword, non-cons value)
+is normalized to keyword t before further processing.")
+
+(defun clime--normalize-bare-booleans (items boolean-keys)
+  "Normalize bare boolean keywords in ITEMS.
+If a keyword in BOOLEAN-KEYS appears without a value (followed by
+another keyword, a cons, or end of list), insert t as its value.
+Non-boolean keywords consume the next item as their value (so e.g.
+`:nargs :rest' is not misinterpreted).
+Returns a new list; ITEMS is not modified."
+  (let (result)
+    (while items
+      (let ((item (car items)))
+        (cond
+         ;; Boolean keyword with bare usage (next is keyword/cons/end)
+         ((and (memq item boolean-keys)
+               (let ((next (cadr items)))
+                 (or (null (cdr items))
+                     (keywordp next)
+                     (consp next))))
+          (push item result)
+          (push t result)
+          (setq items (cdr items)))
+         ;; Any keyword (boolean with explicit value, or non-boolean):
+         ;; consume key + value as a pair
+         ((keywordp item)
+          (push item result)
+          (setq items (cdr items))
+          (when items
+            (push (car items) result)
+            (setq items (cdr items))))
+         ;; Non-keyword item (DSL form, etc.)
+         (t
+          (push item result)
+          (setq items (cdr items))))))
+    (nreverse result)))
+
 ;;; ─── DSL Shorthands ────────────────────────────────────────────────────
 
 (defun clime--normalize-bool-flag (plist)
@@ -106,6 +149,7 @@ Must not contain :name or :flags (those are per-instance).
 Supports DSL shorthands: :bool t normalizes to :nargs 0,
 :separator implies :multiple t."
   (declare (indent 1))
+  (setq plist (clime--normalize-bare-booleans plist clime--boolean-keywords))
   (let ((var-sym (intern (format "clime--opt-%s" name))))
     ;; Validate: reject per-instance slots
     (when (plist-member plist :name)
@@ -127,6 +171,7 @@ Expands to (defvar clime--arg-NAME PLIST).
 PLIST contains default arg slot values (evaluated at load time).
 Must not contain :name (per-instance)."
   (declare (indent 1))
+  (setq plist (clime--normalize-bare-booleans plist clime--boolean-keywords))
   (let ((var-sym (intern (format "clime--arg-%s" name))))
     (when (plist-member plist :name)
       (error "clime-defarg %s: :name is per-instance, not allowed in templates" name))
@@ -175,7 +220,7 @@ Supports :bool t as shorthand for :nargs 0 (boolean flag).
 Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defopt' template."
   (let* ((name (car args))
          (flags (cadr args))
-         (plist (cddr args))
+         (plist (clime--normalize-bare-booleans (cddr args) clime--boolean-keywords))
          (from-name (plist-get plist :from)))
     ;; Strip :from from plist (not a real slot)
     (when from-name
@@ -199,7 +244,7 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defopt' template.
 ARGS is (NAME &rest PLIST).
 Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defarg' template."
   (let* ((name (car args))
-         (plist (cdr args))
+         (plist (clime--normalize-bare-booleans (cdr args) clime--boolean-keywords))
          (from-name (plist-get plist :from)))
     (when from-name
       (setq plist (cl-copy-list plist))
@@ -216,7 +261,7 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defarg' template.
 ARGS is (NAME FLAGS &rest PLIST)."
   (let* ((name (car args))
          (flags (cadr args))
-         (plist (cddr args)))
+         (plist (clime--normalize-bare-booleans (cddr args) clime--boolean-keywords)))
     `(clime-make-output-format :name ',name :flags ',flags ,@plist)))
 
 (defun clime--build-handler (args)

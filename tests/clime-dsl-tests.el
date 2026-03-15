@@ -956,5 +956,103 @@
   (let ((kw '(:help "desc")))
     (should (eq (clime--prepare-aliases kw) kw))))
 
+;;; ─── Bare Boolean Normalization ─────────────────────────────────────
+
+(ert-deftest clime-test-dsl/bare-bool-single ()
+  "Bare :bool at end of plist normalizes to :bool t."
+  (should (equal (clime--normalize-bare-booleans '(:bool) clime--boolean-keywords)
+                 '(:bool t))))
+
+(ert-deftest clime-test-dsl/bare-bool-before-keyword ()
+  "Bare :bool before another keyword inserts t."
+  (should (equal (clime--normalize-bare-booleans '(:bool :hidden) clime--boolean-keywords)
+                 '(:bool t :hidden t))))
+
+(ert-deftest clime-test-dsl/bare-bool-before-cons ()
+  "Bare :hidden before a cons form (DSL child) inserts t."
+  (should (equal (clime--normalize-bare-booleans
+                  '(:hidden (clime-option foo ("--foo")))
+                  clime--boolean-keywords)
+                 '(:hidden t (clime-option foo ("--foo"))))))
+
+(ert-deftest clime-test-dsl/bare-bool-explicit-t-unchanged ()
+  "Explicit :bool t passes through unchanged."
+  (should (equal (clime--normalize-bare-booleans '(:bool t :hidden t) clime--boolean-keywords)
+                 '(:bool t :hidden t))))
+
+(ert-deftest clime-test-dsl/bare-bool-explicit-nil-preserved ()
+  "Explicit :hidden nil is preserved (not replaced with t)."
+  (should (equal (clime--normalize-bare-booleans '(:hidden nil) clime--boolean-keywords)
+                 '(:hidden nil))))
+
+(ert-deftest clime-test-dsl/bare-bool-non-boolean-key-unchanged ()
+  "Non-boolean keyword :help with value passes through normally."
+  (should (equal (clime--normalize-bare-booleans '(:help "desc" :bool) clime--boolean-keywords)
+                 '(:help "desc" :bool t))))
+
+(ert-deftest clime-test-dsl/bare-bool-deprecated-string-preserved ()
+  ":deprecated followed by string preserves the string value."
+  (should (equal (clime--normalize-bare-booleans '(:deprecated "use --new") clime--boolean-keywords)
+                 '(:deprecated "use --new"))))
+
+(ert-deftest clime-test-dsl/bare-bool-deprecated-bare ()
+  "Bare :deprecated at end normalizes to :deprecated t."
+  (should (equal (clime--normalize-bare-booleans '(:deprecated) clime--boolean-keywords)
+                 '(:deprecated t))))
+
+(ert-deftest clime-test-dsl/bare-bool-mixed-plist ()
+  "Mixed bare and valued keywords in option-like plist."
+  (should (equal (clime--normalize-bare-booleans
+                  '(:bool :multiple :default "x" :hidden)
+                  clime--boolean-keywords)
+                 '(:bool t :multiple t :default "x" :hidden t))))
+
+(ert-deftest clime-test-dsl/bare-bool-nargs-keyword-value ()
+  "Non-boolean :nargs consumes :rest as its value, not as bare boolean."
+  (should (equal (clime--normalize-bare-booleans
+                  '(:nargs :rest :required nil :help "IDs")
+                  clime--boolean-keywords)
+                 '(:nargs :rest :required nil :help "IDs"))))
+
+(ert-deftest clime-test-dsl/bare-bool-option-integration ()
+  "Bare :bool in clime-option DSL produces :nargs 0 option."
+  (eval '(clime-app clime-test--bare-bool-opt
+           :version "1"
+           (clime-command run
+             :help "run"
+             (clime-option verbose ("--verbose" "-v") :bool :hidden)
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (car (clime-group-children clime-test--bare-bool-opt))))
+         (opt (car (clime-command-options cmd))))
+    (should (= 0 (clime-option-nargs opt)))
+    (should (clime-option-hidden opt))))
+
+(ert-deftest clime-test-dsl/bare-bool-command-integration ()
+  "Bare :hidden in clime-command DSL hides the command."
+  (eval '(clime-app clime-test--bare-bool-cmd
+           :version "1"
+           (clime-command secret
+             :hidden
+             :help "secret cmd"
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (car (clime-group-children clime-test--bare-bool-cmd)))))
+    (should (clime-node-hidden cmd))))
+
+(ert-deftest clime-test-dsl/bare-bool-group-inline ()
+  "Bare :inline in clime-group DSL sets inline flag."
+  (eval '(clime-app clime-test--bare-bool-grp
+           :version "1"
+           (clime-group admin
+             :inline
+             :help "admin"
+             (clime-command nuke
+               :help "nuke"
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((grp (cdr (car (clime-group-children clime-test--bare-bool-grp)))))
+    (should (clime-group-inline grp))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

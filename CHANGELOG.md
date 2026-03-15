@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Bare boolean keywords in DSL**: boolean-valued keywords like `:bool`,
+  `:hidden`, `:count`, `:multiple`, `:negatable`, `:inline`, `:deprecated`
+  etc. can now be written without an explicit `t` value.  Write
+  `(clime-option verbose ("--verbose") :bool :hidden)` instead of
+  `(clime-option verbose ("--verbose") :bool t :hidden t)`.  Works in all
+  DSL forms: options, args, commands, groups, output formats, and templates.
+
 - **Construction-time tree validation**: `clime-make-app` now validates
   the entire tree at definition time — duplicate flags, duplicate option
   names, duplicate child names, orphan zip groups (error), and orphan
