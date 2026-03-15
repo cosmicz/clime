@@ -85,7 +85,7 @@ Returns the updated plist with :bool/:flag removed and :nargs 0 set."
     (when (and has-bool has-flag)
       (error "clime-option: use :bool or :flag, not both"))
     (when has-flag
-      (message "Warning: :flag is deprecated, use :bool instead")
+      (display-warning 'clime ":flag is deprecated, use :bool instead")
       (setq plist (cl-copy-list plist))
       (cl-remf plist :flag)
       (setq plist (plist-put plist :nargs 0)))

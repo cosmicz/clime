@@ -417,7 +417,7 @@
   (should-not (plist-member clime--opt-test-bool-tmpl :bool)))
 
 (ert-deftest clime-test-dsl/flag-deprecated-warning ()
-  ":flag t emits a deprecation warning."
+  ":flag t emits a deprecation warning via display-warning."
   (let ((msgs (clime-test-with-messages
                 (eval '(clime-app clime-test--dsl-flag-depr
                          :version "1"
@@ -426,7 +426,7 @@
                            (clime-option force ("--force") :flag t)
                            (clime-handler (ctx) nil)))
                       t))))
-    (should (cl-some (lambda (m) (string-match-p ":bool" m)) msgs))))
+    (should (cl-some (lambda (m) (string-match-p "Warning (clime):.*:bool" m)) msgs))))
 
 ;;; ─── Separator Shorthand ────────────────────────────────────────────
 

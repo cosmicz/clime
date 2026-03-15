@@ -151,8 +151,9 @@ When CLIME_ARGV0 is set (by the shebang), uses its basename
 as the program name in usage output instead of the DSL symbol.
 No-op when called from an interactive Emacs session."
   (unless noninteractive
-    (message "Warning: (clime-run-batch %s) ignored in interactive mode"
-             (clime-node-name app)))
+    (display-warning 'clime
+                     (format "(clime-run-batch %s) ignored in interactive mode"
+                             (clime-node-name app))))
   (when noninteractive
     ;; Copy args before clearing.  Use `args' not `argv' — the latter
     ;; is a defvaralias for `command-line-args-left' and would be
