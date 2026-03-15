@@ -391,6 +391,8 @@ ARGS is a plist of slot values."
                               (append existing-options new-opts))))))
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
+    (clime--resolve-aliases app)
+    (clime--validate-tree app)
     app))
 
 ;;; ─── Context ────────────────────────────────────────────────────────────
@@ -572,6 +574,91 @@ Walk the parent chain, collecting each ancestor's option flags into a flat list.
                             (copy-sequence (clime-option-flags opt)))
                           (clime-node-options ancestor)))
              (clime-node-ancestors node)))
+
+;;; ─── Tree Validation ────────────────────────────────────────────────────
+
+(defun clime--validate-node-options (node)
+  "Check NODE's options for duplicate flags and duplicate names.
+Signals `error' on duplicates."
+  (let ((flags (make-hash-table :test #'equal))
+        (names (make-hash-table :test #'eq))
+        (node-name (clime-node-name node)))
+    (dolist (opt (clime-node-options node))
+      ;; Duplicate option names
+      (let ((name (clime-option-name opt)))
+        (when (gethash name names)
+          (error "Duplicate option name `%s' on node %s" name node-name))
+        (puthash name t names))
+      ;; Duplicate flags
+      (dolist (flag (clime-option-flags opt))
+        (when (gethash flag flags)
+          (error "Duplicate flag %s on node %s" flag node-name))
+        (puthash flag t flags)))))
+
+(defun clime--validate-node-children (node)
+  "Check NODE's children for duplicate names."
+  (when (clime-group-p node)
+    (let ((seen (make-hash-table :test #'equal)))
+      (dolist (entry (clime-group-children node))
+        (let ((name (car entry)))
+          (when (gethash name seen)
+            (error "Duplicate child name \"%s\" in group %s"
+                   name (clime-node-name node)))
+          (puthash name t seen))))))
+
+(defun clime--validate-tree (root)
+  "Validate ROOT and all descendants.
+Checks per-node duplicates, ancestor flag collisions, and
+tree-wide mutex/zip group membership."
+  (let ((mutex-groups (make-hash-table :test #'eq))
+        (zip-groups (make-hash-table :test #'eq)))
+    (clime--validate-tree-1 root mutex-groups zip-groups nil nil)
+    ;; Tree-wide mutex group check
+    (maphash (lambda (group opts)
+               (when (= (length opts) 1)
+                 (display-warning 'clime
+                   (format "Mutex group `%s' has only one member (%s)"
+                           group (car (clime-option-flags (car opts)))))))
+             mutex-groups)
+    ;; Tree-wide zip group check
+    (maphash (lambda (group opts)
+               (when (< (length opts) 2)
+                 (error "Zip group `%s' has fewer than 2 members" group)))
+             zip-groups)))
+
+(defun clime--validate-tree-1 (node mutex-groups zip-groups
+                                     ancestor-flag-owners path)
+  "Recursive walker for `clime--validate-tree'.
+NODE is the current node.  MUTEX-GROUPS and ZIP-GROUPS are hash tables
+accumulating group membership tree-wide.  ANCESTOR-FLAG-OWNERS and PATH
+track ancestor collisions."
+  (let* ((name (clime-node-name node))
+         (path (append (or path '()) (list name))))
+    ;; Per-node structural checks
+    (clime--validate-node-options node)
+    (clime--validate-node-children node)
+    ;; Collect mutex/zip membership tree-wide
+    (dolist (opt (clime-node-options node))
+      (when-let* ((mx (clime-option-mutex opt)))
+        (push opt (gethash mx mutex-groups)))
+      (when-let* ((zg (clime-option-zip opt)))
+        (push opt (gethash zg zip-groups))))
+    ;; Ancestor flag collision check
+    (let ((local-flags (cl-mapcan (lambda (opt)
+                                    (copy-sequence (clime-option-flags opt)))
+                                  (clime-node-options node))))
+      (dolist (flag local-flags)
+        (let ((collision (assoc flag ancestor-flag-owners)))
+          (when collision
+            (error "Flag collision: %s in %s collides with ancestor %s"
+                   flag (string-join path " ") (cdr collision)))))
+      ;; Recurse into children
+      (when (clime-branch-p node)
+        (let ((merged (append (mapcar (lambda (f) (cons f name)) local-flags)
+                              ancestor-flag-owners)))
+          (dolist (entry (clime-group-children node))
+            (clime--validate-tree-1 (cdr entry) mutex-groups zip-groups
+                                    merged path)))))))
 
 ;;; ─── Collision Checks ──────────────────────────────────────────────────
 

@@ -88,13 +88,12 @@
     (let ((sc (cdr (assoc "stop" (clime-group-children app)))))
       (should (equal "Stop an agent" (clime-node-help sc))))))
 
-(ert-deftest clime-test-alias-for/alias-is-node-before-resolve ()
-  "Before resolution, alias is a clime-alias node (includes clime-node)."
+(ert-deftest clime-test-alias-for/resolved-at-construction ()
+  "Aliases are resolved at construction time — no clime-alias nodes remain."
   (let* ((app (clime-test--alias-for-app))
          (child (cdr (assoc "start" (clime-group-children app)))))
-    (should (clime-alias-p child))
-    (should (clime-node-p child))
-    (should-not (clime-command-p child))
+    (should (clime-command-p child))
+    (should-not (clime-alias-p child))
     (should (equal "Start an agent (shortcut)" (clime-node-help child)))))
 
 (ert-deftest clime-test-alias-for/replaced-with-command-after-resolve ()
@@ -117,37 +116,37 @@
 
 (ert-deftest clime-test-alias-for/error-target-not-found ()
   "Error when alias target path does not resolve."
-  (let* ((alias (clime-alias--create
-                 :name "start"
-                 :target '("nonexistent" "start")))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "start" alias)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+  (let ((alias (clime-alias--create
+                :name "start"
+                :target '("nonexistent" "start"))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "start" alias)))
+                  :type 'error)))
 
 (ert-deftest clime-test-alias-for/error-target-is-group ()
   "Error when alias target resolves to a group, not a command."
-  (let* ((grp (clime-make-group :name "agents"
-                                :children nil))
-         (alias (clime-alias--create
-                 :name "agents-sc"
-                 :target '("agents")))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "agents" grp)
-                                              (cons "agents-sc" alias)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+  (let ((grp (clime-make-group :name "agents"
+                               :children nil))
+        (alias (clime-alias--create
+                :name "agents-sc"
+                :target '("agents"))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "agents" grp)
+                                                  (cons "agents-sc" alias)))
+                  :type 'error)))
 
 (ert-deftest clime-test-alias-for/error-circular ()
   "Error on circular alias chain."
-  (let* ((sc-a (clime-alias--create
-                :name "a"
-                :target '("b")))
-         (sc-b (clime-alias--create
-                :name "b"
-                :target '("a")))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "a" sc-a)
-                                              (cons "b" sc-b)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+  (let ((sc-a (clime-alias--create
+               :name "a"
+               :target '("b")))
+        (sc-b (clime-alias--create
+               :name "b"
+               :target '("a"))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "a" sc-a)
+                                                  (cons "b" sc-b)))
+                  :type 'error)))
 
 ;;; ─── Transitive Resolution ─────────────────────────────────────────────
 
@@ -340,11 +339,11 @@
          (alias (clime-alias--create
                  :name "bad"
                  :target '("report" "show")
-                 :defaults '((nonexistent . "x"))))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "report" grp)
-                                              (cons "bad" alias)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+                 :defaults '((nonexistent . "x")))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "report" grp)
+                                                  (cons "bad" alias)))
+                  :type 'error)))
 
 ;;; ─── :vals ─────────────────────────────────────────────────────────
 
@@ -435,11 +434,11 @@
          (alias (clime-alias--create
                  :name "bad"
                  :target '("report" "show")
-                 :vals '((nonexistent . "x"))))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "report" grp)
-                                              (cons "bad" alias)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+                 :vals '((nonexistent . "x")))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "report" grp)
+                                                  (cons "bad" alias)))
+                  :type 'error)))
 
 ;;; ─── DSL :defaults / :vals ─────────────────────────────────────────
 
