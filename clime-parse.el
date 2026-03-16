@@ -749,9 +749,12 @@ defaults, and checks required params.  Returns the updated RESULT."
          (params (clime-parse-result-params result))
          (display-path (clime-parse-result-display-path result))
          (root (cl-find-if #'clime-app-p visited-nodes)))
-    ;; Inject locked vals (from alias :vals resolution)
-    (dolist (entry (clime-node-locked-vals (clime-parse-result-node result)))
-      (setq params (plist-put params (car entry) (cdr entry))))
+    ;; Inject locked vals (from alias :vals resolution).
+    ;; Walk leaf→root; skip keys already set so leaf takes priority.
+    (dolist (node visited-nodes)
+      (dolist (entry (clime-node-locked-vals node))
+        (unless (plist-member params (car entry))
+          (setq params (plist-put params (car entry) (cdr entry))))))
     ;; Validate dynamic choices (functions resolved now, after setup)
     (clime--validate-dynamic-choices visited-nodes params)
     ;; Apply env vars (external input, needs conforming)

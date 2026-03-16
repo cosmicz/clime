@@ -578,5 +578,46 @@
            (params (clime-parse-result-params result)))
       (should (eq t (plist-get params 'verbose))))))
 
+;;; ─── Ancestor locked-vals inheritance ────────────────────────────────
+
+(ert-deftest clime-test-alias-for/ancestor-locked-vals-inherited ()
+  "locked-vals on ancestor group are injected into child command params."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore))
+         (grp (clime-make-group :name "report"
+                                :locked-vals '((format . "csv"))
+                                :children (list (cons "show" cmd))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)))))
+    (let* ((result (clime-parse app '("report" "show")))
+           (params (clime-parse-result-params result)))
+      (should (equal "csv" (plist-get params 'format))))))
+
+(ert-deftest clime-test-alias-for/leaf-locked-vals-override-ancestor ()
+  "Leaf locked-vals take priority over ancestor locked-vals for same key."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                    :locked-vals '((format . "json"))))
+         (grp (clime-make-group :name "report"
+                                :locked-vals '((format . "csv"))
+                                :children (list (cons "show" cmd))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)))))
+    (let* ((result (clime-parse app '("report" "show")))
+           (params (clime-parse-result-params result)))
+      (should (equal "json" (plist-get params 'format))))))
+
+(ert-deftest clime-test-alias-for/ancestor-locked-vals-merge-with-leaf ()
+  "Ancestor and leaf locked-vals for different keys both appear in params."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                    :locked-vals '((limit . 10))))
+         (grp (clime-make-group :name "report"
+                                :locked-vals '((format . "csv"))
+                                :children (list (cons "show" cmd))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)))))
+    (let* ((result (clime-parse app '("report" "show")))
+           (params (clime-parse-result-params result)))
+      (should (equal "csv" (plist-get params 'format)))
+      (should (equal 10 (plist-get params 'limit))))))
+
 (provide 'clime-alias-for-tests)
 ;;; clime-alias-for-tests.el ends here
