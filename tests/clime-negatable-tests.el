@@ -198,14 +198,13 @@
 
 ;;; ─── Mutex Interaction ─────────────────────────────────────────────
 
-(ert-deftest clime-test-negatable/mutex-negated-counts-as-set ()
-  "Negated flag counts as set for mutex check."
-  (let* ((opt-color (clime-make-option :name 'color :flags '("--color") :negatable t
-                                        :mutex 'display))
-         (opt-plain (clime-make-option :name 'plain :flags '("--plain") :nargs 0
-                                        :mutex 'display))
+(ert-deftest clime-test-negatable/exclusive-negated-counts-as-set ()
+  "Negated flag counts as set for exclusive group check."
+  (let* ((opt-color (clime-make-option :name 'color :flags '("--color") :negatable t))
+         (opt-plain (clime-make-option :name 'plain :flags '("--plain") :nargs 0))
          (cmd (clime-make-command :name "run" :handler (lambda (_ctx) nil)
-                                  :options (list opt-color opt-plain)))
+                                  :options (list opt-color opt-plain)
+                                  :conform (clime-check-exclusive 'display '(color plain))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd)))))
     (should-error

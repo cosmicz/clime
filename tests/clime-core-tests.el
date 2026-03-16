@@ -683,37 +683,6 @@
                                                   (cons "run" cmd-b)))
                   :type 'error)))
 
-(ert-deftest clime-test-validate/orphan-zip-error ()
-  "Error when a zip group has fewer than 2 members across the tree."
-  (let ((opt (clime-make-option :name 'key :flags '("--key") :zip 'pairs :multiple t))
-        (cmd (clime-make-command :name "run" :handler #'ignore)))
-    (should-error (clime-make-app :name "t"
-                                  :options (list opt)
-                                  :children (list (cons "run" cmd)))
-                  :type 'error)))
-
-(ert-deftest clime-test-validate/orphan-mutex-warning ()
-  "Warning (not error) when a mutex group has only one member."
-  (let* ((opt (clime-make-option :name 'fmt :flags '("--fmt") :mutex 'output))
-         (cmd (clime-make-command :name "run" :handler #'ignore))
-         (msgs (clime-test-with-messages
-                 (clime-make-app :name "t"
-                                 :options (list opt)
-                                 :children (list (cons "run" cmd))))))
-    (should (cl-some (lambda (m) (string-match-p "Mutex group.*output.*one member" m))
-                     msgs))))
-
-(ert-deftest clime-test-validate/cross-node-zip-ok ()
-  "Zip group with members on different nodes is valid."
-  (let* ((app-opt (clime-make-option :name 'skip :flags '("--skip") :zip 'sr))
-         (cmd-opt (clime-make-option :name 'reason :flags '("--reason") :zip 'sr))
-         (cmd (clime-make-command :name "run" :handler #'ignore
-                                  :options (list cmd-opt))))
-    ;; Should not signal
-    (clime-make-app :name "t"
-                    :options (list app-opt)
-                    :children (list (cons "run" cmd)))))
-
 (ert-deftest clime-test-validate/nested-group-duplicate-flag ()
   "Validation catches duplicates in nested groups."
   (let* ((opt-a (clime-make-option :name 'x :flags '("--xx")))

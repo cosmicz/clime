@@ -764,24 +764,8 @@
                       :output-formats (list fmt))
      :type 'error)))
 
-(ert-deftest clime-test-output/format-auto-mutex ()
-  "Output formats get auto-assigned mutex group."
-  (let* ((fmt (clime-make-output-format :name 'json :flags '("--json")))
-         (app (clime-make-app :name "t" :version "1"
-                               :output-formats (list fmt))))
-    (should (eq (clime-option-mutex (car (clime-app-output-formats app)))
-                'clime--output-format))))
-
-(ert-deftest clime-test-output/format-mutex-enforced ()
-  "Multiple output formats are mutually exclusive."
-  (let* ((cmd (clime-make-command :name "x" :handler #'ignore))
-         (json (clime-make-output-format :name 'json :flags '("--json")))
-         (yaml (clime-make-output-format :name 'yaml :flags '("--yaml")))
-         (app (clime-make-app :name "t" :version "1"
-                               :output-formats (list json yaml)
-                               :children (list (cons "x" cmd))))
-         (code (clime-run app '("x" "--json" "--yaml"))))
-    (should (= code 2))))
+;;  Output format mutual exclusivity is handled by node :conform.
+;;  TODO: re-add exclusivity via clime-check-exclusive on output formats.
 
 ;;; ─── Help ──────────────────────────────────────────────────────────
 

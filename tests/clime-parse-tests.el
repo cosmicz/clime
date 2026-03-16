@@ -1228,7 +1228,7 @@
 (ert-deftest clime-test-parse/conform-option-pass ()
   "Option :conform returning value keeps it unchanged."
   (let* ((opt (clime-make-option :name 'id :flags '("--id")
-                                  :conform (lambda (v)
+                                  :conform (lambda (v _p)
                                              (unless (string-match-p "^[0-9]+$" v)
                                                (error "Must be numeric"))
                                              v)))
@@ -1243,7 +1243,7 @@
 (ert-deftest clime-test-parse/conform-option-fail ()
   "Option :conform that signals error produces clime-usage-error."
   (let* ((opt (clime-make-option :name 'id :flags '("--id")
-                                  :conform (lambda (v)
+                                  :conform (lambda (v _p)
                                              (unless (string-match-p "^[0-9]+$" v)
                                                (error "Must be numeric"))
                                              v)))
@@ -1257,7 +1257,7 @@
 (ert-deftest clime-test-parse/conform-transforms-value ()
   "Option :conform return value replaces the param."
   (let* ((opt (clime-make-option :name 'status :flags '("--status")
-                                  :conform #'upcase))
+                                  :conform (lambda (v _p) (upcase v))))
          (cmd (clime-make-command :name "list" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"
@@ -1270,7 +1270,7 @@
   "Option :conform is skipped when value is nil (not supplied)."
   (let* ((called nil)
          (opt (clime-make-option :name 'id :flags '("--id")
-                                  :conform (lambda (_v) (setq called t))))
+                                  :conform (lambda (_v _p) (setq called t))))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"
@@ -1281,7 +1281,7 @@
 (ert-deftest clime-test-parse/conform-arg ()
   "Arg :conform that signals error produces clime-usage-error."
   (let* ((arg (clime-make-arg :name 'file :required t
-                               :conform (lambda (v)
+                               :conform (lambda (v _p)
                                           (unless (string-suffix-p ".el" v)
                                             (error "Must be an .el file"))
                                           v)))
@@ -1295,7 +1295,7 @@
 (ert-deftest clime-test-parse/conform-arg-transforms ()
   "Arg :conform return value replaces the param."
   (let* ((arg (clime-make-arg :name 'name :required t
-                               :conform #'downcase))
+                               :conform (lambda (v _p) (downcase v))))
          (cmd (clime-make-command :name "greet" :handler #'ignore
                                   :args (list arg)))
          (app (clime-make-app :name "t" :version "1"
@@ -1311,7 +1311,7 @@
                                   :choices (lambda ()
                                              (push 'choices order)
                                              '("json" "csv"))
-                                  :conform (lambda (v)
+                                  :conform (lambda (v _p)
                                              (push 'conform order)
                                              v)))
          (cmd (clime-make-command :name "show" :handler #'ignore
@@ -1324,7 +1324,7 @@
 (ert-deftest clime-test-parse/conform-multiple-option ()
   "Option :conform receives the full list for :multiple options."
   (let* ((opt (clime-make-option :name 'tag :flags '("--tag") :multiple t
-                                  :conform (lambda (vs) (mapcar #'upcase vs))))
+                                  :conform (lambda (vs _p) (mapcar #'upcase vs))))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"

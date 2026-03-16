@@ -36,7 +36,7 @@
 ;;  19.  Parameter template      clime-defopt for shared --force flag
 ;;  20.  Command alias           clime-alias-for exposes nested cmd at top level
 ;;  21.  Negatable flag          --color/--no-color with ternary state
-;;  22.  Mutual exclusion        --format-table/--format-csv via :mutex
+;;  22.  Mutual exclusion        --format-table/--format-csv via clime-mutex
 ;;  23.  Deprecated option       --output with migration hint
 ;;  24.  clime-param accessor    ternary access for negatable flags
 ;;
@@ -170,13 +170,13 @@
       :default "name")
 
     ;; [22] Mutually exclusive output format options
-    (clime-option format-table ("--table") :bool :mutex 'list-format
-      :help "Output as table (default)"
-      :category "Format")
-
-    (clime-option format-csv ("--csv") :bool :mutex 'list-format
-      :help "Output as CSV"
-      :category "Format")
+    (clime-mutex list-format
+      (clime-option format-table ("--table") :bool
+        :help "Output as table (default)"
+        :category "Format")
+      (clime-option format-csv ("--csv") :bool
+        :help "Output as CSV"
+        :category "Format"))
 
     ;; [23] Deprecated option with migration hint
     (clime-option output ("--output" "-o")

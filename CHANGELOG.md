@@ -4,18 +4,32 @@
 
 ### Added
 
-- **Option cohorts** (`clime-mutex`, `clime-zip`): first-class group
-  construct that generalizes `:mutex` and `:zip` into a unified model.
-  `clime-mutex` declares exclusive groups (at-most-one), `clime-zip`
-  declares paired groups (all-or-none with equal cardinality).  Both
-  inject derived values into ctx: exclusive cohorts inject the winner's
-  option name, paired cohorts inject a zipped alist.  Groups support
-  `:required` for at-least-one enforcement.  Existing `:mutex`/`:zip`
-  slots on options continue to work via deprecation mapping.
+- **Unified `:conform` system**: node-level `:conform` slot on
+  commands, groups, and apps with signature `(params, node) → params`.
+  Option/arg `:conform` signature updated to `(value, param) → value`.
+  Both levels share the same slot name and shape — different
+  granularity.  Finalization walks visited nodes leaf→root, running
+  option/arg conformers then node conformers at each level.  Multiple
+  conformers per node supported (list of functions, threaded).
 
-- **`clime-param` base struct**: abstract base for options, args, and
-  cohorts.  Universal accessors `clime-param-name`, `clime-param-help`,
-  `clime-param-required`, `clime-param-default` work across all three
+- **`clime-mutex` DSL form**: declares exclusive option groups
+  (at-most-one).  Injects the winner's option name as a derived key in
+  ctx.  Supports `:default` for a fallback when no member is chosen.
+  Truthy winners suppress defaults on siblings.  Negatable flags count
+  for conflict detection but don't become winners.
+
+- **`clime-zip` DSL form**: declares paired option groups
+  (all-or-none with equal cardinality).  Values are zipped into a list
+  of alists available in ctx under the group name.  Implies `:multiple`.
+
+- **`clime-check-exclusive` and `clime-check-paired`**: closure-returning
+  factory functions for building node conformers.  Used internally by
+  `clime-mutex`/`clime-zip` and available for direct use in
+  programmatic app construction.
+
+- **`clime-param` base struct**: abstract base for options and args.
+  Universal accessors `clime-param-name`, `clime-param-help`,
+  `clime-param-required`, `clime-param-default` work across both
   types.  `clime-option` and `clime-arg` now inherit via `:include`.
 
 - **Bare boolean keywords in DSL**: boolean-valued keywords like `:bool`,
@@ -27,10 +41,9 @@
 
 - **Construction-time tree validation**: `clime-make-app` now validates
   the entire tree at definition time — duplicate flags, duplicate option
-  names, duplicate child names, orphan zip groups (error), and orphan
-  mutex groups (warning).  Ancestor flag collision checks consolidated
-  here too.  Bugs in app definitions are caught immediately, not at
-  first parse.
+  names, duplicate child names.  Ancestor flag collision checks
+  consolidated here too.  Bugs in app definitions are caught
+  immediately, not at first parse.
 
 - **Alias resolution at construction**: `clime--resolve-aliases` now
   runs in `clime-make-app`.  The tree is fully resolved when
@@ -38,6 +51,10 @@
   nets.
 
 ### Changed
+
+- **Option/arg `:conform` signature**: changed from `(value)` to
+  `(value, param)` where `param` is the option or arg struct.  Enables
+  conformers to inspect metadata (name, flags, type, etc.).
 
 - **DSL builder refactor**: extracted `clime--emit-kw`, `clime--emit-body`,
   and `clime--prepare-aliases` helpers to eliminate repeated keyword-emit
@@ -47,6 +64,19 @@
   instead of bare `message`.  Affects the `:flag` → `:bool` DSL
   deprecation and the `clime-run-batch` interactive-mode warning.
   Runtime CLI-user-facing deprecation warnings are unchanged.
+
+### Removed
+
+- **Cohort system**: `clime-cohort` struct, `:cohorts` slot on nodes,
+  `:mutex`/`:zip`/`:cohort` slots on options, `clime--run-cohort-checks`,
+  `clime--collect-cohort-members`, `clime--cohort-sibling-set-p`.
+  Replaced by unified `:conform` on nodes with `clime-check-exclusive`
+  and `clime-check-paired` factory functions.
+
+- **Auto-mutex on output formats**: `clime-make-output-format` no longer
+  auto-assigns `:mutex 'clime--output-format`.  Use `clime-mutex` or
+  node `:conform` with `clime-check-exclusive` for output format
+  exclusivity.
 
 ### Fixed
 

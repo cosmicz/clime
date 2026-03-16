@@ -42,12 +42,13 @@
     :help "Run an org-ql query"
     :aliases (q)
 
-    (clime-option todo ("--todo" "-t") :mutex 'query
-                  :help "Match TODO keyword" :category "Query")
-    (clime-option sexp ("--sexp") :mutex 'query
-                  :help "S-expression query" :category "Query")
-    (clime-option search ("--search" "-s") :mutex 'query
-                  :help "Plain-text search query" :category "Query")
+    (clime-mutex query
+      (clime-option todo ("--todo" "-t")
+                    :help "Match TODO keyword" :category "Query")
+      (clime-option sexp ("--sexp")
+                    :help "S-expression query" :category "Query")
+      (clime-option search ("--search" "-s")
+                    :help "Plain-text search query" :category "Query"))
 
     (clime-option sort ("--sort")
       :choices '("deadline" "priority" "todo")

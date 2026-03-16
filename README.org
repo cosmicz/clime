@@ -92,7 +92,7 @@ In ~--help~, inherited options appear in a "Global Options:" section.
 Parsing happens in two passes with an optional ~:setup~ hook between
 them.  Pass 1 extracts values from argv (type coercion, static
 ~:choices~, ~:coerce~).  Pass 2 applies env vars, dynamic ~:choices~,
-~:conform~, ~:mutex~, and defaults.  The ~:setup~ hook runs between
+~:conform~, and defaults.  The ~:setup~ hook runs between
 passes, letting apps load configuration that influences pass-2
 behavior.
 
@@ -107,10 +107,11 @@ category sections in help, epilog text.
 *Declaring options:*
 boolean flags, count flags (~-vvv~), repeatable options
 (~--tag a --tag b~), negatable flags (~--color / --no-color~), mutual
-exclusion (~:mutex~), option dependencies (~:requires~), paired groups
-(~:zip~), value separator (~:separator ","~), choices validation
-(static and lazy), custom transforms (~:coerce~, ~:conform~), type
-coercion, defaults, hidden options, parameter templates (~:from~).
+exclusion (~clime-mutex~), option dependencies (~:requires~), paired
+groups (~clime-zip~), value separator (~:separator ","~), choices
+validation (static and lazy), custom transforms (~:coerce~,
+~:conform~), type coercion, defaults, hidden options, parameter
+templates (~:from~).
 
 *Parsing:*
 collapsed short flags (~-abc~), ~--flag=value~ syntax, ~--~ stop
@@ -235,25 +236,40 @@ and flags already starting with ~--no-~ are not double-negated.
 
 *** Mutually exclusive options
 
-Use ~:mutex~ to declare options that cannot be used together.  Options
-sharing the same ~:mutex~ symbol are mutually exclusive --- at most one
-may be set per invocation:
+Use ~clime-mutex~ to declare options that cannot be used together.
+The group enforces at-most-one exclusivity and injects the winner's
+name as a derived key in ctx:
 
 #+begin_src emacs-lisp
-(clime-option format-json ("--json") :bool :mutex 'output-format)
-(clime-option format-csv  ("--csv")  :bool :mutex 'output-format)
-(clime-option format-text ("--text") :bool :mutex 'output-format)
+(clime-mutex output-format
+  (clime-option format-json ("--json") :bool)
+  (clime-option format-csv  ("--csv")  :bool)
+  (clime-option format-text ("--text") :bool))
 #+end_src
 
 Using more than one signals an error:
 
 #+begin_example
-Error: Options --json, --csv are mutually exclusive
+Error: Options json, csv are mutually exclusive
 #+end_example
 
-Mutex validation runs after env vars are applied, so conflicts from
-environment variables are caught too.  When any member of a mutex group
-is set (via CLI or env), defaults on sibling options are suppressed.
+The derived key is available in the handler:
+
+#+begin_src emacs-lisp
+(clime-ctx-get ctx 'output-format) ;; => 'format-json, 'format-csv, etc.
+#+end_src
+
+Pass ~:default~ to set a fallback when no member is chosen:
+
+#+begin_src emacs-lisp
+(clime-mutex output-format :default 'format-text ...)
+#+end_src
+
+Validation runs after env vars are applied, so conflicts from
+environment variables are caught too.  When a truthy member wins,
+defaults on sibling options are suppressed.  Negatable flags
+(~--no-color~) count for conflict detection but don't become winners
+--- they disable themselves without suppressing siblings.
 
 *** Option dependencies
 
@@ -282,13 +298,14 @@ defaults do not.
 
 *** Paired option groups
 
-Use ~:zip~ to declare options that must be used the same number of
-times.  Values are paired by position and stored as a list of alists
-in ctx under the group name.  Implies ~:multiple~:
+Use ~clime-zip~ to declare options that must be used the same number
+of times.  Values are paired by position and stored as a list of
+alists in ctx under the group name.  Implies ~:multiple~:
 
 #+begin_src emacs-lisp
-(clime-option skip ("--skip") :zip 'skip-reason)
-(clime-option reason ("--reason") :zip 'skip-reason)
+(clime-zip skip-reason
+  (clime-option skip ("--skip"))
+  (clime-option reason ("--reason")))
 #+end_src
 
 #+begin_src bash
@@ -586,7 +603,7 @@ Each option and arg value flows through a multi-stage pipeline.  The
 stages are ordered so that each step receives the right kind of input:
 
 #+begin_example
-raw string → :type → :choices → :coerce → env vars → :conform → :mutex → defaults
+raw string → :type → :choices → :coerce → env vars → :conform → node :conform → defaults
    pass 1 (immediate, per-token)       │     pass 2 (after all input collected)
                                        │
                               :setup hook runs here
@@ -635,16 +652,22 @@ raw string → :type → :choices → :coerce → env vars → :conform → :mut
 - *:conform* --- pass-2 validation and normalization.  Runs after env
   vars are applied, so it catches values from both CLI and environment.
   Defaults skip conforming --- they're developer-authored and should
-  already be valid.  Must return the conformed value or signal an error:
+  already be valid.  Receives ~(value, param)~ where ~param~ is the
+  option or arg struct.  Must return the conformed value or signal an
+  error:
 
   #+begin_src emacs-lisp
   (clime-option id ("--id")
-    :conform (lambda (val)
+    :conform (lambda (val _param)
                (unless (string-match-p "^[a-z0-9]\\{7\\}$" val)
                  (error "Invalid ID format: %s" val))
                (upcase val))
     :help "Resource ID (7-char alphanumeric)")
   #+end_src
+
+  Node-level ~:conform~ (on commands, groups, apps) receives
+  ~(params, node)~ and returns updated params.  ~clime-mutex~ and
+  ~clime-zip~ use this mechanism internally.
 
 The key distinction between ~:coerce~ and ~:conform~ is /when/ they
 run: ~:coerce~ runs immediately in pass 1 (CLI input only), while
@@ -824,7 +847,7 @@ The output API:
 | ~clime-output-name~    | Returns the active format name (~'json~, ~'text~, etc.)     |
 
 ~clime-output-format~ derives from ~clime-option~, so it supports
-~:mutex~, ~:hidden~, ~:category~, etc.
+~:hidden~, ~:category~, etc.
 
 **** Custom envelopes
 
@@ -913,7 +936,7 @@ Define reusable option or arg specs with ~clime-defopt~ and
 ;; Define a template once
 (clime-defopt verified-id
   :type 'string
-  :conform #'my-ensure-id
+  :conform (lambda (v _p) (my-ensure-id v))
   :help "A verified resource ID")
 
 ;; Reuse across commands — explicit values override the template
@@ -1026,7 +1049,9 @@ All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
 | ~clime-app~           | Root application definition      | ~:version~, ~:env-prefix~, ~:setup~                                  |
 | ~clime-command~       | Leaf command (has handler)       | All shared command slots                                              |
 | ~clime-group~         | Branch node (has children)       | ~:inline~                                                             |
-| ~clime-option~        | Named option (flag or value)     | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:requires~, ~:mutex~, ~:zip~, ~:env~, ~:category~ |
+| ~clime-option~        | Named option (flag or value)     | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:requires~, ~:env~, ~:category~ |
+| ~clime-mutex~         | Exclusive option group           | Group name, ~:default~, contains ~clime-option~ forms                 |
+| ~clime-zip~           | Paired option group              | Group name, contains ~clime-option~ forms                             |
 | ~clime-arg~           | Positional argument              | ~:nargs~, ~:required~                                                 |
 | ~clime-defopt~        | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
 | ~clime-defarg~        | Reusable arg template            | Any arg slot except ~:name~                                           |

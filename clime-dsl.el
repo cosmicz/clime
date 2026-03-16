@@ -56,7 +56,7 @@ Resolves :doc as an alias for :help (error if both are present)."
 (defun clime--classify-body (forms)
   "Classify FORMS into options, args, children, and handler.
 Returns a plist (:options :args :children :handler)."
-  (let (options args children output-formats cohorts handler)
+  (let (options args children output-formats conform-fns handler)
     (dolist (form forms)
       (when (consp form)
         (pcase (car form)
@@ -67,22 +67,22 @@ Returns a plist (:options :args :children :handler)."
           ('clime-group (push (clime--build-group (cdr form)) children))
           ('clime-output-format (push (clime--build-output-format (cdr form)) output-formats))
           ('clime-mutex
-           (let ((result (clime--build-mutex-cohort (cdr form))))
+           (let ((result (clime--build-mutex-conform (cdr form))))
              (dolist (opt (plist-get result :options))
                (push opt options))
-             (push (plist-get result :cohort) cohorts)))
+             (push (plist-get result :conform) conform-fns)))
           ('clime-zip
-           (let ((result (clime--build-zip-cohort (cdr form))))
+           (let ((result (clime--build-zip-conform (cdr form))))
              (dolist (opt (plist-get result :options))
                (push opt options))
-             (push (plist-get result :cohort) cohorts)))
+             (push (plist-get result :conform) conform-fns)))
           ('clime-handler (setq handler (clime--build-handler (cdr form))))
           (_ (error "Unknown DSL form: %S" (car form))))))
     (list :options (nreverse options)
           :args (nreverse args)
           :children (nreverse children)
           :output-formats (nreverse output-formats)
-          :cohorts (nreverse cohorts)
+          :conform (nreverse conform-fns)
           :handler handler)))
 
 ;;; ─── Bare Boolean Normalization ────────────────────────────────────────
@@ -203,14 +203,18 @@ are preserved.  Only truly absent keys are omitted."
 
 (defun clime--emit-body (classified keys)
   "Return constructor pairs for non-nil classified body KEYS.
-Collections (:options, :args, :children, :output-formats) wrap
-values in (list ...).  :handler emits its value bare."
+Collections (:options, :args, :children, :output-formats) wrap values
+in (list ...).  :handler emits its value bare.  :conform emits a single
+function bare, or a list if multiple."
   (let (result)
     (dolist (key keys)
       (let ((val (plist-get classified key)))
         (when val
           (push key result)
-          (push (if (eq key :handler) val `(list ,@val))
+          (push (pcase key
+                  (:handler val)
+                  (:conform (if (= (length val) 1) (car val) `(list ,@val)))
+                  (_ `(list ,@val)))
                 result))))
     (nreverse result)))
 
@@ -275,58 +279,58 @@ ARGS is (NAME FLAGS &rest PLIST)."
          (plist (clime--normalize-bare-booleans (cddr args) clime--boolean-keywords)))
     `(clime-make-output-format :name ',name :flags ',flags ,@plist)))
 
-(defun clime--build-mutex-cohort (args)
-  "Build an exclusive cohort from DSL ARGS.
+(defun clime--build-mutex-conform (args)
+  "Build an exclusive group from DSL ARGS.
 ARGS is (NAME &rest BODY) where BODY contains keyword args and
-clime-option forms.  Returns a plist (:cohort FORM :options FORMS)."
+clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
   (let* ((name (car args))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:required :help :doc)))
+                     '(:required :help :doc :default)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
-         (option-forms '()))
+         (default (plist-get keywords :default))
+         (option-forms '())
+         (member-names '()))
     (dolist (form body-forms)
       (when (consp form)
         (pcase (car form)
           ('clime-option
-           (push (clime--build-option
-                  (append (list (cadr form) (caddr form))
-                          (list :cohort `',name)
-                          (cdddr form)))
+           (push (cadr form) member-names)
+           (push (clime--build-option (cdr form))
                  option-forms))
           (_ (error "clime-mutex %s: only clime-option forms allowed, got %S"
                     name (car form))))))
-    (list :cohort `(clime-make-cohort :name ',name
-                                       :resolve #'clime-cohort-check-exclusive
-                                       ,@(clime--emit-kw keywords '(:required :help)))
+    (setq member-names (nreverse member-names))
+    (list :conform (if default
+                       `(clime-check-exclusive ',name ',member-names ,default)
+                     `(clime-check-exclusive ',name ',member-names))
           :options (nreverse option-forms))))
 
-(defun clime--build-zip-cohort (args)
-  "Build a paired cohort from DSL ARGS.
+(defun clime--build-zip-conform (args)
+  "Build a paired group from DSL ARGS.
 ARGS is (NAME &rest BODY) where BODY contains keyword args and
-clime-option forms.  Returns a plist (:cohort FORM :options FORMS)."
+clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
   (let* ((name (car args))
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:required :help :doc)))
-         (keywords (car extracted))
+         (_keywords (car extracted))
          (body-forms (cdr extracted))
-         (option-forms '()))
+         (option-forms '())
+         (member-names '()))
     (dolist (form body-forms)
       (when (consp form)
         (pcase (car form)
           ('clime-option
+           (push (cadr form) member-names)
            (push (clime--build-option
-                  (append (list (cadr form) (caddr form))
-                          (list :cohort `',name :multiple t)
-                          (cdddr form)))
+                  (append (cdr form) (list :multiple t)))
                  option-forms))
           (_ (error "clime-zip %s: only clime-option forms allowed, got %S"
                     name (car form))))))
-    (list :cohort `(clime-make-cohort :name ',name
-                                       :resolve #'clime-cohort-check-paired
-                                       ,@(clime--emit-kw keywords '(:required :help)))
+    (setq member-names (nreverse member-names))
+    (list :conform `(clime-check-paired ',name ',member-names)
           :options (nreverse option-forms))))
 
 (defun clime--build-handler (args)
@@ -360,7 +364,7 @@ ARGS is (NAME &rest BODY)."
             :name ,name-str
             :handler ,handler
             ,@(clime--emit-kw keywords '(:help :aliases :hidden :epilog :category :deprecated))
-            ,@(clime--emit-body classified '(:cohorts :options :args))))))
+            ,@(clime--emit-body classified '(:conform :options :args))))))
 
 (defun clime--build-alias-for (args)
   "Build a `clime-command' alias-for form from DSL ARGS.
@@ -399,7 +403,7 @@ ARGS is (NAME &rest BODY)."
            (clime-make-group
             :name ,name-str
             ,@(clime--emit-kw keywords '(:help :aliases :hidden :inline :epilog :category :deprecated))
-            ,@(clime--emit-body classified '(:cohorts :options :args :children :handler))))))
+            ,@(clime--emit-body classified '(:conform :options :args :children :handler))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
 
@@ -433,7 +437,7 @@ Child forms:
        (clime-make-app
         :name ,name-str
         ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :setup))
-        ,@(clime--emit-body classified '(:output-formats :cohorts :options :args :children :handler))))))
+        ,@(clime--emit-body classified '(:output-formats :conform :options :args :children :handler))))))
 
 ;;; ─── DSL Form Macros ───────────────────────────────────────────────────
 
@@ -452,8 +456,8 @@ Child forms:
                            &rest plist
                            &key bool flag from type help required default
                            nargs env count multiple choices coerce conform
-                           separator category hidden deprecated mutex
-                           negatable requires zip
+                           separator category hidden deprecated
+                           negatable requires
                            &allow-other-keys)
   "Define a CLI option NAME with FLAGS.
 NAME is a symbol — the canonical parameter name.
@@ -467,8 +471,6 @@ Keyword arguments:
   :negatable t      Generate --no-X variant
   :required t       Option must be provided
   :requires SYMS    Other options that must also be set
-  :mutex SYM        Mutual exclusion group
-  :zip SYM          Paired option group
   :nargs N          Number of arguments (0 = boolean)
   :type SYM         Type converter (\\='string, \\='integer, \\='number)
   :choices LIST     Allowed values or function
@@ -484,7 +486,7 @@ Keyword arguments:
   (declare (indent 2))
   (ignore bool flag from type help required default nargs env count
           multiple choices coerce conform separator category hidden
-          deprecated mutex negatable requires zip)
+          deprecated negatable requires)
   (clime--build-option (cons name (cons flags plist))))
 
 (cl-defmacro clime-arg (name
@@ -577,13 +579,13 @@ Child forms:
 (cl-defmacro clime-output-format (name flags
                                   &rest plist
                                   &key help finalize streaming encoder error-handler
-                                  mutex hidden category deprecated
+                                  hidden category deprecated
                                   &allow-other-keys)
   "Declare an output format NAME with FLAGS.
 NAME is a symbol — the format name (e.g. json, yaml).
 FLAGS is a list of flag strings, e.g. (\"--json\").
 
-Inherits all `clime-option' behavior (mutex, hidden, category, etc.)
+Inherits all `clime-option' behavior (hidden, category, etc.)
 since output formats ARE options.
 
 Keyword arguments:
@@ -592,44 +594,36 @@ Keyword arguments:
   :streaming t      Emit immediately, bypass accumulator
   :encoder FN       Data → string encoder
   :error-handler FN Error handler: (msg) → side effect
-  :mutex SYM        Mutual exclusion group
   :hidden t         Omit from help
   :category STR     Help display category
   :deprecated STR   Deprecation message or t"
   (declare (indent 2))
-  (ignore help finalize streaming encoder error-handler mutex hidden category deprecated)
+  (ignore help finalize streaming encoder error-handler hidden category deprecated)
   (clime--build-output-format (cons name (cons flags plist))))
 
 (defmacro clime-mutex (name &rest body)
-  "Define an exclusive (mutual exclusion) cohort NAME with BODY.
-NAME is a symbol — the cohort name (used as key in ctx).
+  "Define an exclusive (mutual exclusion) group NAME with BODY.
+NAME is a symbol — the group name (used as key in ctx).
 BODY is a mix of keyword args and clime-option forms.
 
-Keyword arguments:
-  :required t     At least one member must be set
-  :help STRING    Cohort-level description
-
-Wrapped options auto-get :cohort set to NAME.
-The winner's option name is injected into params under NAME."
+The winner's option name is injected into params under NAME.
+Expands to a node :conform entry via `clime-check-exclusive'."
   (declare (indent 1))
-  (let ((result (clime--build-mutex-cohort (cons name body))))
-    `(list :cohort ,(plist-get result :cohort)
+  (let ((result (clime--build-mutex-conform (cons name body))))
+    `(list :conform ,(plist-get result :conform)
            :options (list ,@(plist-get result :options)))))
 
 (defmacro clime-zip (name &rest body)
-  "Define a paired (zip) cohort NAME with BODY.
-NAME is a symbol — the cohort name (used as key in ctx).
+  "Define a paired (zip) group NAME with BODY.
+NAME is a symbol — the group name (used as key in ctx).
 BODY is a mix of keyword args and clime-option forms.
 
-Keyword arguments:
-  :required t     At least one member must be set
-  :help STRING    Cohort-level description
-
-Wrapped options auto-get :cohort and :multiple set.
-A zipped alist is injected into params under NAME."
+Wrapped options auto-get :multiple set.
+A zipped alist is injected into params under NAME.
+Expands to a node :conform entry via `clime-check-paired'."
   (declare (indent 1))
-  (let ((result (clime--build-zip-cohort (cons name body))))
-    `(list :cohort ,(plist-get result :cohort)
+  (let ((result (clime--build-zip-conform (cons name body))))
+    `(list :conform ,(plist-get result :conform)
            :options (list ,@(plist-get result :options)))))
 
 (defmacro clime-handler (arglist &rest body)
