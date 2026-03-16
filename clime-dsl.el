@@ -60,8 +60,8 @@ Returns a plist (:options :args :children :handler)."
     (dolist (form forms)
       (when (consp form)
         (pcase (car form)
-          ('clime-option (push (clime--build-option (cdr form)) options))
-          ('clime-arg (push (clime--build-arg (cdr form)) args))
+          ((or 'clime-option 'clime-opt) (push (clime--build-option (cdr form)) options))
+          ((or 'clime-arg 'clime-argument) (push (clime--build-arg (cdr form)) args))
           ('clime-command (push (clime--build-command (cdr form)) children))
           ('clime-alias-for (push (clime--build-alias-for (cdr form)) children))
           ('clime-group (push (clime--build-group (cdr form)) children))
@@ -175,6 +175,8 @@ Supports DSL shorthands: :bool t normalizes to :nargs 0,
       (setq plist (plist-put (cl-copy-list plist) :multiple t)))
     `(defvar ,var-sym (list ,@plist))))
 
+(defalias 'clime-defoption 'clime-defopt)
+
 ;;;###autoload
 (defmacro clime-defarg (name &rest plist)
   "Define NAME as a reusable argument template.
@@ -187,6 +189,8 @@ Must not contain :name (per-instance)."
     (when (plist-member plist :name)
       (error "clime-defarg %s: :name is per-instance, not allowed in templates" name))
     `(defvar ,var-sym (list ,@plist))))
+
+(defalias 'clime-defargument 'clime-defarg)
 
 ;;; ─── Emit Helpers ──────────────────────────────────────────────────────
 
@@ -473,11 +477,11 @@ Child forms:
 ;; Container forms use `defmacro' with &rest body (keywords interleaved
 ;; with child forms prevent &key usage).
 
-(cl-defmacro clime-option (name flags
-                           &rest plist
-                           &key bool flag from type help required default
-                           nargs env count multiple choices coerce conform
-                           separator category hidden deprecated
+(cl-defmacro clime-opt (name flags
+                        &rest plist
+                        &key bool flag from type help required default
+                        nargs env count multiple choices coerce conform
+                        separator category hidden deprecated
                            negatable requires
                            &allow-other-keys)
   "Define a CLI option NAME with FLAGS.
@@ -510,6 +514,9 @@ Keyword arguments:
           deprecated negatable requires)
   (clime--build-option (cons name (cons flags plist))))
 
+(defalias 'clime-option 'clime-opt)
+(put 'clime-option 'lisp-indent-function 2)
+
 (cl-defmacro clime-arg (name
                         &rest plist
                         &key from type help required default nargs
@@ -533,6 +540,9 @@ Keyword arguments:
   (ignore from type help required default nargs choices coerce conform
           deprecated)
   (clime--build-arg (cons name plist)))
+
+(defalias 'clime-argument 'clime-arg)
+(put 'clime-argument 'lisp-indent-function 1)
 
 (defmacro clime-command (name &rest body)
   "Define a subcommand NAME with BODY.

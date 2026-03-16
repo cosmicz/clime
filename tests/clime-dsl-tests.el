@@ -1065,5 +1065,71 @@
   (let ((grp (cdr (car (clime-group-children clime-test--bare-bool-grp)))))
     (should (clime-group-inline grp))))
 
+;;; ─── DSL Aliases ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/clime-opt-alias ()
+  "clime-opt produces identical struct to clime-option."
+  (let ((via-option (eval '(clime-option verbose ("-v" "--verbose") :bool :help "Verbose") t))
+        (via-opt    (eval '(clime-opt    verbose ("-v" "--verbose") :bool :help "Verbose") t)))
+    (should (equal via-option via-opt))))
+
+(ert-deftest clime-test-dsl/clime-argument-alias ()
+  "clime-argument produces identical struct to clime-arg."
+  (let ((via-arg      (eval '(clime-arg      name :help "Person" :required nil) t))
+        (via-argument (eval '(clime-argument name :help "Person" :required nil) t)))
+    (should (equal via-arg via-argument))))
+
+(ert-deftest clime-test-dsl/clime-defoption-alias ()
+  "clime-defoption works as alias for clime-defopt."
+  (eval '(clime-defoption test-alias-defoption :type 'string :help "Test") t)
+  (should (boundp 'clime--opt-test-alias-defoption))
+  (should (plist-get (symbol-value 'clime--opt-test-alias-defoption) :type)))
+
+(ert-deftest clime-test-dsl/clime-defargument-alias ()
+  "clime-defargument works as alias for clime-defarg."
+  (eval '(clime-defargument test-alias-defargument :type 'string :help "Test") t)
+  (should (boundp 'clime--arg-test-alias-defargument))
+  (should (plist-get (symbol-value 'clime--arg-test-alias-defargument) :type)))
+
+(ert-deftest clime-test-dsl/classify-body-recognizes-clime-opt ()
+  "clime--classify-body recognizes clime-opt in app/command bodies."
+  (eval '(clime-app clime-test--alias-opt-app
+           :version "1"
+           (clime-opt name ("-n" "--name") :help "Name")
+           (clime-handler (ctx) nil))
+        t)
+  (should (clime-node-find-option clime-test--alias-opt-app "--name")))
+
+(ert-deftest clime-test-dsl/classify-body-recognizes-clime-argument ()
+  "clime--classify-body recognizes clime-argument in app/command bodies."
+  (eval '(clime-app clime-test--alias-arg-app
+           :version "1"
+           (clime-argument who :help "Who")
+           (clime-handler (ctx) nil))
+        t)
+  (should (= 1 (length (clime-app-args clime-test--alias-arg-app)))))
+
+(ert-deftest clime-test-dsl/clime-opt-inside-command ()
+  "clime-opt works inside a clime-command body."
+  (eval '(clime-app clime-test--alias-opt-cmd-app
+           :version "1"
+           (clime-command greet
+             :help "Greet"
+             (clime-opt name ("-n" "--name") :help "Name")
+             (clime-argument who :help "Who")
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--alias-opt-cmd-app)))))
+    (should (clime-node-find-option cmd "--name"))
+    (should (= 1 (length (clime-command-args cmd))))))
+
+(ert-deftest clime-test-dsl/indent-clime-opt ()
+  "clime-opt has same indent as clime-option (2)."
+  (should (equal 2 (get 'clime-opt 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-clime-argument ()
+  "clime-argument has same indent as clime-arg (1)."
+  (should (equal 1 (get 'clime-argument 'lisp-indent-function))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here
