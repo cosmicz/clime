@@ -300,11 +300,11 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
     (dolist (form body-forms)
       (when (consp form)
         (pcase (car form)
-          ('clime-option
+          ((or 'clime-option 'clime-opt)
            (push (cadr form) member-names)
            (push (clime--build-option (cdr form))
                  option-forms))
-          (_ (error "clime-mutex %s: only clime-option forms allowed, got %S"
+          (_ (error "clime-mutex %s: only clime-opt forms allowed, got %S"
                     name (car form))))))
     (setq member-names (nreverse member-names))
     (when (and required default)
@@ -313,7 +313,7 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
                 name)))
     (when required
       (dolist (form body-forms)
-        (when (and (consp form) (eq (car form) 'clime-option))
+        (when (and (consp form) (memq (car form) '(clime-option clime-opt)))
           (let ((opt-plist (cddr form)))
             (when (plist-get opt-plist :default)
               (display-warning 'clime
@@ -338,17 +338,17 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
     (dolist (form body-forms)
       (when (consp form)
         (pcase (car form)
-          ('clime-option
+          ((or 'clime-option 'clime-opt)
            (push (cadr form) member-names)
            (push (clime--build-option
                   (append (cdr form) (list :multiple t)))
                  option-forms))
-          (_ (error "clime-zip %s: only clime-option forms allowed, got %S"
+          (_ (error "clime-zip %s: only clime-opt forms allowed, got %S"
                     name (car form))))))
     (setq member-names (nreverse member-names))
     (when required
       (dolist (form body-forms)
-        (when (and (consp form) (eq (car form) 'clime-option))
+        (when (and (consp form) (memq (car form) '(clime-option clime-opt)))
           (let ((opt-plist (cddr form)))
             (when (plist-get opt-plist :default)
               (display-warning 'clime

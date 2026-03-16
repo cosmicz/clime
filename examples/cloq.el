@@ -31,10 +31,10 @@
 
   (clime-output-format json ("--json") :help "Output as JSON")
 
-  (clime-option verbose ("-v" "--verbose") :count
+  (clime-opt verbose ("-v" "--verbose") :count
                 :help "Increase verbosity")
 
-  (clime-option file ("--file" "-f") :multiple :required
+  (clime-opt file ("--file" "-f") :multiple :required
                 :coerce #'expand-file-name
                 :help "Org file(s) to query")
 
@@ -43,19 +43,19 @@
     :aliases (q)
 
     (clime-mutex query
-      (clime-option todo ("--todo" "-t")
+      (clime-opt todo ("--todo" "-t")
                     :help "Match TODO keyword" :category "Query")
-      (clime-option sexp ("--sexp")
+      (clime-opt sexp ("--sexp")
                     :help "S-expression query" :category "Query")
-      (clime-option search ("--search" "-s")
+      (clime-opt search ("--search" "-s")
                     :help "Plain-text search query" :category "Query"))
 
-    (clime-option sort ("--sort")
+    (clime-opt sort ("--sort")
       :choices '("deadline" "priority" "todo")
       :help "Sort results" :category "Output")
-    (clime-option limit ("--limit" "-n") :type 'integer
+    (clime-opt limit ("--limit" "-n") :type 'integer
                   :help "Max results to return" :category "Output")
-    (clime-option tags ("--tags") :negatable :default t
+    (clime-opt tags ("--tags") :negatable :default t
                   :help "Include tags in output" :category "Output")
 
     (clime-handler (ctx)

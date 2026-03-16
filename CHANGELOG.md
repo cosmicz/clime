@@ -4,6 +4,12 @@
 
 ### Added
 
+- **DSL macro aliases**: `clime-opt` is now the canonical short form for
+  defining options (matching `clime-arg`), with `clime-option` as a
+  long-form alias.  Similarly, `clime-argument` aliases `clime-arg`,
+  `clime-defoption` aliases `clime-defopt`, and `clime-defargument`
+  aliases `clime-defarg`.  All forms are interchangeable in DSL bodies.
+
 - **Unified `:conform` system**: node-level `:conform` slot on
   commands, groups, and apps with signature `(params, node) → params`.
   Option/arg `:conform` signature updated to `(value, param) → value`.

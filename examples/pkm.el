@@ -79,15 +79,15 @@
 
   ;; ── Root Options ─────────────────────────────────────────────────────
   ;; [1] Count flag — stackable verbosity (-v, -vv, -vvv)
-  (clime-option verbose ("-v" "--verbose") :count
+  (clime-opt verbose ("-v" "--verbose") :count
     :help "Increase output verbosity")
 
   ;; [2] Boolean flag — :bool is shorthand for :nargs 0
-  (clime-option quiet ("-q" "--quiet") :bool
+  (clime-opt quiet ("-q" "--quiet") :bool
     :help "Suppress non-essential output")
 
   ;; [3] Hidden option — internal use only, omitted from --help
-  (clime-option internal-trace ("--internal-trace") :bool :hidden
+  (clime-opt internal-trace ("--internal-trace") :bool :hidden
     :help "Enable internal tracing")
 
   ;; [4] Output format — explicit clime-output-format with --json flag
@@ -95,7 +95,7 @@
     :help "Output as JSON")
 
   ;; [21] Negatable flag — --color / --no-color with ternary state
-  (clime-option color ("--color") :negatable :default t
+  (clime-opt color ("--color") :negatable :default t
     :help "Colorize output")
 
   ;; ── install ──────────────────────────────────────────────────────────
@@ -107,16 +107,16 @@
 
     (clime-arg package :help "Package name or URL")
 
-    (clime-option force ("--force" "-f") :from force-flag  ; [19] from template
+    (clime-opt force ("--force" "-f") :from force-flag  ; [19] from template
       :help "Overwrite existing installation")
 
-    (clime-option dry-run ("--dry-run" "-n") :bool
+    (clime-opt dry-run ("--dry-run" "-n") :bool
       :help "Show what would be installed without doing it")
 
-    (clime-option tag ("--tag" "-t") :multiple
+    (clime-opt tag ("--tag" "-t") :multiple
       :help "Add tag to installed package")
 
-    (clime-option registry ("--registry" "-r")
+    (clime-opt registry ("--registry" "-r")
       :help "Registry to install from"
       :default "default")
 
@@ -138,7 +138,7 @@
     (clime-arg query :required nil
       :help "Search query (omit to list all)")
 
-    (clime-option limit ("--limit" "-l")
+    (clime-opt limit ("--limit" "-l")
       :help "Max results to return"
       :default "20")
 
@@ -156,30 +156,30 @@
     :aliases (ls)
     :category "Discovery"
 
-    (clime-option author ("--author" "-a")
+    (clime-opt author ("--author" "-a")
       :help "Filter by author"
       :category "Filter")
 
-    (clime-option since ("--since")
+    (clime-opt since ("--since")
       :help "Only packages installed after DATE"
       :category "Filter")
 
-    (clime-option sort ("--sort" "-s")
+    (clime-opt sort ("--sort" "-s")
       :help "Sort field"
       :choices '("name" "date" "size")
       :default "name")
 
     ;; [22] Mutually exclusive output format options
     (clime-mutex list-format
-      (clime-option format-table ("--table") :bool
+      (clime-opt format-table ("--table") :bool
         :help "Output as table (default)"
         :category "Format")
-      (clime-option format-csv ("--csv") :bool
+      (clime-opt format-csv ("--csv") :bool
         :help "Output as CSV"
         :category "Format"))
 
     ;; [23] Deprecated option with migration hint
-    (clime-option output ("--output" "-o")
+    (clime-opt output ("--output" "-o")
       :deprecated "Use --table or --csv instead"
       :help "Output format"
       :hidden)
@@ -232,7 +232,7 @@
       :help "Remove a repository"
       :aliases (rm)
       (clime-arg name :help "Repository name")
-      (clime-option force ("--force" "-f") :from force-flag  ; [19] reused
+      (clime-opt force ("--force" "-f") :from force-flag  ; [19] reused
         :help "Remove even if packages depend on it")
       (clime-handler (ctx)
         (clime-let ctx (name force)
@@ -274,7 +274,7 @@
     :category "Admin"
     :help "Administrative operations"
 
-    (clime-option admin-token ("--admin-token")
+    (clime-opt admin-token ("--admin-token")
       :help "Admin API token")
 
     (clime-command gc

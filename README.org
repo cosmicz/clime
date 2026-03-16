@@ -27,7 +27,7 @@ Write an Elisp file using the clime DSL:
   :version "1.0.0"
   :help "A friendly greeter."
 
-  (clime-option shout ("--shout" "-s") :bool
+  (clime-opt shout ("--shout" "-s") :bool
     :help "SHOUT THE GREETING")
 
   (clime-command hello
@@ -71,12 +71,12 @@ to any node.
 
 #+begin_example
 clime-app (root)
-  +-- clime-option (--verbose)      app-level option
+  +-- clime-opt (--verbose)          app-level option
   +-- clime-command (install)       leaf command
   |     +-- clime-arg (package)
   |     +-- clime-handler
   +-- clime-group (repo)            branch node
-        +-- clime-option (--registry)  group-level option
+        +-- clime-opt (--registry)      group-level option
         +-- clime-command (add)
         +-- clime-command (remove)
 #+end_example
@@ -134,7 +134,7 @@ single-file distribution via ~bundle~.
 Boolean flags consume no value.  Use ~:bool~ (shorthand for ~:nargs 0~):
 
 #+begin_src emacs-lisp
-(clime-option force ("--force" "-f") :bool
+(clime-opt force ("--force" "-f") :bool
   :help "Skip confirmation")
 #+end_src
 
@@ -143,7 +143,7 @@ Boolean flags consume no value.  Use ~:bool~ (shorthand for ~:nargs 0~):
 Count flags increment on each occurrence:
 
 #+begin_src emacs-lisp
-(clime-option verbose ("-v" "--verbose") :count
+(clime-opt verbose ("-v" "--verbose") :count
   :help "Increase verbosity")
 ;; -v → 1, -vv → 2, -vvv → 3
 #+end_src
@@ -153,7 +153,7 @@ Count flags increment on each occurrence:
 Repeatable options collect values into a list:
 
 #+begin_src emacs-lisp
-(clime-option tag ("--tag" "-t") :multiple
+(clime-opt tag ("--tag" "-t") :multiple
   :help "Add tag")
 ;; --tag dev --tag ci → ("dev" "ci")
 #+end_src
@@ -163,7 +163,7 @@ Repeatable options collect values into a list:
 Default values are used when an option isn't provided:
 
 #+begin_src emacs-lisp
-(clime-option registry ("--registry" "-r")
+(clime-opt registry ("--registry" "-r")
   :help "Registry to use"
   :default "default")
 #+end_src
@@ -173,7 +173,7 @@ Default values are used when an option isn't provided:
 Split a single value into a list by a delimiter.  Implies ~:multiple~:
 
 #+begin_src emacs-lisp
-(clime-option tags ("--tags" "-t") :separator ","
+(clime-opt tags ("--tags" "-t") :separator ","
   :help "Comma-separated tags")
 ;; --tags=dev,ci → ("dev" "ci")
 #+end_src
@@ -188,7 +188,7 @@ Unlike positional args (which are required by default), options are
 optional by default --- ~:required~ makes them mandatory:
 
 #+begin_src emacs-lisp
-(clime-option token ("--token") :required
+(clime-opt token ("--token") :required
   :help "API authentication token")
 #+end_src
 
@@ -209,7 +209,7 @@ Use ~:negatable~ to auto-generate ~--no-X~ variants for boolean flags.
 This implies boolean (no ~:bool~ needed):
 
 #+begin_src emacs-lisp
-(clime-option color ("--color") :negatable :default t
+(clime-opt color ("--color") :negatable :default t
   :help "Colorize output")
 #+end_src
 
@@ -242,9 +242,9 @@ name as a derived key in ctx:
 
 #+begin_src emacs-lisp
 (clime-mutex output-format
-  (clime-option format-json ("--json") :bool)
-  (clime-option format-csv  ("--csv")  :bool)
-  (clime-option format-text ("--text") :bool))
+  (clime-opt format-json ("--json") :bool)
+  (clime-opt format-csv  ("--csv")  :bool)
+  (clime-opt format-text ("--text") :bool))
 #+end_src
 
 Using more than one signals an error:
@@ -278,12 +278,12 @@ When the option is set, all required options must also be present:
 
 #+begin_src emacs-lisp
 ;; Bidirectional: both must be used together
-(clime-option skip ("--skip") :requires '(reason))
-(clime-option reason ("--reason") :requires '(skip))
+(clime-opt skip ("--skip") :requires '(reason))
+(clime-opt reason ("--reason") :requires '(skip))
 
 ;; One-way: --output-file needs --format, but --format works alone
-(clime-option output-file ("--output-file") :requires '(format))
-(clime-option format ("--format"))
+(clime-opt output-file ("--output-file") :requires '(format))
+(clime-opt format ("--format"))
 #+end_src
 
 Using ~--skip~ without ~--reason~ signals an error:
@@ -304,8 +304,8 @@ alists in ctx under the group name.  Implies ~:multiple~:
 
 #+begin_src emacs-lisp
 (clime-zip skip-reason
-  (clime-option skip ("--skip"))
-  (clime-option reason ("--reason")))
+  (clime-opt skip ("--skip"))
+  (clime-opt reason ("--reason")))
 #+end_src
 
 #+begin_src bash
@@ -410,7 +410,7 @@ without duplicating its definition:
   (clime-command start
     :help "Start an agent"
     (clime-arg name :help "Agent name")
-    (clime-option prompt ("--prompt") :help "Initial prompt")
+    (clime-opt prompt ("--prompt") :help "Initial prompt")
     (clime-handler (ctx) (do-start ctx))))
 
 (clime-group shortcuts :inline :category "Shortcuts"
@@ -530,7 +530,7 @@ keeping it callable:
   :hidden
   (clime-handler (ctx) ...))
 
-(clime-option trace ("--internal-trace") :bool :hidden
+(clime-opt trace ("--internal-trace") :bool :hidden
   :help "Enable tracing")
 #+end_src
 
@@ -540,7 +540,7 @@ Mark commands or options as ~:deprecated~ to emit a warning when used.
 The value can be ~t~ (generic) or a string (migration hint):
 
 #+begin_src emacs-lisp
-(clime-option old-flag ("--old") :bool
+(clime-opt old-flag ("--old") :bool
   :deprecated "Use --new instead"
   :help "Legacy option")
 
@@ -614,7 +614,7 @@ raw string → :type → :choices → :coerce → env vars → :conform → node
   ~:choices~ can compare typed values:
 
   #+begin_src emacs-lisp
-  (clime-option level ("--level") :type 'integer :choices '(1 2 3))
+  (clime-opt level ("--level") :type 'integer :choices '(1 2 3))
   #+end_src
 
 - *:choices* --- validate against an allowed set.  Runs after ~:type~
@@ -622,7 +622,7 @@ raw string → :type → :choices → :coerce → env vars → :conform → node
   function (lazy; deferred to pass 2):
 
   #+begin_src emacs-lisp
-  (clime-option format ("--format") :choices '("json" "table" "csv")
+  (clime-opt format ("--format") :choices '("json" "table" "csv")
     :help "Output format")
   #+end_src
 
@@ -637,7 +637,7 @@ raw string → :type → :choices → :coerce → env vars → :conform → node
   transform for the handler:
 
   #+begin_src emacs-lisp
-  (clime-option env ("--env") :choices '("dev" "prod") :coerce #'upcase
+  (clime-opt env ("--env") :choices '("dev" "prod") :coerce #'upcase
     :help "Deploy target")
   ;; user types "dev", choices validates "dev", handler gets "DEV"
   #+end_src
@@ -645,7 +645,7 @@ raw string → :type → :choices → :coerce → env vars → :conform → node
   Also useful for standalone transforms:
 
   #+begin_src emacs-lisp
-  (clime-option path ("--path") :coerce #'expand-file-name
+  (clime-opt path ("--path") :coerce #'expand-file-name
     :help "File path (expanded)")
   #+end_src
 
@@ -657,7 +657,7 @@ raw string → :type → :choices → :coerce → env vars → :conform → node
   error:
 
   #+begin_src emacs-lisp
-  (clime-option id ("--id")
+  (clime-opt id ("--id")
     :conform (lambda (val _param)
                (unless (string-match-p "^[a-z0-9]\\{7\\}$" val)
                  (error "Invalid ID format: %s" val))
@@ -692,7 +692,7 @@ Now ~--shout~ can also be set via ~GREET_SHOUT=1~.
 For individual options, override the env var name with ~:env~:
 
 #+begin_src emacs-lisp
-(clime-option token ("--token") :env "API_TOKEN"
+(clime-opt token ("--token") :env "API_TOKEN"
   :help "Auth token")
 #+end_src
 
@@ -750,11 +750,11 @@ one heading; uncategorized items fall back to "Options:" or "Commands:".
 Options with ~:category~:
 
 #+begin_src emacs-lisp
-(clime-option author ("--author" "-a")
+(clime-opt author ("--author" "-a")
   :help "Filter by author"
   :category "Filter")
 
-(clime-option since ("--since")
+(clime-opt since ("--since")
   :help "Only after DATE"
   :category "Filter")
 #+end_src
@@ -782,7 +782,7 @@ options:
   :inline :category "Admin"
   :help "Administrative commands"
 
-  (clime-option admin-token ("--admin-token")
+  (clime-opt admin-token ("--admin-token")
     :help "Admin API token")
 
   (clime-command status
@@ -942,14 +942,14 @@ Define reusable option or arg specs with ~clime-defopt~ and
 ;; Reuse across commands — explicit values override the template
 (clime-command copy
   :help "Copy a resource"
-  (clime-option src ("--src") :from verified-id :multiple)
-  (clime-option dst ("--dst") :from verified-id)
+  (clime-opt src ("--src") :from verified-id :multiple)
+  (clime-opt dst ("--dst") :from verified-id)
   (clime-handler (ctx) ...))
 
 (clime-command move
   :help "Move a resource"
-  (clime-option src ("--src") :from verified-id)
-  (clime-option dst ("--dst") :from verified-id)
+  (clime-opt src ("--src") :from verified-id)
+  (clime-opt dst ("--dst") :from verified-id)
   (clime-handler (ctx) ...))
 #+end_src
 
@@ -991,10 +991,10 @@ dynamic option values:
            (let ((dir (plist-get (clime-parse-result-params result) 'config-dir)))
              (my-load-config (or dir "~/.myapp"))))
 
-  (clime-option config-dir ("--config-dir")
+  (clime-opt config-dir ("--config-dir")
     :help "Config directory")
 
-  (clime-option level ("--level")
+  (clime-opt level ("--level")
     :help "Log level"
     :choices #'my-configured-levels)  ; resolved after setup
 
@@ -1040,25 +1040,25 @@ All command-like forms (~clime-command~, ~clime-group~, ~clime-app~)
 accept: ~:help~ (~:doc~ is an alias), ~:aliases~, ~:hidden~,
 ~:deprecated~, ~:epilog~, ~:category~.
 
-All parameter forms (~clime-option~, ~clime-arg~) accept: ~:type~,
+All parameter forms (~clime-opt~, ~clime-arg~) accept: ~:type~,
 ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~,
 ~:deprecated~, ~:from~.
 
-| Macro                 | Purpose                          | Distinctive arguments                                                 |
-|-----------------------+----------------------------------+-----------------------------------------------------------------------|
-| ~clime-app~           | Root application definition      | ~:version~, ~:env-prefix~, ~:setup~                                  |
-| ~clime-command~       | Leaf command (has handler)       | All shared command slots                                              |
-| ~clime-group~         | Branch node (has children)       | ~:inline~                                                             |
-| ~clime-option~        | Named option (flag or value)     | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:requires~, ~:env~, ~:category~ |
-| ~clime-mutex~         | Exclusive option group           | Group name, ~:default~, contains ~clime-option~ forms                 |
-| ~clime-zip~           | Paired option group              | Group name, contains ~clime-option~ forms                             |
-| ~clime-arg~           | Positional argument              | ~:nargs~, ~:required~                                                 |
-| ~clime-defopt~        | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
-| ~clime-defarg~        | Reusable arg template            | Any arg slot except ~:name~                                           |
-| ~clime-alias-for~     | Alias for a nested command       | Target path, ~:defaults~, ~:vals~                                    |
-| ~clime-output-format~ | Output format declaration        | ~:finalize~, ~:streaming~, ~:encoder~, ~:error-handler~, plus all option slots |
-| ~clime-handler~       | Command implementation           | ~(ctx)~ --- receives ~clime-context~                                  |
-| ~clime-let~           | Destructure context params       | ~ctx (var1 var2 (alias param) ...)~                                   |
+| Macro                 | Alias              | Purpose                          | Distinctive arguments                                                 |
+|-----------------------+--------------------+----------------------------------+-----------------------------------------------------------------------|
+| ~clime-app~           |                    | Root application definition      | ~:version~, ~:env-prefix~, ~:setup~                                  |
+| ~clime-command~       |                    | Leaf command (has handler)       | All shared command slots                                              |
+| ~clime-group~         |                    | Branch node (has children)       | ~:inline~                                                             |
+| ~clime-opt~           | ~clime-option~     | Named option (flag or value)     | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:requires~, ~:env~, ~:category~ |
+| ~clime-mutex~         |                    | Exclusive option group           | Group name, ~:default~, contains ~clime-opt~ forms                    |
+| ~clime-zip~           |                    | Paired option group              | Group name, contains ~clime-opt~ forms                                |
+| ~clime-arg~           | ~clime-argument~   | Positional argument              | ~:nargs~, ~:required~                                                 |
+| ~clime-defopt~        | ~clime-defoption~  | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
+| ~clime-defarg~        | ~clime-defargument~ | Reusable arg template            | Any arg slot except ~:name~                                           |
+| ~clime-alias-for~     |                    | Alias for a nested command       | Target path, ~:defaults~, ~:vals~                                    |
+| ~clime-output-format~ |                    | Output format declaration        | ~:finalize~, ~:streaming~, ~:encoder~, ~:error-handler~, plus all option slots |
+| ~clime-handler~       |                    | Command implementation           | ~(ctx)~ --- receives ~clime-context~                                  |
+| ~clime-let~           |                    | Destructure context params       | ~ctx (var1 var2 (alias param) ...)~                                   |
 
 ~:bool~ (or ~:bool t~) is shorthand for ~:nargs 0~ (boolean flag, DSL only).
 
