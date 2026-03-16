@@ -290,6 +290,7 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (default (plist-get keywords :default))
+         (required (plist-get keywords :required))
          (option-forms '())
          (member-names '()))
     (dolist (form body-forms)
@@ -302,9 +303,20 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
           (_ (error "clime-mutex %s: only clime-option forms allowed, got %S"
                     name (car form))))))
     (setq member-names (nreverse member-names))
-    (list :conform (if default
-                       `(clime-check-exclusive ',name ',member-names ,default)
-                     `(clime-check-exclusive ',name ',member-names))
+    (when (and required default)
+      (display-warning 'clime
+        (format "clime-mutex `%s': :default is vacuous when :required is set"
+                name)))
+    (when required
+      (dolist (form body-forms)
+        (when (and (consp form) (eq (car form) 'clime-option))
+          (let ((opt-plist (cddr form)))
+            (when (plist-get opt-plist :default)
+              (display-warning 'clime
+                (format "clime-mutex `%s': option `%s' has :default, \
+which is vacuous — defaults apply after exclusivity check"
+                        name (cadr form))))))))
+    (list :conform `(clime-check-exclusive ',name ',member-names ,default ,required)
           :options (nreverse option-forms))))
 
 (defun clime--build-zip-conform (args)
@@ -315,8 +327,8 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:required :help :doc)))
-         (_keywords (car extracted))
          (body-forms (cdr extracted))
+         (required (plist-get (car extracted) :required))
          (option-forms '())
          (member-names '()))
     (dolist (form body-forms)
@@ -330,7 +342,16 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
           (_ (error "clime-zip %s: only clime-option forms allowed, got %S"
                     name (car form))))))
     (setq member-names (nreverse member-names))
-    (list :conform `(clime-check-paired ',name ',member-names)
+    (when required
+      (dolist (form body-forms)
+        (when (and (consp form) (eq (car form) 'clime-option))
+          (let ((opt-plist (cddr form)))
+            (when (plist-get opt-plist :default)
+              (display-warning 'clime
+                (format "clime-zip `%s': option `%s' has :default, \
+which is vacuous — defaults apply after paired check"
+                        name (cadr form))))))))
+    (list :conform `(clime-check-paired ',name ',member-names ,required)
           :options (nreverse option-forms))))
 
 (defun clime--build-handler (args)

@@ -706,5 +706,37 @@
                     :options (list root-opt)
                     :children (list (cons "show" cmd)))))
 
+;;; ─── Required + Default Warning ─────────────────────────────────────
+
+(ert-deftest clime-test-validate/required-default-option-warns ()
+  "Warning when option has both :required t and :default."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-option :name 'fmt :flags '("--fmt")
+                                    :required t :default "json"))))
+    (should (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                     msgs))))
+
+(ert-deftest clime-test-validate/required-no-default-option-no-warn ()
+  "No warning when option has :required t without :default."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-option :name 'fmt :flags '("--fmt")
+                                    :required t))))
+    (should-not (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                         msgs))))
+
+(ert-deftest clime-test-validate/required-default-arg-warns ()
+  "Warning when arg has both :required t and :default."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-arg :name 'file :required t :default "out.txt"))))
+    (should (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                     msgs))))
+
+(ert-deftest clime-test-validate/required-no-default-arg-no-warn ()
+  "No warning when arg has :required t without :default."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-arg :name 'file :required t))))
+    (should-not (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                         msgs))))
+
 (provide 'clime-core-tests)
 ;;; clime-core-tests.el ends here

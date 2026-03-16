@@ -67,7 +67,16 @@ ARGS is a plist of slot values."
           (error "clime-make-option: :negatable is incompatible with :nargs %d" nargs)))
       (when (plist-get args :count)
         (error "clime-make-option: :negatable is incompatible with :count")))
+    (clime--check-required-default "Option" args)
     (apply #'clime-option--create args)))
+
+(defun clime--check-required-default (kind args)
+  "Warn if ARGS plist has both :required and :default.
+KIND is a string like \"Option\" or \"Arg\" for the warning message."
+  (when (and (plist-get args :required) (plist-get args :default))
+    (display-warning 'clime
+      (format "%s `%s': :required is vacuous when :default is set"
+              kind (plist-get args :name)))))
 
 (defun clime--merge-template (template &rest overrides)
   "Merge option TEMPLATE plist with OVERRIDES plist.
@@ -112,16 +121,18 @@ Defaults :required to t (unlike options which default to nil)."
   ;; Args default to required (unlike options/params)
   (unless (plist-member args :required)
     (setq args (plist-put (cl-copy-list args) :required t)))
+  (clime--check-required-default "Arg" args)
   (apply #'clime-arg--create args))
 
 ;;; ─── Node-Level Conform Checks ──────────────────────────────────────────
 
-(defun clime-check-exclusive (group-name member-names &optional default)
+(defun clime-check-exclusive (group-name member-names &optional default required)
   "Return a node conformer that enforces at-most-one exclusivity.
 GROUP-NAME is a symbol for the derived value key.  MEMBER-NAMES is a list
 of param name symbols (e.g. \\='(json csv)).  DEFAULT, when non-nil, is
-injected under GROUP-NAME when no member is set.  The returned function
-takes (params, node) and returns updated PARAMS with the winner's name
+injected under GROUP-NAME when no member is set.  REQUIRED, when non-nil,
+signals an error if no member is set.  The returned function takes
+\(params, node) and returns updated PARAMS with the winner's name
 injected under GROUP-NAME."
   (lambda (params _node)
     (let ((set-names (cl-remove-if-not
@@ -145,14 +156,20 @@ injected under GROUP-NAME."
             ;; Falsy (e.g. negated flag): explicitly set but not a winner —
             ;; don't suppress siblings or inject derived key
             params)))
+       (required
+        (signal 'clime-usage-error
+                (list (format "One of %s is required"
+                              (mapconcat (lambda (k) (format "%s" k))
+                                         member-names ", ")))))
        (default
         (plist-put params group-name default))
        (t params)))))
 
-(defun clime-check-paired (group-name member-names)
+(defun clime-check-paired (group-name member-names &optional required)
   "Return a node conformer that enforces all-or-none with equal cardinality.
 GROUP-NAME is a symbol for the zipped value key.  MEMBER-NAMES is a list
-of param name symbols (e.g. \\='(skip reason)).  The returned function takes
+of param name symbols (e.g. \\='(skip reason)).  REQUIRED, when non-nil,
+signals an error if no members are set.  The returned function takes
 \(params, node) and returns updated PARAMS with a zipped alist injected
 under GROUP-NAME."
   (lambda (params _node)
@@ -161,6 +178,12 @@ under GROUP-NAME."
                        member-names))
            (any-set (> (length set-names) 0))
            (all-set (= (length set-names) (length member-names))))
+      ;; Required check
+      (when (and required (not any-set))
+        (signal 'clime-usage-error
+                (list (format "Options %s are required"
+                              (mapconcat (lambda (k) (format "%s" k))
+                                         member-names ", ")))))
       ;; Partial presence check
       (when (and any-set (not all-set))
         (let ((missing (cl-remove-if
@@ -476,7 +499,18 @@ ARGS is a plist of slot values."
                                    existing-options))
                         output-formats)))
         (setq args (plist-put args :options
-                              (append existing-options new-opts))))))
+                              (append existing-options new-opts))))
+      ;; Auto-exclusivity: 2+ output formats get clime-check-exclusive
+      (when (>= (length output-formats) 2)
+        (let* ((member-names (mapcar #'clime-option-name output-formats))
+               (exclusive-fn (clime-check-exclusive 'clime--output-format member-names))
+               (existing-conform (plist-get args :conform)))
+          (setq args (plist-put args :conform
+                                (if existing-conform
+                                    (if (functionp existing-conform)
+                                        (list existing-conform exclusive-fn)
+                                      (append existing-conform (list exclusive-fn)))
+                                  exclusive-fn)))))))
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
     (clime--resolve-aliases app)

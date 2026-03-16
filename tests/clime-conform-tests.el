@@ -407,6 +407,144 @@
                     (clime-run app '("run" "--csv")))))
       (should (equal output "csv")))))
 
+;;; ─── Exclusive :required ─────────────────────────────────────────────
+
+(ert-deftest clime-test-conform/exclusive-required-none-set-error ()
+  "Exclusive group with :required errors when no member is set."
+  (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0))
+         (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt-json opt-csv)
+                                  :conform (clime-check-exclusive 'fmt '(json csv) nil t)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "run" cmd)))))
+    (should-error (clime-parse app '("run")) :type 'clime-usage-error)))
+
+(ert-deftest clime-test-conform/exclusive-required-one-set-ok ()
+  "Exclusive group with :required passes when one member is set."
+  (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0))
+         (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+         (cmd (clime-make-command :name "run"
+                                  :handler (lambda (ctx)
+                                             (format "%s" (clime-ctx-get ctx 'fmt)))
+                                  :options (list opt-json opt-csv)
+                                  :conform (clime-check-exclusive 'fmt '(json csv) nil t)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "run" cmd)))))
+    (should (equal (with-output-to-string (clime-run app '("run" "--json")))
+                   "json"))))
+
+(ert-deftest clime-test-conform/exclusive-required-error-message ()
+  "Exclusive :required error lists all member names."
+  (let* ((opt-a (clime-make-option :name 'a :flags '("--aa") :nargs 0))
+         (opt-b (clime-make-option :name 'b :flags '("--bb") :nargs 0))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt-a opt-b)
+                                  :conform (clime-check-exclusive 'g '(a b) nil t)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "run" cmd)))))
+    (condition-case err
+        (progn (clime-parse app '("run")) (ert-fail "Expected error"))
+      (clime-usage-error
+       (should (string-match-p "One of" (cadr err)))
+       (should (string-match-p "a" (cadr err)))
+       (should (string-match-p "b" (cadr err)))))))
+
+(ert-deftest clime-test-conform/dsl-mutex-required ()
+  "clime-mutex DSL :required passes through to clime-check-exclusive."
+  (eval
+   '(clime-app clime-test--conform-mutex-required-app
+      :version "1"
+      (clime-command run
+        :help "Run"
+        (clime-mutex fmt :required
+          (clime-option json ("--json") :bool)
+          (clime-option csv ("--csv") :bool))
+        (clime-handler (ctx)
+          (format "%s" (clime-ctx-get ctx 'fmt)))))
+   t)
+  (let ((app (symbol-value 'clime-test--conform-mutex-required-app)))
+    ;; No member → error
+    (should (= (clime-run app '("run")) 2))
+    ;; Member set → ok
+    (should (equal (with-output-to-string (clime-run app '("run" "--json")))
+                   "json"))))
+
+(ert-deftest clime-test-conform/exclusive-required-default-option-warns ()
+  "Option inside mutex with :required t and :default triggers warning."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-option :name 'csv :flags '("--csv")
+                                    :nargs 0 :required t :default t))))
+    (should (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                     msgs))))
+
+(ert-deftest clime-test-conform/dsl-mutex-required-with-default-child ()
+  "clime-mutex :required warns when a child option has :default.
+Defaults apply after exclusivity check, so the child's default cannot
+satisfy the at-least-one requirement — user must explicitly choose."
+  ;; Construction warns about vacuous :default
+  (let ((msgs (clime-test-with-messages
+                (eval
+                 '(clime-app clime-test--mutex-req-default-app
+                    :version "1"
+                    (clime-command run
+                      :help "Run"
+                      (clime-mutex fmt :required
+                        (clime-option json ("--json") :bool)
+                        (clime-option csv ("--csv") :bool :default t))
+                      (clime-handler (ctx)
+                        (format "%s" (clime-ctx-get ctx 'fmt)))))
+                 t))))
+    (should (cl-some (lambda (m) (string-match-p "vacuous" m)) msgs)))
+  ;; Runtime: no explicit member → error despite csv having :default
+  (let ((app (symbol-value 'clime-test--mutex-req-default-app)))
+    (should (= (clime-run app '("run")) 2))
+    ;; Explicit choice → ok
+    (should (equal (with-output-to-string (clime-run app '("run" "--csv")))
+                   "csv"))))
+
+(ert-deftest clime-test-conform/dsl-mutex-required-default-warns ()
+  "clime-mutex with both :required and :default warns — :default is vacuous."
+  (let ((msgs (clime-test-with-messages
+                (eval
+                 '(clime-app clime-test--mutex-req-def-app
+                    :version "1"
+                    (clime-command run
+                      :help "Run"
+                      (clime-mutex fmt :required :default 'json
+                        (clime-option json ("--json") :bool)
+                        (clime-option csv ("--csv") :bool))
+                      (clime-handler (ctx)
+                        (format "%s" (clime-ctx-get ctx 'fmt)))))
+                 t))))
+    (should (cl-some (lambda (m) (string-match-p ":default is vacuous" m)) msgs))
+    ;; :required still enforced at runtime
+    (let ((app (symbol-value 'clime-test--mutex-req-def-app)))
+      (should (= (clime-run app '("run")) 2))
+      (should (equal (with-output-to-string (clime-run app '("run" "--json")))
+                     "json")))))
+
+(ert-deftest clime-test-conform/dsl-zip-required ()
+  "clime-zip :required errors when no members are provided."
+  (eval
+   '(clime-app clime-test--zip-req-app
+      :version "1"
+      (clime-command run
+        :help "Run"
+        (clime-zip sr :required
+          (clime-option skip ("--skip") :multiple)
+          (clime-option reason ("--reason") :multiple))
+        (clime-handler (ctx)
+          (format "%S" (clime-ctx-get ctx 'sr)))))
+   t)
+  (let ((app (symbol-value 'clime-test--zip-req-app)))
+    ;; No members → error
+    (should (= (clime-run app '("run")) 2))
+    ;; All members → ok
+    (should (string-match-p "skip"
+              (with-output-to-string
+                (clime-run app '("run" "--skip" "x" "--reason" "y")))))))
+
 ;;; ─── Paired Check via Node Conform ───────────────────────────────────
 
 (ert-deftest clime-test-conform/paired-two-options-zipped ()
