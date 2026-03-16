@@ -19,17 +19,24 @@
 
 (declare-function json-encode "json")
 
-;;; ─── Option ─────────────────────────────────────────────────────────────
+;;; ─── Param (abstract base) ──────────────────────────────────────────────
 
-(cl-defstruct (clime-option (:constructor clime-option--create)
+(cl-defstruct (clime-param (:constructor nil)
                             (:copier nil))
-  "A CLI option (flag) specification."
+  "Abstract base for anything that produces a value in params/ctx."
   (name nil :type symbol :documentation "Canonical param name.")
-  (flags nil :type list :documentation "List of flag strings, e.g. (\"--verbose\" \"-v\").")
-  (type 'string :type symbol :documentation "Type converter symbol.")
   (help nil :type (or string null) :documentation "One-line help text.")
   (required nil :type boolean)
-  (default nil :documentation "Default value, or a function for lazy defaults.")
+  (default nil :documentation "Default value, or a function for lazy defaults."))
+
+;;; ─── Option ─────────────────────────────────────────────────────────────
+
+(cl-defstruct (clime-option (:include clime-param)
+                            (:constructor clime-option--create)
+                            (:copier nil))
+  "A CLI option (flag) specification."
+  (flags nil :type list :documentation "List of flag strings, e.g. (\"--verbose\" \"-v\").")
+  (type 'string :type symbol :documentation "Type converter symbol.")
   (nargs nil :type (or integer null) :documentation "Arg count: nil=1, 0=boolean, N=fixed.")
   (env nil :type (or string null) :documentation "Env var name override.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
@@ -44,7 +51,8 @@
   (mutex nil :type (or symbol null) :documentation "Mutex group symbol. Options sharing a mutex are mutually exclusive.")
   (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0).")
   (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used.")
-  (zip nil :type (or symbol null) :documentation "Zip group symbol. Options sharing a :zip are paired by position and must have equal cardinality."))
+  (zip nil :type (or symbol null) :documentation "Zip group symbol. Options sharing a :zip are paired by position and must have equal cardinality.")
+  (cohort nil :type (or symbol null) :documentation "Cohort group symbol. Links option to a clime-cohort for group validation."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.
@@ -64,6 +72,14 @@ ARGS is a plist of slot values."
         (error "clime-make-option: :negatable is incompatible with :count")))
     (when (plist-get args :zip)
       (setq args (plist-put (cl-copy-list args) :multiple t)))
+    ;; Deprecation: :mutex → :cohort
+    (when (and (plist-get args :mutex)
+               (not (plist-get args :cohort)))
+      (setq args (plist-put (cl-copy-list args) :cohort (plist-get args :mutex))))
+    ;; Deprecation: :zip → :cohort
+    (when (and (plist-get args :zip)
+               (not (plist-get args :cohort)))
+      (setq args (plist-put (cl-copy-list args) :cohort (plist-get args :zip))))
     (apply #'clime-option--create args)))
 
 (defun clime--merge-template (template &rest overrides)
@@ -88,14 +104,11 @@ Used for lazy slots like :choices and :default."
 
 ;;; ─── Arg ────────────────────────────────────────────────────────────────
 
-(cl-defstruct (clime-arg (:constructor clime-arg--create)
+(cl-defstruct (clime-arg (:include clime-param)
+                         (:constructor clime-arg--create)
                          (:copier nil))
   "A CLI positional argument specification."
-  (name nil :type symbol :documentation "Canonical param name.")
   (type 'string :type symbol :documentation "Type converter symbol.")
-  (help nil :type (or string null) :documentation "One-line help text.")
-  (required t :type boolean)
-  (default nil :documentation "Default value, or a function for lazy defaults.")
   (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
   (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
@@ -105,10 +118,100 @@ Used for lazy slots like :choices and :default."
 (defun clime-make-arg (&rest args)
   "Create a `clime-arg' with validation.
 Required keyword arg: :name (symbol).
-ARGS is a plist of slot values."
+ARGS is a plist of slot values.
+Defaults :required to t (unlike options which default to nil)."
   (unless (plist-get args :name)
     (error "clime-make-arg: :name is required"))
+  ;; Args default to required (unlike options/params)
+  (unless (plist-member args :required)
+    (setq args (plist-put (cl-copy-list args) :required t)))
   (apply #'clime-arg--create args))
+
+;;; ─── Cohort ────────────────────────────────────────────────────────────
+
+(cl-defstruct (clime-cohort (:include clime-param)
+                             (:constructor clime-cohort--create)
+                             (:copier nil))
+  "A cohort groups related options for cross-option validation.
+Generalizes :mutex (exclusive) and :zip (paired) into a single construct."
+  (resolve nil :type (or function null) :documentation "Check function: (name members params path) → params."))
+
+(defun clime-make-cohort (&rest args)
+  "Create a `clime-cohort' with validation.
+Required keyword arg: :name (symbol).
+ARGS is a plist of slot values."
+  (unless (plist-get args :name)
+    (error "clime-make-cohort: :name is required"))
+  (apply #'clime-cohort--create args))
+
+(defun clime-cohort-check-exclusive (name members params _path)
+  "Exclusive cohort check: at most one member may be set.
+NAME is the cohort name symbol.  MEMBERS is a list of clime-option structs.
+PARAMS is the current params plist.  Returns updated PARAMS with the
+winner's option name injected under NAME."
+  (let ((set-opts (cl-remove-if-not
+                   (lambda (opt)
+                     (plist-member params (clime-option-name opt)))
+                   members)))
+    (when (> (length set-opts) 1)
+      (signal 'clime-usage-error
+              (list (format "Options %s are mutually exclusive"
+                            (mapconcat (lambda (o) (car (clime-option-flags o)))
+                                       set-opts ", ")))))
+    ;; Inject winner name as derived value (only when a member is set)
+    (if (= (length set-opts) 1)
+        (plist-put params name (clime-option-name (car set-opts)))
+      params)))
+
+(defun clime-cohort-check-paired (name members params _path)
+  "Paired cohort check: all-or-none presence with equal cardinality.
+NAME is the cohort name symbol.  MEMBERS is a list of clime-option structs.
+PARAMS is the current params plist.  Returns updated PARAMS with a
+zipped alist injected under NAME."
+  (let* ((set-opts (cl-remove-if-not
+                    (lambda (opt)
+                      (plist-member params (clime-option-name opt)))
+                    members))
+         (any-set (> (length set-opts) 0))
+         (all-set (= (length set-opts) (length members))))
+    ;; Partial presence check
+    (when (and any-set (not all-set))
+      (let ((missing (cl-remove-if
+                      (lambda (opt)
+                        (plist-member params (clime-option-name opt)))
+                      members)))
+        (signal 'clime-usage-error
+                (list (format "%s requires %s"
+                              (car (clime-option-flags (car set-opts)))
+                              (mapconcat (lambda (o) (car (clime-option-flags o)))
+                                         missing ", "))))))
+    ;; Cardinality check
+    (when all-set
+      (let ((counts (mapcar (lambda (opt)
+                              (let ((val (plist-get params (clime-option-name opt))))
+                                (if (listp val) (length val) 0)))
+                            members)))
+        (unless (apply #'= counts)
+          (let ((parts (mapcar (lambda (opt)
+                                 (format "%s (%d)"
+                                         (car (clime-option-flags opt))
+                                         (let ((val (plist-get params (clime-option-name opt))))
+                                           (if (listp val) (length val) 0))))
+                               members)))
+            (signal 'clime-usage-error
+                    (list (format "Zip group options must be used the same number of times: %s"
+                                  (mapconcat #'identity parts ", "))))))
+        ;; Build zipped alist
+        (let* ((n (car counts))
+               (zipped '()))
+          (dotimes (i n)
+            (let ((row '()))
+              (dolist (opt members)
+                (let* ((oname (clime-option-name opt))
+                       (vals (plist-get params oname)))
+                  (push (cons oname (nth i vals)) row)))
+              (push (nreverse row) zipped)))
+          (plist-put params name (nreverse zipped)))))))
 
 ;;; ─── Node (base) ────────────────────────────────────────────────────────
 
@@ -127,7 +230,8 @@ ARGS is a plist of slot values."
   (handler nil :type (or function null) :documentation "Handler function, called with context.")
   (epilog nil :type (or string null) :documentation "Free-form text appended after auto-generated help.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
-  (locked-vals nil :type list :documentation "Alist of (name . value) injected into params during finalize.  Locked vals hide their options from CLI and help."))
+  (locked-vals nil :type list :documentation "Alist of (name . value) injected into params during finalize.  Locked vals hide their options from CLI and help.")
+  (cohorts nil :type list :documentation "List of `clime-cohort' structs for cross-option validation."))
 
 ;;; ─── Alias ──────────────────────────────────────────────────────────────
 
@@ -609,40 +713,47 @@ Signals `error' on duplicates."
 (defun clime--validate-tree (root)
   "Validate ROOT and all descendants.
 Checks per-node duplicates, ancestor flag collisions, and
-tree-wide mutex/zip group membership."
+tree-wide mutex/zip/cohort group membership."
   (let ((mutex-groups (make-hash-table :test #'eq))
-        (zip-groups (make-hash-table :test #'eq)))
-    (clime--validate-tree-1 root mutex-groups zip-groups nil nil)
-    ;; Tree-wide mutex group check
+        (zip-groups (make-hash-table :test #'eq))
+        (cohort-members (make-hash-table :test #'eq))
+        (cohort-decls '()))
+    (clime--validate-tree-1 root mutex-groups zip-groups
+                            cohort-members cohort-decls nil nil)
+    ;; Tree-wide mutex group check (deprecated path)
     (maphash (lambda (group opts)
                (when (= (length opts) 1)
                  (display-warning 'clime
                    (format "Mutex group `%s' has only one member (%s)"
                            group (car (clime-option-flags (car opts)))))))
              mutex-groups)
-    ;; Tree-wide zip group check
+    ;; Tree-wide zip group check (deprecated path)
     (maphash (lambda (group opts)
                (when (< (length opts) 2)
                  (error "Zip group `%s' has fewer than 2 members" group)))
              zip-groups)))
 
 (defun clime--validate-tree-1 (node mutex-groups zip-groups
+                                     cohort-members cohort-decls
                                      ancestor-flag-owners path)
   "Recursive walker for `clime--validate-tree'.
-NODE is the current node.  MUTEX-GROUPS and ZIP-GROUPS are hash tables
-accumulating group membership tree-wide.  ANCESTOR-FLAG-OWNERS and PATH
-track ancestor collisions."
+NODE is the current node.  MUTEX-GROUPS, ZIP-GROUPS, and COHORT-MEMBERS
+are hash tables accumulating group membership tree-wide.
+COHORT-DECLS is unused (reserved for future cohort declaration tracking).
+ANCESTOR-FLAG-OWNERS and PATH track ancestor collisions."
   (let* ((name (clime-node-name node))
          (path (append (or path '()) (list name))))
     ;; Per-node structural checks
     (clime--validate-node-options node)
     (clime--validate-node-children node)
-    ;; Collect mutex/zip membership tree-wide
+    ;; Collect mutex/zip membership tree-wide (deprecated path)
     (dolist (opt (clime-node-options node))
       (when-let* ((mx (clime-option-mutex opt)))
         (push opt (gethash mx mutex-groups)))
       (when-let* ((zg (clime-option-zip opt)))
-        (push opt (gethash zg zip-groups))))
+        (push opt (gethash zg zip-groups)))
+      (when-let* ((coh (clime-option-cohort opt)))
+        (push opt (gethash coh cohort-members))))
     ;; Ancestor flag collision check
     (let ((local-flags (cl-mapcan (lambda (opt)
                                     (copy-sequence (clime-option-flags opt)))
@@ -658,6 +769,7 @@ track ancestor collisions."
                               ancestor-flag-owners)))
           (dolist (entry (clime-group-children node))
             (clime--validate-tree-1 (cdr entry) mutex-groups zip-groups
+                                    cohort-members cohort-decls
                                     merged path)))))))
 
 ;;; ─── Collision Checks ──────────────────────────────────────────────────

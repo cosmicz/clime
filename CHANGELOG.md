@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Option cohorts** (`clime-mutex`, `clime-zip`): first-class group
+  construct that generalizes `:mutex` and `:zip` into a unified model.
+  `clime-mutex` declares exclusive groups (at-most-one), `clime-zip`
+  declares paired groups (all-or-none with equal cardinality).  Both
+  inject derived values into ctx: exclusive cohorts inject the winner's
+  option name, paired cohorts inject a zipped alist.  Groups support
+  `:required` for at-least-one enforcement.  Existing `:mutex`/`:zip`
+  slots on options continue to work via deprecation mapping.
+
+- **`clime-param` base struct**: abstract base for options, args, and
+  cohorts.  Universal accessors `clime-param-name`, `clime-param-help`,
+  `clime-param-required`, `clime-param-default` work across all three
+  types.  `clime-option` and `clime-arg` now inherit via `:include`.
+
 - **Bare boolean keywords in DSL**: boolean-valued keywords like `:bool`,
   `:hidden`, `:count`, `:multiple`, `:negatable`, `:inline`, `:deprecated`
   etc. can now be written without an explicit `t` value.  Write
