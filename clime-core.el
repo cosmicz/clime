@@ -124,6 +124,17 @@ Defaults :required to t (unlike options which default to nil)."
   (clime--check-required-default "Arg" args)
   (apply #'clime-arg--create args))
 
+;;; ─── Conform Helpers ────────────────────────────────────────────────────
+
+(defun clime-conform-append (existing fn)
+  "Append conformer FN to EXISTING conform slot value.
+EXISTING may be nil, a single function, or a list of functions.
+Returns a value suitable for the :conform slot."
+  (cond
+   ((null existing) fn)
+   ((functionp existing) (list existing fn))
+   (t (append existing (list fn)))))
+
 ;;; ─── Node-Level Conform Checks ──────────────────────────────────────────
 
 (defun clime-check-exclusive (group-name member-names &optional default required)
@@ -503,14 +514,11 @@ ARGS is a plist of slot values."
       ;; Auto-exclusivity: 2+ output formats get clime-check-exclusive
       (when (>= (length output-formats) 2)
         (let* ((member-names (mapcar #'clime-option-name output-formats))
-               (exclusive-fn (clime-check-exclusive 'clime--output-format member-names))
-               (existing-conform (plist-get args :conform)))
+               (exclusive-fn (clime-check-exclusive 'clime--output-format member-names)))
           (setq args (plist-put args :conform
-                                (if existing-conform
-                                    (if (functionp existing-conform)
-                                        (list existing-conform exclusive-fn)
-                                      (append existing-conform (list exclusive-fn)))
-                                  exclusive-fn)))))))
+                                (clime-conform-append
+                                 (plist-get args :conform)
+                                 exclusive-fn)))))))
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
     (clime--resolve-aliases app)
