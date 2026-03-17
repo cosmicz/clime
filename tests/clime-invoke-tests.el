@@ -1108,5 +1108,103 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
     (setq clime-invoke--last-error nil)
     (should-not clime-invoke--last-error)))
 
+(ert-deftest clime-test-invoke/error-fn-returns-empty-string-when-no-error ()
+  "Error info suffix returns empty string (not nil) when no error."
+  (clime-invoke-test-transient
+    (let* ((app (clime-test--invoke-simple-app))
+           (admin (cdr (assoc "admin" (clime-group-children app))))
+           (show (cdr (assoc "show" (clime-group-children admin))))
+           (sym (clime-invoke--make-command-prefix app show '("admin" "show")))
+           (layout (get sym 'transient--layout))
+           (actions-group (cl-find-if
+                           (lambda (vec)
+                             (equal "Actions"
+                                    (plist-get (aref vec 2) :description)))
+                           layout))
+           ;; Error suffix is second child, spec: (LEVEL CLASS PLIST)
+           (error-spec (cadr (aref actions-group 3)))
+           (desc-fn (plist-get (caddr error-spec) :description)))
+      ;; With no error, function should return "" not nil
+      (let ((clime-invoke--last-error nil))
+        (should (equal "" (funcall desc-fn))))
+      ;; With error, function should return the error text
+      (let ((clime-invoke--last-error "something broke"))
+        (should (string-match-p "something broke" (funcall desc-fn)))))))
+
+;;; ─── Clear Error on Input ──────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/pre-command-guard ()
+  "Pre-command hook only fires for clime-managed transients."
+  (clime-invoke-test-transient
+    ;; Without a managed transient prefix, hook is a no-op
+    (let ((clime-invoke--last-error "test error")
+          (clime-invoke--snapshot-values nil)
+          (transient--prefix nil))
+      (clime-invoke--pre-command)
+      (should (equal "test error" clime-invoke--last-error))
+      (should-not clime-invoke--snapshot-values))))
+
+;;; ─── Display / Cleanup ──────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/cleanup-restores-display-action ()
+  "Cleanup hook restores `transient-display-buffer-action' and removes hooks."
+  (clime-invoke-test-transient
+    (let ((transient-display-buffer-action '(display-buffer-use-some-window))
+          (clime-invoke--saved-display-action '(original-action))
+          (transient--stack nil))
+      (clime-invoke--cleanup-on-exit)
+      (should (equal '(original-action) transient-display-buffer-action))
+      (should (eq :unset clime-invoke--saved-display-action)))))
+
+(ert-deftest clime-test-invoke/cleanup-skipped-when-stack-nonempty ()
+  "Cleanup hook is a no-op when transient stack has entries (child→parent)."
+  (clime-invoke-test-transient
+    (let ((transient-display-buffer-action '(overridden))
+          (clime-invoke--saved-display-action '(original))
+          (transient--stack '((some-entry))))
+      (clime-invoke--cleanup-on-exit)
+      ;; Should NOT have restored
+      (should (equal '(overridden) transient-display-buffer-action))
+      (should (equal '(original) clime-invoke--saved-display-action)))))
+
+;;; ─── Value Inheritance ──────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/merge-handles-nil-existing ()
+  "Merge with nil existing just returns new values."
+  (clime-invoke-test-transient
+    (let ((merged (clime-invoke--merge-transient-values nil '("--verbose "))))
+      (should (member "--verbose " merged)))))
+
+(ert-deftest clime-test-invoke/count-value-round-trips ()
+  "Count infix encodes N in value and init-value decodes it."
+  (clime-invoke-test-transient
+    (let ((obj (clime-invoke-count-infix :argument "--verbose ")))
+      ;; Set count to 3
+      (oset obj value 3)
+      ;; Serialized value should encode count
+      (let ((serialized (transient-infix-value obj)))
+        (should (equal "--verbose 3 " serialized))
+        ;; Init from a prefix value list containing the serialized form
+        (let ((transient--prefix (transient-prefix :command 'test-prefix)))
+          (oset transient--prefix value (list serialized))
+          (transient-init-value obj)
+          (should (equal 3 (oref obj value))))))))
+
+(ert-deftest clime-test-invoke/count-merge-replaces-correctly ()
+  "Merge recognizes count-encoded values as same flag."
+  (clime-invoke-test-transient
+    (let ((merged (clime-invoke--merge-transient-values
+                   '("--verbose 2 ") '("--verbose 3 "))))
+      (should (member "--verbose 3 " merged))
+      (should-not (member "--verbose 2 " merged)))))
+
+(ert-deftest clime-test-invoke/value-flag-prefix ()
+  "Flag prefix extraction for various value formats."
+  (clime-invoke-test-transient
+    (should (equal "--verbose " (clime-invoke--value-flag-prefix "--verbose ")))
+    (should (equal "--verbose " (clime-invoke--value-flag-prefix "--verbose 3 ")))
+    (should (equal "--limit=" (clime-invoke--value-flag-prefix "--limit=20")))
+    (should (equal "--color " (clime-invoke--value-flag-prefix "--color ")))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-test-transients.el ends here

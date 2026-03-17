@@ -28,11 +28,15 @@
 (defcustom clime-invoke-display-buffer-action
   '(display-buffer-in-side-window
     (side . bottom)
+    (slot . 0)
     (dedicated . t)
-    (inhibit-same-window . t))
+    (inhibit-same-window . t)
+    (preserve-size . (nil . t)))
   "Display buffer action for the transient popup window.
 Controls where the transient menu appears.  Set to nil to use
-transient's default behavior."
+transient's default behavior.  When non-nil, overrides
+`transient-display-buffer-action' for the duration of any clime
+transient session (restored on exit)."
   :type '(choice (const :tag "Default (transient manages)" nil)
                  (sexp :tag "Custom display-buffer action"))
   :group 'clime)
@@ -48,6 +52,15 @@ transient's default behavior."
 (defvar clime-invoke--last-error nil
   "Last error message from a clime run action, or nil.
 Displayed in the transient Actions group as an info suffix.")
+
+(defvar clime-invoke--saved-display-action :unset
+  "Saved value of `transient-display-buffer-action' before clime overrode it.
+The sentinel :unset means clime has not overridden the variable.")
+
+(defvar clime-invoke--snapshot-values nil
+  "Snapshot of live transient values, captured in `pre-command-hook'.
+Used by `clime-invoke--propagate-values-to-parent' because
+`transient--pre-exit' clears suffix state before exit hooks run.")
 
 ;;; ─── Registry ────────────────────────────────────────────────────────
 
@@ -75,8 +88,20 @@ NAME is a string.  APP is a `clime-app' struct."
   "Infix for :count options.  Each key press increments the count.")
 
 (cl-defmethod transient-init-value ((obj clime-invoke-count-infix))
-  "Initialize count to 0."
-  (oset obj value 0))
+  "Initialize count from prefix value, or 0.
+The value list stores count-infixes as \"--flag=N \" where N is the count."
+  (let* ((arg (oref obj argument))
+         (val-list (oref transient--prefix value))
+         (match (cl-find-if (lambda (v)
+                              (and (stringp v) (string-prefix-p arg v)))
+                            val-list)))
+    (oset obj value
+          (if match
+              (let ((suffix (substring match (length arg))))
+                (or (and (string-match "\\`\\([0-9]+\\) \\'" suffix)
+                         (string-to-number (match-string 1 suffix)))
+                    1))
+            0))))
 
 (defun clime-invoke--read-count (n prefix-arg)
   "Compute next count value from current N and PREFIX-ARG.
@@ -99,18 +124,26 @@ Plain press increments.  C-u decrements.  C-u N sets to N."
       (propertize "off" 'face 'transient-inactive-value))))
 
 (cl-defmethod transient-infix-value ((obj clime-invoke-count-infix))
-  "Return the flag string when count > 0, for `transient-args'."
+  "Return \"--flag=N \" when count > 0, encoding the count for round-trip."
   (let ((n (or (oref obj value) 0)))
     (when (> n 0)
-      (oref obj argument))))
+      (format "%s%d " (oref obj argument) n))))
 
 (defclass clime-invoke-multi-infix (transient-option)
   ()
   "Infix for :multiple options.  Each key press adds a value.")
 
 (cl-defmethod transient-init-value ((obj clime-invoke-multi-infix))
-  "Initialize to empty list."
-  (oset obj value nil))
+  "Initialize from prefix value list, or nil.
+Collects all matching argument values from the prefix."
+  (let ((arg (oref obj argument))
+        (val-list (oref transient--prefix value)))
+    (oset obj value
+          (delq nil
+                (mapcar (lambda (v)
+                          (when (and (stringp v) (string-prefix-p arg v))
+                            (substring v (length arg))))
+                        val-list)))))
 
 (cl-defmethod transient-infix-read ((obj clime-invoke-multi-infix))
   "Read a single value to append.  Empty input clears the list."
@@ -199,8 +232,15 @@ Negative prefix (C-- or C-u -1) cycles backward."
    (t nil)))
 
 (cl-defmethod transient-init-value ((obj clime-invoke-ternary-infix))
-  "Initialize ternary to nil (auto/unset)."
-  (oset obj value nil))
+  "Initialize ternary from prefix value (pos/neg flag), or nil."
+  (let ((pos (concat (oref obj pos-flag) " "))
+        (neg (concat (oref obj neg-flag) " "))
+        (val-list (oref transient--prefix value)))
+    (oset obj value
+          (cond
+           ((member pos val-list) (oref obj pos-flag))
+           ((member neg val-list) (oref obj neg-flag))
+           (t nil)))))
 
 (cl-defmethod transient-infix-read ((obj clime-invoke-ternary-infix))
   "Cycle ternary state.  C-u opens completing-read."
@@ -793,8 +833,9 @@ APP is the root `clime-app'.  Returns the prefix symbol."
     ;; Run action (stays in transient on failure)
     (let ((run-desc (format "Run %s" (string-join path " ")))
           (error-fn (lambda ()
-                      (when clime-invoke--last-error
-                        (propertize clime-invoke--last-error 'face 'error)))))
+                      (if clime-invoke--last-error
+                          (propertize clime-invoke--last-error 'face 'error)
+                        ""))))
       (setq layout (append layout
                            (list (clime-invoke--make-group-vector
                                   prefix-sym "Actions"
@@ -892,19 +933,29 @@ Returns a list of strings like (\"--flag \" \"--opt=val\")."
                     result)))))))
     (nreverse result)))
 
+(defun clime-invoke--value-flag-prefix (val)
+  "Extract the flag prefix from a transient value string VAL.
+For \"--flag=val\" returns \"--flag=\".
+For \"--flag \" or \"--flag N \" returns \"--flag \"."
+  (cond
+   ((string-match-p "=" val)
+    (substring val 0 (1+ (string-match "=" val))))
+   ((string-match "\\` *\\(--[^ ]+ \\)" val)
+    (match-string 1 val))
+   (t val)))
+
 (defun clime-invoke--merge-transient-values (existing new-vals)
   "Merge NEW-VALS into EXISTING transient value list.
 For each entry in NEW-VALS, if an entry with the same flag prefix
 exists in EXISTING, replace it; otherwise append."
   (let ((result (copy-sequence existing)))
     (dolist (val new-vals)
-      (let* ((flag (if (string-match-p "=" val)
-                       (substring val 0 (1+ (string-match "=" val)))
-                     val))
+      (let* ((flag (clime-invoke--value-flag-prefix val))
              (replaced nil))
         (setq result
               (mapcar (lambda (r)
                         (if (and (not replaced)
+                                 (stringp r)
                                  (string-prefix-p flag r))
                             (progn (setq replaced t) val)
                           r))
@@ -918,15 +969,21 @@ exists in EXISTING, replace it; otherwise append."
 NODE is the clime node.  PATH is the command path list."
   (defalias prefix-sym
     (lambda () (interactive)
-      ;; Inherit ancestor option values from parent transient
-      (when transient--prefix
-        (let ((parent-args (transient-args (oref transient--prefix command))))
+      ;; Inherit ancestor option values from parent transient.
+      ;; By the time this runs, transient--pre-exit has already
+      ;; cleared transient--prefix.  The parent's live values are
+      ;; on transient--stack (pushed by transient--do-stack).
+      (when transient--stack
+        (let* ((parent-entry (car transient--stack))
+               (val-pos (cl-position :value parent-entry))
+               (parent-args (and val-pos (nth (1+ val-pos) parent-entry))))
           (when parent-args
             (let* ((prefix-obj (get prefix-sym 'transient--prefix))
-                   (existing (oref prefix-obj value)))
+                   (existing (and (slot-boundp prefix-obj 'value)
+                                  (oref prefix-obj value))))
               (oset prefix-obj value
                     (clime-invoke--merge-transient-values
-                     existing parent-args))))))
+                     (or existing '()) parent-args))))))
       (transient-setup prefix-sym)))
   (put prefix-sym 'interactive-only t)
   (put prefix-sym 'function-documentation
@@ -946,22 +1003,45 @@ NODE is the clime node.  PATH is the command path list."
   (put prefix-sym 'clime-invoke--managed t)
   prefix-sym)
 
-(defun clime-invoke--propagate-values-to-parent ()
-  "Propagate current infix values back to the parent transient on the stack.
-Added to `transient-exit-hook' so child option changes persist when
-returning to the parent via C-g."
+(defun clime-invoke--pre-command ()
+  "Pre-command hook for clime transients.
+Snapshots live infix values (before transient's pre-exit clears them)
+and clears stale error messages."
   (when (and transient--prefix
-             (get (oref transient--prefix command) 'clime-invoke--managed)
+             (get (oref transient--prefix command) 'clime-invoke--managed))
+    ;; Snapshot values while suffixes are still alive
+    (setq clime-invoke--snapshot-values
+          (and transient--suffixes (transient-get-value)))
+    ;; Clear error on any interaction
+    (when clime-invoke--last-error
+      (setq clime-invoke--last-error nil))))
+
+(defun clime-invoke--cleanup-on-exit ()
+  "Restore transient display settings when the last clime transient exits.
+Added to `transient-exit-hook'.  Only fires when the stack is empty
+\(no parent to return to) so child→parent navigation is unaffected."
+  (when (and (not transient--stack)
+             (not (eq clime-invoke--saved-display-action :unset)))
+    (setq transient-display-buffer-action clime-invoke--saved-display-action
+          clime-invoke--saved-display-action :unset)
+    (remove-hook 'pre-command-hook #'clime-invoke--pre-command)
+    (remove-hook 'transient-exit-hook #'clime-invoke--cleanup-on-exit)
+    (remove-hook 'transient-exit-hook #'clime-invoke--propagate-values-to-parent)))
+
+(defun clime-invoke--propagate-values-to-parent ()
+  "Propagate child infix values back to the parent entry on the stack.
+Added to `transient-exit-hook'.  Uses `clime-invoke--snapshot-values'
+because `transient--pre-exit' clears suffix state before this runs."
+  (when (and clime-invoke--snapshot-values
              transient--stack)
-    (let ((current-args (transient-get-value)))
-      (when current-args
-        (let* ((parent-entry (car transient--stack))
-               (val-pos (cl-position :value parent-entry))
-               (parent-vals (and val-pos (nth (1+ val-pos) parent-entry))))
-          (when val-pos
-            (setf (nth (1+ val-pos) parent-entry)
-                  (clime-invoke--merge-transient-values
-                   parent-vals current-args))))))))
+    (let* ((parent-entry (car transient--stack))
+           (val-pos (cl-position :value parent-entry))
+           (parent-vals (and val-pos (nth (1+ val-pos) parent-entry))))
+      (when val-pos
+        (setf (nth (1+ val-pos) parent-entry)
+              (clime-invoke--merge-transient-values
+               parent-vals clime-invoke--snapshot-values))))
+    (setq clime-invoke--snapshot-values nil)))
 
 (defun clime-invoke--params-to-transient-value (node params)
   "Convert PARAMS alist to transient prefix value format for NODE.
@@ -1034,13 +1114,16 @@ PARAMS is an optional alist of (NAME . VALUE) to pre-populate infixes."
         (let ((prefix-obj (get prefix-sym 'transient--prefix)))
           (oset prefix-obj value
                 (clime-invoke--params-to-transient-value node params))))
-      ;; Clear previous errors and enable child→parent value propagation
+      ;; Clear previous errors and enable hooks
       (setq clime-invoke--last-error nil)
+      (when (and clime-invoke-display-buffer-action
+                 (eq clime-invoke--saved-display-action :unset))
+        (setq clime-invoke--saved-display-action transient-display-buffer-action
+              transient-display-buffer-action clime-invoke-display-buffer-action))
+      (add-hook 'pre-command-hook #'clime-invoke--pre-command)
+      (add-hook 'transient-exit-hook #'clime-invoke--cleanup-on-exit)
       (add-hook 'transient-exit-hook #'clime-invoke--propagate-values-to-parent)
-      (let ((transient-display-buffer-action
-             (or clime-invoke-display-buffer-action
-                 transient-display-buffer-action)))
-        (transient-setup prefix-sym)))))
+      (transient-setup prefix-sym))))
 
 ;;;###autoload
 (defun clime-invoke-command (app command-path)
