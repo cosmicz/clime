@@ -102,7 +102,7 @@ behavior.
 subcommands and nested groups, command aliases, aliases for nested
 paths (~clime-alias-for~), inline groups (~:inline~), invocable
 groups, hidden commands, deprecation warnings with migration hints,
-category sections in help, epilog text.
+category sections in help, epilog text, structured examples in help.
 
 *Declaring options:*
 boolean flags, count flags (~-vvv~), repeatable options
@@ -725,6 +725,28 @@ Help text wraps to the terminal width, auto-detected from the
 ~COLUMNS~ environment variable (fallback 80, minimum 40).  Override
 with the ~clime-help-width~ variable.
 
+*** Examples
+
+Add structured example invocations with ~:examples~.  They render as
+a two-column "Examples:" section in ~--help~ (between Global Options
+and Epilog):
+
+#+begin_src emacs-lisp
+(clime-command show
+  :help "Show a resource"
+  :examples '(("app show 123" . "Show resource by ID")
+              ("app show --all" . "Show all resources")
+              "app show --json 123")
+  ...)
+#+end_src
+
+Each element can be:
+- a cons pair ~("invocation" . "description")~ --- two-column
+- a bare string ~"invocation"~ --- left column only
+- a single-element list ~("invocation")~ --- same as bare string
+
+Commands, groups, and apps all support ~:examples~.
+
 *** Epilog
 
 Add free-form text after the auto-generated help with ~:epilog~:
@@ -733,13 +755,13 @@ Add free-form text after the auto-generated help with ~:epilog~:
 (clime-app myapp
   :version "1.0"
   :help "My application."
-  :epilog "Examples:
-  myapp install foo --tag dev
-  myapp config set timeout 60"
+  :epilog "See https://example.com for full docs."
   ...)
 #+end_src
 
-Commands and groups support ~:epilog~ too.
+Commands and groups support ~:epilog~ too.  For example invocations,
+prefer ~:examples~ over putting them in ~:epilog~ --- it gives you
+structured formatting and consistent placement.
 
 *** Categories in help
 
@@ -974,6 +996,55 @@ All DSL shorthands (~:bool~, ~:separator~) work in templates.
   (clime-handler (ctx) ...))
 #+end_src
 
+** Form Composition
+
+*** ~clime-defcommand~ and ~clime-defgroup~
+
+Define reusable command and group forms that can be composed into an
+app from separate files or modules:
+
+#+begin_src emacs-lisp
+;; commands.el
+(clime-defcommand my-show
+  :help "Show a resource"
+  (clime-arg id :help "Resource ID")
+  (clime-handler (ctx)
+    (clime-let ctx (id) (format "Showing %s" id))))
+
+(clime-defgroup my-admin
+  :help "Admin commands"
+  (clime-command status
+    :help "Show system status"
+    (clime-handler (_ctx) "OK")))
+#+end_src
+
+The macros expand to ~defvar~ forms holding the struct value.
+
+*** Keyword-merge in containers
+
+Container macros (~clime-app~, ~clime-group~, ~clime-command~) accept
+keyword arguments ~:options~, ~:args~, ~:children~, and
+~:output-formats~ holding runtime list expressions.  Keyword-provided
+items merge with inline DSL forms (keyword items first, then inline):
+
+#+begin_src emacs-lisp
+;; app.el
+(require 'commands)  ; provides my-show, my-admin
+
+(clime-app myapp
+  :version "1.0"
+  :help "My application"
+  :children (list my-show my-admin)
+
+  ;; Inline children are appended after keyword children
+  (clime-command version
+    :help "Show version"
+    (clime-handler (_ctx) "1.0")))
+#+end_src
+
+This enables cross-file app composition without dropping to raw
+struct constructors.
+
 ** Advanced
 
 *** Setup hook
@@ -1038,7 +1109,7 @@ restarting Emacs.
 
 All command-like forms (~clime-command~, ~clime-group~, ~clime-app~)
 accept: ~:help~ (~:doc~ is an alias), ~:aliases~, ~:hidden~,
-~:deprecated~, ~:epilog~, ~:category~.
+~:deprecated~, ~:epilog~, ~:examples~, ~:category~.
 
 All parameter forms (~clime-opt~, ~clime-arg~) accept: ~:type~,
 ~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~,
@@ -1055,6 +1126,8 @@ All parameter forms (~clime-opt~, ~clime-arg~) accept: ~:type~,
 | ~clime-arg~           | ~clime-argument~   | Positional argument              | ~:nargs~, ~:required~                                                 |
 | ~clime-defopt~        | ~clime-defoption~  | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
 | ~clime-defarg~        | ~clime-defargument~ | Reusable arg template            | Any arg slot except ~:name~                                           |
+| ~clime-defcommand~    |                    | Composable command (~defvar~)    | Same as ~clime-command~                                               |
+| ~clime-defgroup~      |                    | Composable group (~defvar~)      | Same as ~clime-group~                                                 |
 | ~clime-alias-for~     |                    | Alias for a nested command       | Target path, ~:defaults~, ~:vals~                                    |
 | ~clime-output-format~ |                    | Output format declaration        | ~:finalize~, ~:streaming~, ~:encoder~, ~:error-handler~, plus all option slots |
 | ~clime-handler~       |                    | Command implementation           | ~(ctx)~ --- receives ~clime-context~                                  |

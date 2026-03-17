@@ -72,10 +72,10 @@
 (clime-app pkm
   :version "0.5.0"
   :help "A package manager for Emacs Lisp projects."
-  :epilog "Examples:
-  pkm install foo --tag dev
-  pkm -vv search
-  pkm repo add myrepo https://example.com"
+  :examples '(("pkm install foo --tag dev" . "Install with tags")
+              ("pkm -vv search" . "Verbose search")
+              ("pkm repo add myrepo https://example.com" . "Add a repo")
+              "pkm add-repo myrepo https://example.com")
 
   ;; ── Root Options ─────────────────────────────────────────────────────
   ;; [1] Count flag — stackable verbosity (-v, -vv, -vvv)

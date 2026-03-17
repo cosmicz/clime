@@ -24,10 +24,9 @@
   :version "1.0"
   :help "Query org files from the command line."
   :env-prefix "CLOQ"
-  :epilog "Examples:
-  cloq query -f tasks.org --todo TODO
-  cloq query -f tasks.org --sexp '(deadline :to today)' --json
-  cloq waiting -f tasks.org"
+  :examples '(("cloq query -f tasks.org --todo TODO" . "Find TODOs")
+              ("cloq query -f tasks.org --sexp '(deadline :to today)' --json" . "Deadlines as JSON")
+              ("cloq waiting -f tasks.org" . "Show WAITING items"))
 
   (clime-output-format json ("--json") :help "Output as JSON")
 

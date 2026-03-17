@@ -4,6 +4,43 @@
 
 ### Added
 
+- **Form composition**: container macros (`clime-app`, `clime-group`,
+  `clime-command`) now accept `:options`, `:args`, `:children`, and
+  `:output-formats` as keywords holding runtime list expressions.
+  Keyword-provided items are merged with inline DSL forms via `append`
+  (keyword items first, then inline).  Enables cross-file app
+  composition without dropping to raw constructors.
+
+- **`clime-defcommand` and `clime-defgroup`**: `defvar` sugar for
+  defining composable command and group forms.  The stored value is
+  directly usable in a container's `:children` keyword:
+
+  ```elisp
+  (clime-defcommand my-show
+    :help "Show a resource"
+    (clime-arg id :help "ID")
+    (clime-handler (ctx) ...))
+
+  (clime-app myapp
+    :version "1.0"
+    :children (list my-show)
+    (clime-command add ...))
+  ```
+
+- **`:examples` slot on commands, groups, and apps**: structured example
+  invocations rendered in help output as a two-column "Examples:" section
+  between Global Options and Epilog.  Each example can be a cons pair
+  `("invocation" . "description")`, a bare string `"invocation"`, or a
+  single-element list `("invocation")`:
+
+  ```elisp
+  (clime-command show
+    :help "Show a resource"
+    :examples '(("app show 123" . "Show by ID")
+                "app show --all")
+    ...)
+  ```
+
 - **DSL macro aliases**: `clime-opt` is now the canonical short form for
   defining options (matching `clime-arg`), with `clime-option` as a
   long-form alias.  Similarly, `clime-argument` aliases `clime-arg`,
