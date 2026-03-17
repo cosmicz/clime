@@ -142,10 +142,13 @@ Returns a value suitable for the :conform slot."
 GROUP-NAME is a symbol for the derived value key.  MEMBER-NAMES is a list
 of param name symbols (e.g. \\='(json csv)).  DEFAULT, when non-nil, is
 injected under GROUP-NAME when no member is set.  REQUIRED, when non-nil,
-signals an error if no member is set.  The returned function takes
+signals an error if no member is set.  The returned callable takes
 \(params, node) and returns updated PARAMS with the winner's name
-injected under GROUP-NAME."
-  (lambda (params _node)
+injected under GROUP-NAME.
+
+The returned symbol carries a `clime-exclusive-members' property
+holding MEMBER-NAMES, enabling introspection by `clime-invoke'."
+  (let* ((fn (lambda (params _node)
     (let ((set-names (cl-remove-if-not
                       (lambda (k) (plist-member params k))
                       member-names)))
@@ -175,6 +178,10 @@ injected under GROUP-NAME."
        (default
         (plist-put params group-name default))
        (t params)))))
+         (sym (make-symbol (format "clime-exclusive-%s" group-name))))
+    (fset sym fn)
+    (put sym 'clime-exclusive-members member-names)
+    sym))
 
 (defun clime-check-paired (group-name member-names &optional required)
   "Return a node conformer that enforces all-or-none with equal cardinality.

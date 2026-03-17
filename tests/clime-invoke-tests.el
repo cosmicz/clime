@@ -144,7 +144,8 @@
     (let* ((opts (list (clime-make-option :name 'verbose :flags '("--verbose" "-v") :nargs 0)
                        (clime-make-option :name 'output :flags '("--output" "-o"))
                        (clime-make-option :name 'format :flags '("--format" "-f"))))
-           (keys (clime-invoke--assign-keys opts)))
+           (keys (clime-invoke--assign-keys
+                  (mapcar #'clime-invoke--option-key-item opts))))
       ;; Should get 3 unique keys
       (should (= 3 (length keys)))
       (should (= 3 (length (delete-dups (mapcar #'cdr keys))))))))
@@ -154,7 +155,8 @@
   (clime-invoke-test-transient
     (let* ((opts (list (clime-make-option :name 'verbose :flags '("--verbose" "-v") :nargs 0)
                        (clime-make-option :name 'version :flags '("--version") :nargs 0)))
-           (keys (clime-invoke--assign-keys opts)))
+           (keys (clime-invoke--assign-keys
+                  (mapcar #'clime-invoke--option-key-item opts))))
       (should (= 2 (length keys)))
       (let ((k1 (cdr (assq 'verbose keys)))
             (k2 (cdr (assq 'version keys))))
@@ -195,6 +197,17 @@
                                    :multiple t)))
       (should (equal '("--tag" "a" "--tag" "b")
                      (clime-invoke--option-to-argv opt '("a" "b")))))))
+
+(ert-deftest clime-test-invoke/argv-count-option ()
+  "Count option emits the flag N times."
+  (clime-invoke-test-transient
+    (let ((opt (clime-make-option :name 'verbose
+                                   :flags '("-v")
+                                   :nargs 0
+                                   :count t)))
+      (should (equal '("-v" "-v" "-v")
+                     (clime-invoke--option-to-argv opt 3)))
+      (should (null (clime-invoke--option-to-argv opt 0))))))
 
 (ert-deftest clime-test-invoke/argv-empty-value ()
   "Value option with empty string adds nothing."
@@ -362,7 +375,11 @@
   "Child keys are unique and based on command names."
   (clime-invoke-test-transient
     (let* ((children '(("start" . nil) ("stop" . nil) ("status" . nil)))
-           (keys (clime-invoke--assign-child-keys children)))
+           (keys (clime-invoke--assign-keys
+                  (mapcar (lambda (entry)
+                            (let ((name (car entry)))
+                              (list name (substring name 0 1) name)))
+                          children))))
       (should (= 3 (length keys)))
       ;; All keys should be unique
       (should (= 3 (length (delete-dups (mapcar #'cdr keys))))))))
@@ -478,6 +495,336 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
       (should (= 1 (length parsed)))
       (should (eq 'transient-suffix
                   (clime-test--parsed-class (car parsed)))))))
+
+;;; ─── App Registry ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/register-app ()
+  "Registering an app makes it discoverable."
+  (clime-invoke-test-transient
+    (let ((clime-invoke--registry (make-hash-table :test #'equal)))
+      (let ((app (clime-make-app :name "testapp"
+                                  :version "1.0"
+                                  :children nil)))
+        (clime-register-app "testapp" app)
+        (should (eq app (gethash "testapp" clime-invoke--registry)))))))
+
+(ert-deftest clime-test-invoke/registry-list ()
+  "Registered apps are enumerable for completing-read."
+  (clime-invoke-test-transient
+    (let ((clime-invoke--registry (make-hash-table :test #'equal)))
+      (let ((app1 (clime-make-app :name "alpha" :version "1" :children nil))
+            (app2 (clime-make-app :name "beta" :version "1" :children nil)))
+        (clime-register-app "alpha" app1)
+        (clime-register-app "beta" app2)
+        (let ((keys (clime-invoke--registry-keys)))
+          (should (= 2 (length keys)))
+          (should (member "alpha" keys))
+          (should (member "beta" keys)))))))
+
+(ert-deftest clime-test-invoke/register-app-overwrites ()
+  "Re-registering an app replaces the previous entry."
+  (clime-invoke-test-transient
+    (let ((clime-invoke--registry (make-hash-table :test #'equal)))
+      (let ((app1 (clime-make-app :name "myapp" :version "1" :children nil))
+            (app2 (clime-make-app :name "myapp" :version "2" :children nil)))
+        (clime-register-app "myapp" app1)
+        (clime-register-app "myapp" app2)
+        (should (eq app2 (gethash "myapp" clime-invoke--registry)))))))
+
+;;; ─── Header Formatting ────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/format-header-help ()
+  "Header includes the node help text."
+  (clime-invoke-test-transient
+    (let ((cmd (clime-make-command :name "show"
+                                    :help "Display a resource"
+                                    :handler #'ignore)))
+      (let ((header (clime-invoke--format-header cmd '("show"))))
+        (should (string-match-p "Display a resource" header))))))
+
+(ert-deftest clime-test-invoke/format-header-examples ()
+  "Header includes formatted examples."
+  (clime-invoke-test-transient
+    (let ((cmd (clime-make-command :name "show"
+                                    :help "Display a resource"
+                                    :handler #'ignore
+                                    :examples '(("app show 123" . "Show by ID")
+                                                ("app show --all" . "Show all")))))
+      (let ((header (clime-invoke--format-header cmd '("show"))))
+        (should (string-match-p "app show 123" header))
+        (should (string-match-p "Show by ID" header))
+        (should (string-match-p "app show --all" header))))))
+
+(ert-deftest clime-test-invoke/format-header-no-examples ()
+  "Header works with no examples."
+  (clime-invoke-test-transient
+    (let ((cmd (clime-make-command :name "run"
+                                    :help "Run a task"
+                                    :handler #'ignore)))
+      (let ((header (clime-invoke--format-header cmd '("run"))))
+        (should (string-match-p "Run a task" header))
+        (should-not (string-match-p "Examples" header))))))
+
+(ert-deftest clime-test-invoke/format-header-bare-example ()
+  "Header handles bare string examples (no description)."
+  (clime-invoke-test-transient
+    (let ((cmd (clime-make-command :name "init"
+                                    :help "Initialize"
+                                    :handler #'ignore
+                                    :examples '("app init ."))))
+      (let ((header (clime-invoke--format-header cmd '("init"))))
+        (should (string-match-p "app init \\." header))))))
+
+;;; ─── Ancestor Option Labeling ─────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/ancestor-options-get-global-category ()
+  "Ancestor options without a category get labeled 'Global Options'."
+  (clime-invoke-test-transient
+    (let* ((app (clime-test--invoke-simple-app))
+           (admin (cdr (assoc "admin" (clime-group-children app))))
+           (show (cdr (assoc "show" (clime-group-children admin))))
+           (opts (clime-invoke--collect-options-grouped show)))
+      ;; Should have at least a "Global Options" group for --verbose/--output
+      (should (assoc "Global Options" opts)))))
+
+;;; ─── Pre-run Validation ───────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/validate-required-option-missing ()
+  "Validation catches missing required options."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'output
+                                    :flags '("--output" "-o")
+                                    :required t
+                                    :help "Output file"))
+           (cmd (clime-make-command :name "run"
+                                     :handler #'ignore
+                                     :options (list opt))))
+      ;; Empty params = missing required
+      (let ((err (clime-invoke--validate-pre-run cmd '())))
+        (should err)
+        (should (string-match-p "output" err))))))
+
+(ert-deftest clime-test-invoke/validate-required-option-present ()
+  "Validation passes when required option is provided."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'output
+                                    :flags '("--output" "-o")
+                                    :required t
+                                    :help "Output file"))
+           (cmd (clime-make-command :name "run"
+                                     :handler #'ignore
+                                     :options (list opt))))
+      (let ((err (clime-invoke--validate-pre-run cmd '((output . "file.txt")))))
+        (should-not err)))))
+
+(ert-deftest clime-test-invoke/validate-mutex-violation ()
+  "Validation catches mutex conformer violations."
+  (clime-invoke-test-transient
+    (let* ((opt-a (clime-make-option :name 'json :flags '("--json") :nargs 0))
+           (opt-b (clime-make-option :name 'text :flags '("--text") :nargs 0))
+           (cmd (clime-make-command :name "run"
+                                     :handler #'ignore
+                                     :options (list opt-a opt-b)
+                                     :conform (clime-check-exclusive
+                                               'format '(json text)))))
+      ;; Both set = mutex violation
+      (let ((err (clime-invoke--validate-pre-run
+                  cmd '((json . t) (text . t)))))
+        (should err)
+        (should (string-match-p "exclusive\\|mutually\\|conflict" err))))))
+
+(ert-deftest clime-test-invoke/validate-no-conformer-ok ()
+  "Validation passes when no conformers and no required options."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
+           (cmd (clime-make-command :name "run"
+                                     :handler #'ignore
+                                     :options (list opt))))
+      (should-not (clime-invoke--validate-pre-run cmd '())))))
+
+;;; ─── Incompatible Extraction ─────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/extract-incompatible-from-exclusive ()
+  "Extract :incompatible groups from clime-check-exclusive conformers."
+  (clime-invoke-test-transient
+    (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0))
+           (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+           (cmd (clime-make-command :name "run"
+                                     :handler #'ignore
+                                     :options (list opt-json opt-csv)
+                                     :conform (clime-check-exclusive
+                                               'fmt '(json csv)))))
+      (let ((groups (clime-invoke--extract-incompatible cmd)))
+        (should (= 1 (length groups)))
+        (should (member "--json " (car groups)))
+        (should (member "--csv " (car groups)))))))
+
+(ert-deftest clime-test-invoke/extract-incompatible-no-conformer ()
+  "No :incompatible when node has no conformers."
+  (clime-invoke-test-transient
+    (let ((cmd (clime-make-command :name "run"
+                                    :handler #'ignore)))
+      (should-not (clime-invoke--extract-incompatible cmd)))))
+
+;;; ─── Params Pre-population ──────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/params-to-transient-value-option ()
+  "Convert option params to transient value strings."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'output :flags '("--output")))
+           (cmd (clime-make-command :name "run"
+                                     :handler #'ignore
+                                     :options (list opt))))
+      (let ((val (clime-invoke--params-to-transient-value
+                  cmd '((output . "file.txt")))))
+        (should (equal '("--output=file.txt") val))))))
+
+(ert-deftest clime-test-invoke/params-to-transient-value-switch ()
+  "Convert boolean option params to transient switch strings."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
+           (cmd (clime-make-command :name "run"
+                                     :handler #'ignore
+                                     :options (list opt))))
+      (let ((val (clime-invoke--params-to-transient-value
+                  cmd '((verbose . t)))))
+        (should (equal '("--verbose ") val))))))
+
+(ert-deftest clime-test-invoke/params-to-transient-value-arg ()
+  "Convert positional arg params to transient value strings."
+  (clime-invoke-test-transient
+    (let* ((arg (clime-make-arg :name 'file))
+           (cmd (clime-make-command :name "run"
+                                     :handler #'ignore
+                                     :args (list arg))))
+      (let ((val (clime-invoke--params-to-transient-value
+                  cmd '((file . "test.txt")))))
+        (should (equal '("file=test.txt") val))))))
+
+;;; ─── Unified Key Assignment ─────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/assign-keys-generic ()
+  "Unified assign-keys works with generic (NAME PREFERRED FALLBACK) items."
+  (clime-invoke-test-transient
+    (let ((keys (clime-invoke--assign-keys
+                 '((a "x" "abc")
+                   (b "x" "bcd")
+                   (c nil "cde")))))
+      (should (= 3 (length keys)))
+      ;; First gets preferred "x"
+      (should (equal "x" (cdr (assq 'a keys))))
+      ;; Second can't use "x", tries "b" from fallback
+      (should (equal "b" (cdr (assq 'b keys))))
+      ;; Third has no preferred, tries "c" from fallback
+      (should (equal "c" (cdr (assq 'c keys)))))))
+
+;;; ─── Option Key Item ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/option-key-item-short-flag ()
+  "Option key item extracts preferred from short flag."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose" "-v") :nargs 0))
+           (item (clime-invoke--option-key-item opt)))
+      (should (equal 'verbose (nth 0 item)))
+      (should (equal "v" (nth 1 item)))
+      (should (equal "verbose" (nth 2 item))))))
+
+(ert-deftest clime-test-invoke/option-key-item-long-only ()
+  "Option key item with no short flag uses nil preferred."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'output :flags '("--output")))
+           (item (clime-invoke--option-key-item opt)))
+      (should (equal 'output (nth 0 item)))
+      (should (equal "o" (nth 1 item)))
+      (should (equal "output" (nth 2 item))))))
+
+;;; ─── Spec Builders (count, multiple, arg) ───────────────────────────────
+
+(ert-deftest clime-test-invoke/option-to-spec-count ()
+  "Count option spec uses clime-invoke-count-infix class."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0 :count t))
+           (spec (clime-invoke--option-to-spec opt "v" 'test-prefix)))
+      (should (equal "v" (nth 0 spec)))
+      (should (member :class spec))
+      (should (eq 'clime-invoke-count-infix
+                  (plist-get (nthcdr 3 spec) :class))))))
+
+(ert-deftest clime-test-invoke/option-to-spec-multiple ()
+  "Multiple option spec uses clime-invoke-multi-infix class."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'tag :flags '("--tag") :multiple t))
+           (spec (clime-invoke--option-to-spec opt "t" 'test-prefix)))
+      (should (equal "t" (nth 0 spec)))
+      (should (equal "--tag=" (nth 2 spec)))
+      (should (eq 'clime-invoke-multi-infix
+                  (plist-get (nthcdr 3 spec) :class))))))
+
+(ert-deftest clime-test-invoke/option-to-spec-required ()
+  "Required option spec has function-valued :description."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'output :flags '("--output") :required t))
+           (spec (clime-invoke--option-to-spec opt "o" 'test-prefix)))
+      (should (functionp (plist-get (nthcdr 3 spec) :description))))))
+
+(ert-deftest clime-test-invoke/arg-to-spec ()
+  "Arg spec builds correct shorthand with angle-bracket argument."
+  (clime-invoke-test-transient
+    (let* ((arg (clime-make-arg :name 'file :help "Input file"))
+           (spec (clime-invoke--arg-to-spec arg "f" 'test-prefix)))
+      (should (equal "f" (nth 0 spec)))
+      (should (equal "Input file" (nth 1 spec)))
+      (should (equal "<file>=" (nth 2 spec))))))
+
+(ert-deftest clime-test-invoke/arg-to-spec-required ()
+  "Required arg spec has function-valued :description."
+  (clime-invoke-test-transient
+    (let* ((arg (clime-make-arg :name 'file :required t))
+           (spec (clime-invoke--arg-to-spec arg "f" 'test-prefix)))
+      (should (functionp (plist-get (nthcdr 3 spec) :description))))))
+
+;;; ─── Alist/Plist Conversion ─────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/alist-to-plist ()
+  "Convert alist to plist."
+  (clime-invoke-test-transient
+    (should (equal '(a 1 b 2)
+                   (clime-invoke--alist-to-plist '((a . 1) (b . 2)))))))
+
+;;; ─── Extract Incompatible (multiple groups) ─────────────────────────────
+
+(ert-deftest clime-test-invoke/extract-incompatible-multiple-groups ()
+  "Extract multiple :incompatible groups from stacked conformers."
+  (clime-invoke-test-transient
+    (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0))
+           (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+           (opt-local (clime-make-option :name 'local :flags '("--local") :nargs 0))
+           (opt-remote (clime-make-option :name 'remote :flags '("--remote") :nargs 0))
+           (cmd (clime-make-command
+                 :name "run" :handler #'ignore
+                 :options (list opt-json opt-csv opt-local opt-remote)
+                 :conform (list (clime-check-exclusive 'fmt '(json csv))
+                                (clime-check-exclusive 'src '(local remote))))))
+      (let ((groups (clime-invoke--extract-incompatible cmd)))
+        (should (= 2 (length groups)))))))
+
+;;; ─── Params Edge Cases ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/params-to-transient-value-nil-skipped ()
+  "Params with nil value are skipped."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'output :flags '("--output")))
+           (cmd (clime-make-command :name "run" :handler #'ignore
+                                     :options (list opt))))
+      (should (null (clime-invoke--params-to-transient-value
+                     cmd '((output . nil))))))))
+
+(ert-deftest clime-test-invoke/params-to-transient-value-unknown-ignored ()
+  "Params for unknown options are silently ignored."
+  (clime-invoke-test-transient
+    (let ((cmd (clime-make-command :name "run" :handler #'ignore)))
+      (should (null (clime-invoke--params-to-transient-value
+                     cmd '((nonexistent . "val"))))))))
 
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-test-transients.el ends here
