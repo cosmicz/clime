@@ -452,6 +452,28 @@ Returns a flat list of `clime-option' structs, deduped by flag set."
       (setq parent (clime-node-parent parent)))
     (nreverse result)))
 
+;;; ─── Examples ──────────────────────────────────────────────────────────
+
+(defun clime-help--normalize-example (ex)
+  "Normalize EX to (INVOCATION . DESCRIPTION).
+EX may be a cons pair, a single-element list, or a bare string."
+  (cond
+   ((stringp ex) (cons ex ""))
+   ((and (consp ex) (stringp (car ex)) (stringp (cdr ex))) ex)
+   ((and (consp ex) (stringp (car ex)) (null (cdr ex))) (cons (car ex) ""))
+   (t (cons (format "%s" ex) ""))))
+
+(defun clime-help--format-examples (examples &optional width)
+  "Format EXAMPLES as an Examples section.
+EXAMPLES is a list of mixed forms: cons pairs, single-element lists,
+or bare strings.  When WIDTH is non-nil, help text is wrapped to fit."
+  (when examples
+    (let ((rows (mapcar (lambda (ex)
+                          (let ((norm (clime-help--normalize-example ex)))
+                            (cons (car norm) (cdr norm))))
+                        examples)))
+      (concat "Examples:\n" (clime-help--format-table rows width)))))
+
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
 (defun clime-format-help (node path)
@@ -493,6 +515,11 @@ Returns a flat list of `clime-option' structs, deduped by flag set."
                                        (clime-help--format-table rows width))))))
       (when global-section
         (push global-section sections)))
+    ;; Examples
+    (let ((examples-section (clime-help--format-examples
+                             (clime-node-examples node) width)))
+      (when examples-section
+        (push examples-section sections)))
     ;; Epilog (wrapped)
     (let ((epilog (clime-node-epilog node)))
       (when (and epilog (not (string-empty-p epilog)))

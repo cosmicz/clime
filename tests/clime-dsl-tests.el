@@ -1629,5 +1629,32 @@
          t)
    :type 'error))
 
+;;; ─── :examples Keyword ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/examples-on-command ()
+  ":examples keyword passes through to command struct."
+  (eval '(clime-app clime-test--ex-cmd-app
+           :version "1"
+           (clime-command show
+             :help "Show"
+             :examples '(("app show 1" . "By ID")
+                         ("app show --all" . "All"))
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (assoc "show" (clime-group-children clime-test--ex-cmd-app)))))
+    (should (= 2 (length (clime-node-examples cmd))))
+    (should (equal (caar (clime-node-examples cmd)) "app show 1"))))
+
+(ert-deftest clime-test-dsl/examples-on-app ()
+  ":examples keyword works on app."
+  (eval '(clime-app clime-test--ex-app
+           :version "1"
+           :examples '(("myapp init" . "Init"))
+           (clime-command ping
+             :help "Ping"
+             (clime-handler (ctx) nil)))
+        t)
+  (should (= 1 (length (clime-node-examples clime-test--ex-app)))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

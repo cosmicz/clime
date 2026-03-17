@@ -247,6 +247,8 @@ under GROUP-NAME."
   (inline nil :type boolean :documentation "If non-nil, promote children to parent level for dispatch and help.")
   (handler nil :type (or function null) :documentation "Handler function, called with context.")
   (epilog nil :type (or string null) :documentation "Free-form text appended after auto-generated help.")
+  (examples nil :type list :documentation "List of example invocations for help output.
+Each element is (INVOCATION . DESCRIPTION), (INVOCATION), or a bare INVOCATION string.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
   (locked-vals nil :type list :documentation "Alist of (name . value) injected into params during finalize.  Locked vals hide their options from CLI and help.")
   (conform nil :type (or function list null)

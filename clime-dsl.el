@@ -481,7 +481,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :epilog :category :deprecated
+                     '(:help :doc :aliases :hidden :epilog :examples :category :deprecated
                        :options :args)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
@@ -494,7 +494,7 @@ ARGS is (NAME &rest BODY)."
            (clime-make-command
             :name ,name-str
             :handler ,handler
-            ,@(clime--emit-kw keywords '(:help :aliases :hidden :epilog :category :deprecated))
+            ,@(clime--emit-kw keywords '(:help :aliases :hidden :epilog :examples :category :deprecated))
             ,@(clime--emit-merged keywords classified '(:conform :options :args))))))
 
 (defun clime--build-alias-for (args)
@@ -525,7 +525,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :inline :epilog :category :deprecated
+                     '(:help :doc :aliases :hidden :inline :epilog :examples :category :deprecated
                        :options :args :children)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
@@ -534,7 +534,7 @@ ARGS is (NAME &rest BODY)."
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
-            ,@(clime--emit-kw keywords '(:help :aliases :hidden :inline :epilog :category :deprecated))
+            ,@(clime--emit-kw keywords '(:help :aliases :hidden :inline :epilog :examples :category :deprecated))
             ,@(clime--emit-merged keywords classified '(:conform :options :args :children :handler))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
@@ -561,7 +561,7 @@ Child forms:
   (let* ((name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      body
-                     '(:version :env-prefix :help :doc :json-mode :epilog :setup
+                     '(:version :env-prefix :help :doc :json-mode :epilog :examples :setup
                        :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
@@ -569,7 +569,7 @@ Child forms:
     `(defvar ,name
        (clime-make-app
         :name ,name-str
-        ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :setup))
+        ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup))
         ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler))))))
 
 ;;; ─── DSL Form Macros ───────────────────────────────────────────────────

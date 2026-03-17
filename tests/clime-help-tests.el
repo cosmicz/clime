@@ -1028,5 +1028,87 @@ Width applies to content; prefix is extra visual indentation."
       ;; Usage line should be intact, not wrapped
       (should (string-match-p "^Usage: myapp infra deploy" usage-line)))))
 
+;;; ─── Examples Section ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/examples-on-command ()
+  "Examples section renders in command help."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show a resource"
+                                  :examples '(("app show 123" . "Show by ID")
+                                              ("app show 123 --json" . "As JSON"))))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "Examples:" help))
+    (should (string-match-p "app show 123" help))
+    (should (string-match-p "Show by ID" help))
+    (should (string-match-p "app show 123 --json" help))
+    (should (string-match-p "As JSON" help))))
+
+(ert-deftest clime-test-help/examples-on-app ()
+  "Examples section renders in app help."
+  (let* ((app (clime-make-app :name "myapp" :version "1"
+                              :help "My app"
+                              :examples '(("myapp init" . "Initialize project"))))
+         (help (clime-format-help app '("myapp"))))
+    (should (string-match-p "Examples:" help))
+    (should (string-match-p "myapp init" help))))
+
+(ert-deftest clime-test-help/no-examples-no-section ()
+  "No Examples section when :examples is nil."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show a resource"))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should-not (string-match-p "Examples:" help))))
+
+(ert-deftest clime-test-help/examples-before-epilog ()
+  "Examples section appears before epilog."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show a resource"
+                                  :examples '(("app show 1" . "Show one"))
+                                  :epilog "See docs for more."))
+         (help (clime-format-help cmd '("app" "show"))))
+    (let ((ex-pos (string-match "Examples:" help))
+          (ep-pos (string-match "See docs" help)))
+      (should ex-pos)
+      (should ep-pos)
+      (should (< ex-pos ep-pos)))))
+
+(ert-deftest clime-test-help/examples-bare-string ()
+  "Bare string in :examples renders as invocation without description."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show"
+                                  :examples '("app show 123"
+                                              ("app show --all" . "Show all"))))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "Examples:" help))
+    (should (string-match-p "app show 123" help))
+    (should (string-match-p "app show --all" help))
+    (should (string-match-p "Show all" help))))
+
+(ert-deftest clime-test-help/examples-single-element-list ()
+  "Single-element list in :examples renders as invocation without description."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show"
+                                  :examples '(("app show 123"))))
+         (help (clime-format-help cmd '("app" "show"))))
+    (should (string-match-p "Examples:" help))
+    (should (string-match-p "app show 123" help))))
+
+(ert-deftest clime-test-help/examples-after-global-options ()
+  "Examples section appears after Global Options."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :help "Show"
+                                  :examples '(("app show 1" . "Show"))))
+         (app (clime-make-app :name "app" :version "1"
+                              :options (list root-opt)
+                              :children (list (cons "show" cmd)))))
+    (clime--set-parent-refs app)
+    (let ((help (clime-format-help cmd '("app" "show"))))
+      (let ((go-pos (string-match "Global Options:" help))
+            (ex-pos (string-match "Examples:" help)))
+        (should go-pos)
+        (should ex-pos)
+        (should (< go-pos ex-pos))))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here
