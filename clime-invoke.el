@@ -608,9 +608,10 @@ EXIT-CODE is shown in the mode-line."
       (special-mode)
       (setq-local mode-line-process (format " [exit %s]" code)))
     (display-buffer buf)
-    (when (and (not (string-empty-p output))
-               (<= (count-lines (point-min) (point-max)) 3))
-      (message "%s" (string-trim output)))))
+    (when (not (string-empty-p output))
+      (with-current-buffer buf
+        (when (<= (count-lines (point-min) (point-max)) 3)
+          (message "%s" (string-trim output)))))))
 
 ;;; ─── Event Loop ─────────────────────────────────────────────────────
 
