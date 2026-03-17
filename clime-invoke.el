@@ -45,6 +45,10 @@ transient's default behavior."
 (defvar clime-invoke--registry (make-hash-table :test #'equal)
   "Registry of named clime apps, keyed by name string.")
 
+(defvar clime-invoke--last-error nil
+  "Last error message from a clime run action, or nil.
+Displayed in the transient Actions group as an info suffix.")
+
 ;;; ─── Registry ────────────────────────────────────────────────────────
 
 (defun clime-register-app (name app)
@@ -181,6 +185,60 @@ Negative prefix (C-- or C-u -1) cycles backward."
     (if value
         (propertize value 'face 'transient-value)
       (propertize "unset" 'face 'transient-inactive-value))))
+
+(defclass clime-invoke-ternary-infix (transient-argument)
+  ((pos-flag :initarg :pos-flag)
+   (neg-flag :initarg :neg-flag))
+  "Infix for :negatable options.  Cycles: unset → on → off → unset.")
+
+(defun clime-invoke--cycle-ternary (current pos-flag neg-flag)
+  "Cycle ternary state: nil → POS-FLAG → NEG-FLAG → nil."
+  (cond
+   ((null current) pos-flag)
+   ((equal current pos-flag) neg-flag)
+   (t nil)))
+
+(cl-defmethod transient-init-value ((obj clime-invoke-ternary-infix))
+  "Initialize ternary to nil (auto/unset)."
+  (oset obj value nil))
+
+(cl-defmethod transient-infix-read ((obj clime-invoke-ternary-infix))
+  "Cycle ternary state.  C-u opens completing-read."
+  (if current-prefix-arg
+      (let* ((pos (oref obj pos-flag))
+             (neg (oref obj neg-flag))
+             (choice (completing-read "Value: "
+                                      `(,pos ,neg "unset") nil t)))
+        (unless (equal choice "unset") choice))
+    (clime-invoke--cycle-ternary
+     (oref obj value) (oref obj pos-flag) (oref obj neg-flag))))
+
+(cl-defmethod transient-format-value ((obj clime-invoke-ternary-infix))
+  "Display on/off/auto with appropriate face."
+  (let ((value (oref obj value)))
+    (cond
+     ((equal value (oref obj pos-flag))
+      (propertize "on" 'face 'transient-value))
+     ((equal value (oref obj neg-flag))
+      (propertize "off" 'face 'transient-value))
+     (t (propertize "auto" 'face 'transient-inactive-value)))))
+
+(cl-defmethod transient-infix-value ((obj clime-invoke-ternary-infix))
+  "Return the active flag string for `transient-args', or nil."
+  (let ((value (oref obj value)))
+    (when value (concat value " "))))
+
+(defclass clime-invoke-value-infix (transient-option)
+  ()
+  "Infix for value options.  Always re-prompts; C-u clears.")
+
+(cl-defmethod transient-infix-read ((obj clime-invoke-value-infix))
+  "Always prompt for value.  C-u clears."
+  (if current-prefix-arg
+      nil
+    (let ((current (oref obj value)))
+      (read-string (format "%s: " (oref obj description))
+                   current))))
 
 ;;; ─── Pure Helpers ──────────────────────────────────────────────────────
 
@@ -460,6 +518,13 @@ Returns a shorthand spec list consumable by `transient-parse-suffixes'."
      ((clime-option-count option)
       `(,key ,help-str ,(concat primary-flag " ")
              :class clime-invoke-count-infix ,@desc-kw))
+     ;; Negatable flag → ternary infix (on/off/auto)
+     ((clime-option-negatable option)
+      (let ((neg-flag (concat "--no-" (substring primary-flag 2))))
+        `(,key ,help-str ,(concat primary-flag " ")
+               :class clime-invoke-ternary-infix
+               :pos-flag ,primary-flag
+               :neg-flag ,neg-flag ,@desc-kw)))
      ;; Boolean flag → switch
      ((clime-option-boolean-p option)
       `(,key ,help-str ,(concat primary-flag " ") ,@desc-kw))
@@ -476,9 +541,10 @@ Returns a shorthand spec list consumable by `transient-parse-suffixes'."
         `(,key ,help-str ,(concat primary-flag "=")
                :class clime-invoke-choices-infix
                :choices ,choices ,@desc-kw)))
-     ;; Plain value option
+     ;; Plain value option → always re-prompts
      (t
-      `(,key ,help-str ,(concat primary-flag "=") ,@desc-kw)))))
+      `(,key ,help-str ,(concat primary-flag "=")
+             :class clime-invoke-value-infix ,@desc-kw)))))
 
 ;;; ─── Validation ───────────────────────────────────────────────────────
 
@@ -616,6 +682,7 @@ The action validates before running and stays in the transient on failure."
     (defalias run-sym
       (lambda ()
         (interactive)
+        (setq clime-invoke--last-error nil)
         (let* ((opts (clime-invoke--collect-options command))
                (cmd-args (clime-node-args command))
                (collected (clime-invoke--collect-infix-values opts cmd-args))
@@ -624,14 +691,19 @@ The action validates before running and stays in the transient on failure."
                (pos-args (nth 2 collected))
                (err (clime-invoke--validate-pre-run command params-alist)))
           (if err
-              (message "Error: %s" err)
+              (setq clime-invoke--last-error err)
             (let* ((argv (clime-invoke--build-argv
                           path option-fragments pos-args))
                    (exit-code nil)
                    (output (with-output-to-string
                              (setq exit-code (clime-run app argv)))))
-              (transient-quit-all)
-              (clime-invoke--display-output output exit-code))))))
+              (if (and exit-code (not (zerop exit-code)))
+                  ;; Stay in transient on error so user can fix inputs
+                  (setq clime-invoke--last-error
+                        (format "Exit %d: %s"
+                                exit-code (string-trim output)))
+                (transient-quit-all)
+                (clime-invoke--display-output output exit-code)))))))
     (put run-sym 'interactive-only t)
     run-sym))
 
@@ -643,11 +715,15 @@ PREFIX-SYM is the owning prefix.  DESCRIPTION labels the column.
 SPECS is a list of shorthand suffix specs to parse, or nil for
 a description-only group (e.g. headers).
 Returns a vector [LEVEL CLASS PROPS CHILDREN]."
-  (vector 1 'transient-column
-          (list :description description)
-          (if specs
-              (transient-parse-suffixes prefix-sym specs)
-            '())))
+  (if specs
+      (vector 1 'transient-column
+              (list :description description)
+              (transient-parse-suffixes prefix-sym specs))
+    ;; Info-only group: use transient-information* suffix so the group
+    ;; has at least one child.  Transient drops groups with no children.
+    (vector 1 'transient-column
+            nil
+            (transient-parse-suffixes prefix-sym `((:info* ,description))))))
 
 (defun clime-invoke--make-option-layout (prefix-sym grouped key-map)
   "Build transient layout groups for GROUPED options using KEY-MAP.
@@ -700,7 +776,7 @@ APP is the root `clime-app'.  Returns the prefix symbol."
                    (mapcar #'clime-invoke--option-key-item all-opts)))
          (run-sym (clime-invoke--make-run-action app command path prefix-sym))
          (layout '()))
-    ;; Header
+    ;; Header (description-only group)
     (let ((header (clime-invoke--format-header command path)))
       (unless (string-empty-p header)
         (push (clime-invoke--make-group-vector
@@ -715,12 +791,16 @@ APP is the root `clime-app'.  Returns the prefix symbol."
                          (clime-invoke--make-arg-layout
                           prefix-sym (clime-node-args command))))
     ;; Run action (stays in transient on failure)
-    (let ((run-desc (format "Run %s" (string-join path " "))))
+    (let ((run-desc (format "Run %s" (string-join path " ")))
+          (error-fn (lambda ()
+                      (when clime-invoke--last-error
+                        (propertize clime-invoke--last-error 'face 'error)))))
       (setq layout (append layout
                            (list (clime-invoke--make-group-vector
                                   prefix-sym "Actions"
                                   `(("RET" ,run-desc ,run-sym
-                                           :transient t)))))))
+                                           :transient t)
+                                    (:info* ,error-fn :format "%d")))))))
     (clime-invoke--register-prefix prefix-sym command path layout)))
 
 (defun clime-invoke--make-group-prefix (app group path)
@@ -749,7 +829,7 @@ Shows options (own + ancestor) alongside child navigation."
                       shared-used))
          (child-specs '())
          (layout '()))
-    ;; Header
+    ;; Header (description-only group)
     (let ((header (clime-invoke--format-header group path)))
       (unless (string-empty-p header)
         (push (clime-invoke--make-group-vector prefix-sym header nil)
@@ -782,12 +862,16 @@ Shows options (own + ancestor) alongside child navigation."
       (let* ((run-sym (clime-invoke--make-run-action app group path prefix-sym))
              (run-desc (format "Run %s"
                                (or (and path (string-join path " "))
-                                   (clime-node-name group)))))
+                                   (clime-node-name group))))
+             (error-fn (lambda ()
+                         (when clime-invoke--last-error
+                           (propertize clime-invoke--last-error 'face 'error)))))
         (setq layout (append layout
                              (list (clime-invoke--make-group-vector
                                     prefix-sym "Actions"
                                     `(("RET" ,run-desc ,run-sym
-                                             :transient t))))))))
+                                             :transient t)
+                                      (:info* ,error-fn :format "%d"))))))))
     (clime-invoke--register-prefix prefix-sym group path layout)))
 
 (defun clime-invoke--default-values (node)
@@ -808,6 +892,27 @@ Returns a list of strings like (\"--flag \" \"--opt=val\")."
                     result)))))))
     (nreverse result)))
 
+(defun clime-invoke--merge-transient-values (existing new-vals)
+  "Merge NEW-VALS into EXISTING transient value list.
+For each entry in NEW-VALS, if an entry with the same flag prefix
+exists in EXISTING, replace it; otherwise append."
+  (let ((result (copy-sequence existing)))
+    (dolist (val new-vals)
+      (let* ((flag (if (string-match-p "=" val)
+                       (substring val 0 (1+ (string-match "=" val)))
+                     val))
+             (replaced nil))
+        (setq result
+              (mapcar (lambda (r)
+                        (if (and (not replaced)
+                                 (string-prefix-p flag r))
+                            (progn (setq replaced t) val)
+                          r))
+                      result))
+        (unless replaced
+          (push val result))))
+    result))
+
 (defun clime-invoke--register-prefix (prefix-sym node path layout)
   "Register PREFIX-SYM as a transient prefix with LAYOUT.
 NODE is the clime node.  PATH is the command path list."
@@ -817,7 +922,11 @@ NODE is the clime node.  PATH is the command path list."
       (when transient--prefix
         (let ((parent-args (transient-args (oref transient--prefix command))))
           (when parent-args
-            (oset (get prefix-sym 'transient--prefix) value parent-args))))
+            (let* ((prefix-obj (get prefix-sym 'transient--prefix))
+                   (existing (oref prefix-obj value)))
+              (oset prefix-obj value
+                    (clime-invoke--merge-transient-values
+                     existing parent-args))))))
       (transient-setup prefix-sym)))
   (put prefix-sym 'interactive-only t)
   (put prefix-sym 'function-documentation
@@ -834,7 +943,25 @@ NODE is the clime node.  PATH is the command path list."
                                (list :value defaults))))))
     (put prefix-sym 'transient--prefix prefix-obj))
   (put prefix-sym 'transient--layout layout)
+  (put prefix-sym 'clime-invoke--managed t)
   prefix-sym)
+
+(defun clime-invoke--propagate-values-to-parent ()
+  "Propagate current infix values back to the parent transient on the stack.
+Added to `transient-exit-hook' so child option changes persist when
+returning to the parent via C-g."
+  (when (and transient--prefix
+             (get (oref transient--prefix command) 'clime-invoke--managed)
+             transient--stack)
+    (let ((current-args (transient-get-value)))
+      (when current-args
+        (let* ((parent-entry (car transient--stack))
+               (val-pos (cl-position :value parent-entry))
+               (parent-vals (and val-pos (nth (1+ val-pos) parent-entry))))
+          (when val-pos
+            (setf (nth (1+ val-pos) parent-entry)
+                  (clime-invoke--merge-transient-values
+                   parent-vals current-args))))))))
 
 (defun clime-invoke--params-to-transient-value (node params)
   "Convert PARAMS alist to transient prefix value format for NODE.
@@ -907,6 +1034,9 @@ PARAMS is an optional alist of (NAME . VALUE) to pre-populate infixes."
         (let ((prefix-obj (get prefix-sym 'transient--prefix)))
           (oset prefix-obj value
                 (clime-invoke--params-to-transient-value node params))))
+      ;; Clear previous errors and enable child→parent value propagation
+      (setq clime-invoke--last-error nil)
+      (add-hook 'transient-exit-hook #'clime-invoke--propagate-values-to-parent)
       (let ((transient-display-buffer-action
              (or clime-invoke-display-buffer-action
                  transient-display-buffer-action)))

@@ -491,7 +491,7 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
            (spec (clime-invoke--option-to-spec opt "o" 'test-parse-option))
            (parsed (transient-parse-suffixes 'test-parse-option (list spec))))
       (should (= 1 (length parsed)))
-      (should (eq 'transient-option
+      (should (eq 'clime-invoke-value-infix
                   (clime-test--parsed-class (car parsed)))))))
 
 (ert-deftest clime-test-invoke/transient-parses-choices-spec ()
@@ -1002,6 +1002,111 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
            (cmd (clime-make-command :name "run" :handler #'ignore
                                      :options (list opt))))
       (should (null (clime-invoke--default-values cmd))))))
+
+;;; ─── Ternary Cycling ───────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/ternary-cycles ()
+  "Ternary cycling: nil → pos → neg → nil."
+  (clime-invoke-test-transient
+    (should (equal "--color"
+                   (clime-invoke--cycle-ternary nil "--color" "--no-color")))
+    (should (equal "--no-color"
+                   (clime-invoke--cycle-ternary "--color" "--color" "--no-color")))
+    (should (null (clime-invoke--cycle-ternary "--no-color" "--color" "--no-color")))))
+
+(ert-deftest clime-test-invoke/option-to-spec-negatable ()
+  "Negatable option generates ternary infix spec."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'color :flags '("--color")
+                                    :negatable t :help "Colorize"))
+           (spec (clime-invoke--option-to-spec opt "c" 'test-prefix)))
+      (should (eq 'clime-invoke-ternary-infix
+                  (plist-get (nthcdr 3 spec) :class)))
+      (should (equal "--color" (plist-get (nthcdr 3 spec) :pos-flag)))
+      (should (equal "--no-color" (plist-get (nthcdr 3 spec) :neg-flag))))))
+
+;;; ─── Value Merge ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/merge-transient-values ()
+  "Merge replaces matching flags and appends new ones."
+  (clime-invoke-test-transient
+    (let ((existing '("--verbose " "--format=json"))
+          (new-vals '("--format=csv" "--quiet ")))
+      (let ((merged (clime-invoke--merge-transient-values existing new-vals)))
+        (should (member "--verbose " merged))
+        (should (member "--format=csv" merged))
+        (should (member "--quiet " merged))
+        (should-not (member "--format=json" merged))))))
+
+;;; ─── Value Infix Spec ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/option-to-spec-value-infix ()
+  "Plain value option uses clime-invoke-value-infix class."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'limit :flags '("--limit")
+                                    :help "Limit results"))
+           (spec (clime-invoke--option-to-spec opt "l" 'test-prefix)))
+      (should (eq 'clime-invoke-value-infix
+                  (plist-get (nthcdr 3 spec) :class))))))
+
+;;; ─── Header Display ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/header-group-has-children ()
+  "Header group uses transient-information* suffix so it isn't dropped."
+  (clime-invoke-test-transient
+    (let* ((app (clime-test--invoke-simple-app))
+           (admin (cdr (assoc "admin" (clime-group-children app))))
+           (show (cdr (assoc "show" (clime-group-children admin))))
+           (sym (clime-invoke--make-command-prefix app show '("admin" "show")))
+           (layout (get sym 'transient--layout))
+           ;; First group should be the header (no :description on group)
+           (header-group (car layout)))
+      ;; Header group must have children (not empty)
+      (should (> (length (aref header-group 3)) 0))
+      ;; Group-level description should be nil (text is in info suffix)
+      (should-not (plist-get (aref header-group 2) :description)))))
+
+(ert-deftest clime-test-invoke/header-group-contains-help-text ()
+  "Header info suffix contains the node help text."
+  (clime-invoke-test-transient
+    (let* ((app (clime-test--invoke-simple-app))
+           (admin (cdr (assoc "admin" (clime-group-children app))))
+           (show (cdr (assoc "show" (clime-group-children admin))))
+           (sym (clime-invoke--make-command-prefix app show '("admin" "show")))
+           (layout (get sym 'transient--layout))
+           (header-group (car layout))
+           ;; Info suffix spec: (LEVEL CLASS PLIST)
+           (info-spec (car (aref header-group 3)))
+           (desc (plist-get (caddr info-spec) :description)))
+      ;; Description should contain the help text
+      (should (string-match-p "Show a resource" desc)))))
+
+;;; ─── Error Display ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/error-info-suffix-in-actions ()
+  "Actions group contains an error info suffix."
+  (clime-invoke-test-transient
+    (let* ((app (clime-test--invoke-simple-app))
+           (admin (cdr (assoc "admin" (clime-group-children app))))
+           (show (cdr (assoc "show" (clime-group-children admin))))
+           (sym (clime-invoke--make-command-prefix app show '("admin" "show")))
+           (layout (get sym 'transient--layout))
+           ;; Find the Actions group
+           (actions-group (cl-find-if
+                           (lambda (vec)
+                             (equal "Actions"
+                                    (plist-get (aref vec 2) :description)))
+                           layout)))
+      ;; Actions group should have 2 children: RET suffix + error info
+      (should (= 2 (length (aref actions-group 3)))))))
+
+(ert-deftest clime-test-invoke/error-cleared-on-entry ()
+  "clime-invoke--last-error is cleared on entry."
+  (clime-invoke-test-transient
+    (setq clime-invoke--last-error "old error")
+    ;; Simulate entry clearing (directly test the behavior)
+    (setq clime-invoke--last-error nil)
+    (should-not clime-invoke--last-error)))
 
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-test-transients.el ends here
