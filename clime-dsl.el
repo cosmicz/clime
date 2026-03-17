@@ -224,6 +224,26 @@ Must not contain :name (per-instance)."
 
 (defalias 'clime-defargument 'clime-defarg)
 
+;;; ─── Composable Form Definitions ────────────────────────────────────────
+
+;;;###autoload
+(defmacro clime-defcommand (name &rest body)
+  "Define NAME as a variable holding a composable command form.
+NAME serves as both the defvar symbol and the command name string.
+The stored value is (cons NAME-STRING COMMAND-STRUCT), directly
+usable in a container's :children keyword."
+  (declare (indent 1))
+  `(defvar ,name (clime-command ,name ,@body)))
+
+;;;###autoload
+(defmacro clime-defgroup (name &rest body)
+  "Define NAME as a variable holding a composable group form.
+NAME serves as both the defvar symbol and the group name string.
+The stored value is (cons NAME-STRING GROUP-STRUCT), directly
+usable in a container's :children keyword."
+  (declare (indent 1))
+  `(defvar ,name (clime-group ,name ,@body)))
+
 ;;; ─── Emit Helpers ──────────────────────────────────────────────────────
 
 (defun clime--emit-kw (keywords keys)
@@ -252,6 +272,42 @@ function bare, or a list if multiple."
                   (:conform (if (= (length val) 1) (car val) `(list ,@val)))
                   (_ `(list ,@val)))
                 result))))
+    (nreverse result)))
+
+(defun clime--merge-kw-body (kw-expr body-forms)
+  "Merge keyword list expression KW-EXPR with classified BODY-FORMS.
+Returns a form that produces the merged list at runtime, or nil if both
+are empty.  KW-EXPR is a runtime expression; BODY-FORMS are macro-time
+constructor forms to wrap in (list ...)."
+  (cond
+   ((and kw-expr body-forms) `(append ,kw-expr (list ,@body-forms)))
+   (kw-expr kw-expr)
+   (body-forms `(list ,@body-forms))
+   (t nil)))
+
+(defun clime--emit-merged (keywords classified keys)
+  "Emit constructor pairs merging KEYWORDS and CLASSIFIED for KEYS.
+For collection slots (:options, :args, :children, :output-formats),
+merges keyword-provided runtime lists with classified body forms.
+For :handler and :conform, emits from classified only (no merge)."
+  (let (result)
+    (dolist (key keys)
+      (pcase key
+        ((or :handler :conform)
+         (let ((val (plist-get classified key)))
+           (when val
+             (push key result)
+             (push (pcase key
+                     (:handler val)
+                     (:conform (if (= (length val) 1) (car val) `(list ,@val))))
+                   result))))
+        (_
+         (let ((merged (clime--merge-kw-body
+                        (plist-get keywords key)
+                        (plist-get classified key))))
+           (when merged
+             (push key result)
+             (push merged result))))))
     (nreverse result)))
 
 (defun clime--prepare-aliases (keywords)
@@ -425,7 +481,8 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :epilog :category :deprecated)))
+                     '(:help :doc :aliases :hidden :epilog :category :deprecated
+                       :options :args)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms))
@@ -438,7 +495,7 @@ ARGS is (NAME &rest BODY)."
             :name ,name-str
             :handler ,handler
             ,@(clime--emit-kw keywords '(:help :aliases :hidden :epilog :category :deprecated))
-            ,@(clime--emit-body classified '(:conform :options :args))))))
+            ,@(clime--emit-merged keywords classified '(:conform :options :args))))))
 
 (defun clime--build-alias-for (args)
   "Build a `clime-command' alias-for form from DSL ARGS.
@@ -468,7 +525,8 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :inline :epilog :category :deprecated)))
+                     '(:help :doc :aliases :hidden :inline :epilog :category :deprecated
+                       :options :args :children)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -477,7 +535,7 @@ ARGS is (NAME &rest BODY)."
            (clime-make-group
             :name ,name-str
             ,@(clime--emit-kw keywords '(:help :aliases :hidden :inline :epilog :category :deprecated))
-            ,@(clime--emit-body classified '(:conform :options :args :children :handler))))))
+            ,@(clime--emit-merged keywords classified '(:conform :options :args :children :handler))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
 
@@ -503,7 +561,8 @@ Child forms:
   (let* ((name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      body
-                     '(:version :env-prefix :help :doc :json-mode :epilog :setup)))
+                     '(:version :env-prefix :help :doc :json-mode :epilog :setup
+                       :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -511,7 +570,7 @@ Child forms:
        (clime-make-app
         :name ,name-str
         ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :setup))
-        ,@(clime--emit-body classified '(:output-formats :conform :options :args :children :handler))))))
+        ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler))))))
 
 ;;; ─── DSL Form Macros ───────────────────────────────────────────────────
 
