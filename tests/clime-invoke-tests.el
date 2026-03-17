@@ -383,6 +383,17 @@
     (let ((p (clime-invoke--handle-option opt '(color "--no-color"))))
       (should-not (plist-member p 'color)))))
 
+(ert-deftest clime-test-invoke/handle-ternary-short-flag-first ()
+  "Negatable option works when short flag listed before long flag."
+  (let ((opt (clime-make-option :name 'color :flags '("-c" "--color")
+                                 :negatable t)))
+    (let ((p (clime-invoke--handle-option opt nil)))
+      (should (equal "--color" (plist-get p 'color))))
+    (let ((p (clime-invoke--handle-option opt '(color "--color"))))
+      (should (equal "--no-color" (plist-get p 'color))))
+    (let ((p (clime-invoke--handle-option opt '(color "--no-color"))))
+      (should-not (plist-member p 'color)))))
+
 ;;; ─── Format Value ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/format-value-boolean ()
@@ -390,6 +401,14 @@
   (let ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0)))
     (should (string-match-p "on" (clime-invoke--format-value opt '(verbose t))))
     (should (string-match-p "off" (clime-invoke--format-value opt nil)))))
+
+(ert-deftest clime-test-invoke/format-value-ternary-short-first ()
+  "Ternary display works when short flag listed first."
+  (let ((opt (clime-make-option :name 'color :flags '("-c" "--color")
+                                 :negatable t)))
+    (should (string-match-p "on" (clime-invoke--format-value opt '(color "--color"))))
+    (should (string-match-p "off" (clime-invoke--format-value opt '(color "--no-color"))))
+    (should (string-match-p "auto" (clime-invoke--format-value opt nil)))))
 
 (ert-deftest clime-test-invoke/format-value-count ()
   "Count shows ×N or off."

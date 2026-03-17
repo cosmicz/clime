@@ -747,19 +747,22 @@ PARAMS is an optional plist of initial param values."
           (push step nav-path)))
       (setq nav-path (nreverse nav-path)))
     ;; Enter the loop
-    (let* ((loop-result (clime-invoke--loop app node (or nav-path '())
-                                            (or params '()) t))
-           (final-params (car loop-result))
-           (last-output (cadr loop-result)))
-      ;; Clean up invoke buffer first
-      (when-let ((buf (get-buffer clime-invoke--buffer-name)))
-        (let ((win (get-buffer-window buf)))
-          (when win (delete-window win)))
-        (kill-buffer buf))
+    (let (loop-result)
+      (unwind-protect
+          (setq loop-result
+                (clime-invoke--loop app node (or nav-path '())
+                                    (or params '()) t))
+        ;; Clean up invoke buffer regardless of how we exit
+        (when-let ((buf (get-buffer clime-invoke--buffer-name)))
+          (let ((win (get-buffer-window buf)))
+            (when win (delete-window win)))
+          (kill-buffer buf)))
       ;; Show output after invoke buffer is gone
-      (when last-output
-        (clime-invoke--display-output (cdr last-output) (car last-output)))
-      final-params)))
+      (let ((final-params (car loop-result))
+            (last-output (cadr loop-result)))
+        (when last-output
+          (clime-invoke--display-output (cdr last-output) (car last-output)))
+        final-params))))
 
 ;;;###autoload
 (defun clime-invoke-command (app command-path)
