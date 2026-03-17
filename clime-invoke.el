@@ -280,10 +280,11 @@ Returns an alist of (KEY . ACTION) where ACTION is one of:
           (propertize "off" 'face 'clime-invoke-unset))))
      ;; Negatable (ternary)
      ((clime-option-negatable option)
-      (let ((pos-flag (car (clime-option-flags option)))
-            (neg-flag (concat "--no-" (substring (car (clime-option-flags option)) 2))))
+      (let* ((long (cl-find-if (lambda (f) (string-prefix-p "--" f))
+                               (clime-option-flags option)))
+             (neg-flag (and long (concat "--no-" (substring long 2)))))
         (cond
-         ((equal val pos-flag)
+         ((equal val long)
           (propertize "on" 'face 'clime-invoke-value))
          ((equal val neg-flag)
           (propertize "off" 'face 'clime-invoke-value))
@@ -494,8 +495,9 @@ Returns the updated params plist."
           (plist-put params name n))))
      ;; Negatable (ternary)
      ((clime-option-negatable option)
-      (let* ((pos-flag (car (clime-option-flags option)))
-             (neg-flag (concat "--no-" (substring pos-flag 2)))
+      (let* ((pos-flag (cl-find-if (lambda (f) (string-prefix-p "--" f))
+                                   (clime-option-flags option)))
+             (neg-flag (and pos-flag (concat "--no-" (substring pos-flag 2))))
              (next (clime-invoke--cycle-ternary current pos-flag neg-flag)))
         (if next
             (plist-put params name next)
@@ -620,7 +622,7 @@ EXIT-CODE is shown in the mode-line."
 APP is the root app.  PATH is the current command path.
 PARAMS is the shared params plist.
 AT-ROOT non-nil means this is the entry-point node.
-Returns the final params plist."
+Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
   (let ((buf (get-buffer-create clime-invoke--buffer-name))
         (key-map (clime-invoke--build-key-map node))
         (error-msg nil)
