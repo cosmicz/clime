@@ -542,72 +542,75 @@ Returns the updated params plist."
 ;;; ─── Run Handler ────────────────────────────────────────────────────
 ;;;
 
-(defun clime-invoke--validate (node params)
-  "Validate PARAMS against NODE's required options and args.
-Returns nil on success or an error message string."
-  (let ((all-opts (append (cl-remove-if #'clime-option-hidden (clime-node-options node))
-                          (clime-help--collect-ancestor-options node))))
-    (or
-     ;; Required options without defaults
-     (cl-loop for opt in all-opts
-              when (and (clime-option-required opt)
-                        (not (clime-option-default opt))
-                        (not (plist-get params (clime-option-name opt))))
-              return (format "Missing required option: %s"
-                             (car (clime-option-flags opt))))
-     ;; Required positional args
-     (cl-loop for arg in (clime-node-args node)
-              when (and (clime-arg-required arg)
-                        (not (clime-arg-default arg))
-                        (not (plist-get params (clime-arg-name arg))))
-              return (format "Missing required argument: %s"
-                             (clime-arg-name arg))))))
-
 (defun clime-invoke--run-handler (app node path params)
   "Run NODE's handler with PARAMS, returning (EXIT-CODE . OUTPUT).
 APP is the root app.  PATH is the command path list.
-Validates required params before calling the handler."
-  (let ((validation-err (clime-invoke--validate node params)))
-    (if validation-err
-        (cons 2 validation-err)
-      (let* ((ctx (clime-context--create
-                   :app app
-                   :command node
-                   :path path
-                   :params params))
-             (exit-code nil)
-             (output (with-output-to-string
-                       (setq exit-code
-                             (condition-case err
-                             (progn (funcall (clime-node-handler node) ctx) 0)
+Runs the full parse finalization pipeline (defaults, env vars,
+conformers, required checks) before calling the handler."
+  (let* ((visited-nodes (cons node (reverse (clime-node-ancestors node))))
+         (result (clime-parse-result--create
+                  :command node
+                  :node node
+                  :path path
+                  :display-path path
+                  :params (copy-sequence params)
+                  :visited-nodes visited-nodes))
+         (fmt clime--active-output-format)
+         (streaming (clime-output-format-streaming fmt))
+         (clime--output-items nil)
+         (clime--output-errors nil)
+         (retval nil)
+         (exit-code nil)
+         (output (with-output-to-string
+                   (setq exit-code
+                         (condition-case err
+                             (progn
+                               (clime-parse-finalize result)
+                               (let ((ctx (clime-context--create
+                                           :app app
+                                           :command node
+                                           :path path
+                                           :params (clime-parse-result-params result))))
+                                 (setq retval (funcall (clime-node-handler node) ctx)))
+                               0)
                            (clime-usage-error
                             (princ (cadr err))
                             2)
                            (error
-                            (princ (error-message-string err))
-                            1))))))
-        (cons (or exit-code 0) output)))))
+                            (if streaming
+                                (funcall (clime-output-format-error-handler fmt)
+                                         (error-message-string err))
+                              (push (error-message-string err) clime--output-errors))
+                            1)))
+                   ;; Flush output like clime-run does
+                   (if streaming
+                       (when retval
+                         (princ (funcall (clime-output-format-encoder fmt) retval)))
+                     (clime--output-flush
+                      (clime-output-format-finalize fmt)
+                      retval)))))
+    (cons (or exit-code 0) output)))
 
 ;;; ─── Output Display ─────────────────────────────────────────────────
 
 (defun clime-invoke--display-output (output &optional exit-code)
   "Display OUTPUT string in the *clime-output* buffer.
 EXIT-CODE is shown in the mode-line."
-  (if (string-empty-p output)
-      (message "Command completed (exit %s)" (or exit-code 0))
-    (let ((buf (get-buffer-create "*clime-output*")))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert output)
-          (goto-char (point-min)))
-        (special-mode)
-        (setq-local mode-line-process
-                    (format " [exit %s]" (or exit-code 0))))
-      (display-buffer buf)
-      (with-current-buffer buf
-        (when (<= (count-lines (point-min) (point-max)) 3)
-          (message "%s" (string-trim output)))))))
+  (let ((code (or exit-code 0))
+        (buf (get-buffer-create "*clime-output*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (if (string-empty-p output)
+            (insert (format "Command completed (exit %d)\n" code))
+          (insert output))
+        (goto-char (point-min)))
+      (special-mode)
+      (setq-local mode-line-process (format " [exit %s]" code)))
+    (display-buffer buf)
+    (when (and (not (string-empty-p output))
+               (<= (count-lines (point-min) (point-max)) 3))
+      (message "%s" (string-trim output)))))
 
 ;;; ─── Event Loop ─────────────────────────────────────────────────────
 
@@ -620,6 +623,7 @@ Returns the final params plist."
   (let ((buf (get-buffer-create clime-invoke--buffer-name))
         (key-map (clime-invoke--build-key-map node))
         (error-msg nil)
+        (last-output nil)
         (running t))
     (display-buffer buf clime-invoke-display-buffer-action)
     (while running
@@ -680,25 +684,29 @@ Returns the final params plist."
                  (let* ((child-name (cadr action))
                         (child-node (caddr action))
                         (child-path (append path (list child-name))))
-                   (setq params
-                         (clime-invoke--loop app child-node child-path params))))
+                   (let ((child-result
+                          (clime-invoke--loop app child-node child-path params)))
+                     (setq params (car child-result))
+                     (when-let ((child-output (cadr child-result)))
+                       ;; Propagate: close parent loop too, show output
+                       (setq last-output child-output
+                             running nil)))))
                 (:run
-                 (let* ((result (clime-invoke--run-handler app node path params))
-                        (exit-code (car result))
-                        (output (cdr result)))
+                 (let* ((run-result (clime-invoke--run-handler app node path params))
+                        (exit-code (car run-result))
+                        (cmd-output (cdr run-result)))
                    (if (zerop exit-code)
-                       (progn
-                         (setq running nil)
-                         (clime-invoke--display-output output exit-code))
+                       (setq running nil
+                             last-output (cons exit-code cmd-output))
                      (setq error-msg
                            (format "Exit %d: %s"
-                                   exit-code (string-trim output))))))
+                                   exit-code (string-trim cmd-output))))))
                 (_
                  (setq error-msg (format "Unknown action: %s" (car action)))))))))))
     ;; Re-display parent after returning from child
     (when (buffer-live-p buf)
       (display-buffer buf clime-invoke-display-buffer-action))
-    params))
+    (list params last-output)))
 
 ;;; ─── Public API ─────────────────────────────────────────────────────
 
@@ -736,13 +744,18 @@ PARAMS is an optional plist of initial param values."
           (push step nav-path)))
       (setq nav-path (nreverse nav-path)))
     ;; Enter the loop
-    (let ((final-params (clime-invoke--loop app node (or nav-path '())
-                                            (or params '()) t)))
-      ;; Clean up
+    (let* ((loop-result (clime-invoke--loop app node (or nav-path '())
+                                            (or params '()) t))
+           (final-params (car loop-result))
+           (last-output (cadr loop-result)))
+      ;; Clean up invoke buffer first
       (when-let ((buf (get-buffer clime-invoke--buffer-name)))
         (let ((win (get-buffer-window buf)))
           (when win (delete-window win)))
         (kill-buffer buf))
+      ;; Show output after invoke buffer is gone
+      (when last-output
+        (clime-invoke--display-output (cdr last-output) (car last-output)))
       final-params)))
 
 ;;;###autoload
