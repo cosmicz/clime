@@ -1131,5 +1131,146 @@
   "clime-argument has same indent as clime-arg (1)."
   (should (equal 1 (get 'clime-argument 'lisp-indent-function))))
 
+;;; ─── Alias Forms in Mutex/Zip ──────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/clime-opt-inside-mutex ()
+  "clime-opt (short alias) works inside clime-mutex."
+  (eval '(clime-app clime-test--alias-opt-mutex
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-mutex fmt
+               (clime-opt json ("--json") :bool)
+               (clime-opt csv ("--csv") :bool))
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--alias-opt-mutex)))))
+    (should (clime-node-find-option cmd "--json"))
+    (should (clime-node-find-option cmd "--csv"))))
+
+(ert-deftest clime-test-dsl/clime-opt-inside-zip ()
+  "clime-opt (short alias) works inside clime-zip."
+  (eval '(clime-app clime-test--alias-opt-zip
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-zip sr
+               (clime-opt skip ("--skip"))
+               (clime-opt reason ("--reason")))
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--alias-opt-zip)))))
+    (should (clime-node-find-option cmd "--skip"))
+    (should (clime-node-find-option cmd "--reason"))))
+
+(ert-deftest clime-test-dsl/mutex-alias-identical-to-canonical ()
+  "clime-mutex with clime-opt produces same options as clime-option."
+  (eval '(clime-app clime-test--mutex-via-opt
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-mutex fmt
+               (clime-opt json ("--json") :bool)
+               (clime-opt csv ("--csv") :bool))
+             (clime-handler (ctx) nil)))
+        t)
+  (eval '(clime-app clime-test--mutex-via-option
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-mutex fmt
+               (clime-option json ("--json") :bool)
+               (clime-option csv ("--csv") :bool))
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd-opt (cdr (car (clime-app-children clime-test--mutex-via-opt))))
+         (cmd-option (cdr (car (clime-app-children clime-test--mutex-via-option)))))
+    (should (equal (clime-command-options cmd-opt)
+                   (clime-command-options cmd-option)))))
+
+(ert-deftest clime-test-dsl/zip-alias-identical-to-canonical ()
+  "clime-zip with clime-opt produces same options as clime-option."
+  (eval '(clime-app clime-test--zip-via-opt
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-zip sr
+               (clime-opt skip ("--skip"))
+               (clime-opt reason ("--reason")))
+             (clime-handler (ctx) nil)))
+        t)
+  (eval '(clime-app clime-test--zip-via-option
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-zip sr
+               (clime-option skip ("--skip"))
+               (clime-option reason ("--reason")))
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd-opt (cdr (car (clime-app-children clime-test--zip-via-opt))))
+         (cmd-option (cdr (car (clime-app-children clime-test--zip-via-option)))))
+    (should (equal (clime-command-options cmd-opt)
+                   (clime-command-options cmd-option)))))
+
+;;; ─── Alias Forms in Group Bodies ───────────────────────────────────────
+
+(ert-deftest clime-test-dsl/clime-opt-inside-group ()
+  "clime-opt works inside a clime-group body."
+  (eval '(clime-app clime-test--alias-opt-grp
+           :version "1"
+           (clime-group config
+             :help "Config"
+             (clime-opt scope ("--scope") :default "local")
+             (clime-argument profile :help "Profile name")
+             (clime-command list
+               :help "List"
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((grp (cdr (assoc "config" (clime-group-children clime-test--alias-opt-grp)))))
+    (should (= (length (clime-group-options grp)) 1))
+    (should (= (length (clime-group-args grp)) 1))
+    (should (eq (clime-option-name (car (clime-group-options grp))) 'scope))
+    (should (eq (clime-arg-name (car (clime-group-args grp))) 'profile))))
+
+;;; ─── Template (:from) Inside Mutex/Zip ─────────────────────────────────
+
+(ert-deftest clime-test-dsl/from-option-inside-mutex ()
+  "clime-opt with :from template works inside clime-mutex."
+  (eval '(progn
+           (clime-defopt test-mutex-tmpl :bool :help "A format flag")
+           (clime-app clime-test--from-mutex
+             :version "1"
+             (clime-command run
+               :help "Run"
+               (clime-mutex fmt
+                 (clime-opt json ("--json") :from test-mutex-tmpl)
+                 (clime-opt csv ("--csv") :from test-mutex-tmpl))
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--from-mutex)))))
+    (should (clime-node-find-option cmd "--json"))
+    (should (clime-node-find-option cmd "--csv"))
+    (should (clime-option-boolean-p (clime-node-find-option cmd "--json")))))
+
+(ert-deftest clime-test-dsl/from-option-inside-zip ()
+  "clime-opt with :from template works inside clime-zip."
+  (eval '(progn
+           (clime-defopt test-zip-tmpl :type 'string :help "A value")
+           (clime-app clime-test--from-zip
+             :version "1"
+             (clime-command run
+               :help "Run"
+               (clime-zip sr
+                 (clime-opt skip ("--skip") :from test-zip-tmpl)
+                 (clime-opt reason ("--reason") :from test-zip-tmpl))
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--from-zip)))))
+    (should (clime-node-find-option cmd "--skip"))
+    (should (clime-node-find-option cmd "--reason"))
+    ;; Zip auto-sets :multiple
+    (should (clime-option-multiple (clime-node-find-option cmd "--skip")))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

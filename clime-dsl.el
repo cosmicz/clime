@@ -53,19 +53,40 @@ Resolves :doc as an alias for :help (error if both are present)."
       (cl-remf keywords :doc))
     (cons keywords (nreverse rest))))
 
+(defun clime--expanded-constructor (form)
+  "Return the constructor symbol from an expanded DSL FORM.
+Handles direct calls like (clime-make-option ...),
+`apply' wrappers like (apply #\\='clime-make-option ...),
+`cons' wrappers like (cons NAME (clime-make-command ...)),
+and `function' wrappers like #\\='(lambda ...)."
+  (pcase form
+    (`(apply ,(or `(function ,fn) `(quote ,fn)) . ,_) fn)
+    (`(function (lambda . ,_)) 'lambda)
+    (`(cons ,_ ,inner) (clime--expanded-constructor inner))
+    (`(,head . ,_) head)
+    (_ nil)))
+
+(defconst clime--constructor-category
+  '((clime-make-option        . :options)
+    (clime-make-arg            . :args)
+    (clime-make-command        . :children)
+    (clime-alias--create       . :children)
+    (clime-make-group          . :children)
+    (clime-make-output-format  . :output-formats)
+    (lambda                    . :handler))
+  "Map from expanded constructor symbol to `clime--classify-body' category.")
+
 (defun clime--classify-body (forms)
   "Classify FORMS into options, args, children, and handler.
-Returns a plist (:options :args :children :handler)."
+Returns a plist (:options :args :children :handler).
+Resolves DSL aliases via `macroexpand' and classifies by the
+constructor symbol in the expanded form."
   (let (options args children output-formats conform-fns handler)
     (dolist (form forms)
       (when (consp form)
         (pcase (car form)
-          ((or 'clime-option 'clime-opt) (push (clime--build-option (cdr form)) options))
-          ((or 'clime-arg 'clime-argument) (push (clime--build-arg (cdr form)) args))
-          ('clime-command (push (clime--build-command (cdr form)) children))
-          ('clime-alias-for (push (clime--build-alias-for (cdr form)) children))
-          ('clime-group (push (clime--build-group (cdr form)) children))
-          ('clime-output-format (push (clime--build-output-format (cdr form)) output-formats))
+          ;; Mutex/zip: structural forms with no aliases; their expansion
+          ;; is not constructor-based, so handle directly.
           ('clime-mutex
            (let ((result (clime--build-mutex-conform (cdr form))))
              (dolist (opt (plist-get result :options))
@@ -76,8 +97,19 @@ Returns a plist (:options :args :children :handler)."
              (dolist (opt (plist-get result :options))
                (push opt options))
              (push (plist-get result :conform) conform-fns)))
-          ('clime-handler (setq handler (clime--build-handler (cdr form))))
-          (_ (error "Unknown DSL form: %S" (car form))))))
+          ;; All other forms: macroexpand to resolve aliases, then
+          ;; classify by the constructor in the expanded form.
+          (_
+           (let* ((expanded (macroexpand form))
+                  (ctor (clime--expanded-constructor expanded))
+                  (category (cdr (assq ctor clime--constructor-category))))
+             (pcase category
+               (:options        (push expanded options))
+               (:args           (push expanded args))
+               (:children       (push expanded children))
+               (:output-formats (push expanded output-formats))
+               (:handler        (setq handler expanded))
+               (_               (error "Unknown DSL form: %S" (car form)))))))))
     (list :options (nreverse options)
           :args (nreverse args)
           :children (nreverse children)
@@ -283,10 +315,22 @@ ARGS is (NAME FLAGS &rest PLIST)."
          (plist (clime--normalize-bare-booleans (cddr args) clime--boolean-keywords)))
     `(clime-make-output-format :name ',name :flags ',flags ,@plist)))
 
+(defun clime--expanded-option-plist (expanded)
+  "Return the keyword plist from EXPANDED option constructor form.
+For direct calls like (clime-make-option :name \\='x :flags \\='(...) ...),
+returns the plist portion.  For `apply' (template) forms like
+\(apply #\\='clime-make-option (clime--merge-template TMPL :name \\='x ...)),
+extracts the trailing keywords from the merge-template call."
+  (pcase expanded
+    (`(clime-make-option . ,plist) plist)
+    (`(apply ,_ (clime--merge-template ,_ . ,plist)) plist)
+    (_ nil)))
+
 (defun clime--build-mutex-conform (args)
   "Build an exclusive group from DSL ARGS.
 ARGS is (NAME &rest BODY) where BODY contains keyword args and
-clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
+clime-option forms.  Returns a plist (:conform FORM :options FORMS).
+Resolves DSL aliases via `macroexpand'."
   (let* ((name (car args))
          (extracted (clime--extract-keywords
                      (cdr args)
@@ -299,34 +343,35 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
          (member-names '()))
     (dolist (form body-forms)
       (when (consp form)
-        (pcase (car form)
-          ((or 'clime-option 'clime-opt)
-           (push (cadr form) member-names)
-           (push (clime--build-option (cdr form))
-                 option-forms))
-          (_ (error "clime-mutex %s: only clime-opt forms allowed, got %S"
-                    name (car form))))))
+        (let* ((expanded (macroexpand form))
+               (ctor (clime--expanded-constructor expanded)))
+          (if (eq ctor 'clime-make-option)
+              (let ((plist (clime--expanded-option-plist expanded)))
+                (push (cadr (plist-get plist :name)) member-names)
+                (push expanded option-forms))
+            (error "clime-mutex %s: only option forms allowed, got %S"
+                   name (car form))))))
     (setq member-names (nreverse member-names))
     (when (and required default)
       (display-warning 'clime
         (format "clime-mutex `%s': :default is vacuous when :required is set"
                 name)))
     (when required
-      (dolist (form body-forms)
-        (when (and (consp form) (memq (car form) '(clime-option clime-opt)))
-          (let ((opt-plist (cddr form)))
-            (when (plist-get opt-plist :default)
-              (display-warning 'clime
-                (format "clime-mutex `%s': option `%s' has :default, \
+      (dolist (opt-form (reverse option-forms))
+        (let ((plist (clime--expanded-option-plist opt-form)))
+          (when (and plist (plist-get plist :default))
+            (display-warning 'clime
+              (format "clime-mutex `%s': option `%s' has :default, \
 which is vacuous — defaults apply after exclusivity check"
-                        name (cadr form))))))))
+                      name (cadr (plist-get plist :name))))))))
     (list :conform `(clime-check-exclusive ',name ',member-names ,default ,required)
           :options (nreverse option-forms))))
 
 (defun clime--build-zip-conform (args)
   "Build a paired group from DSL ARGS.
 ARGS is (NAME &rest BODY) where BODY contains keyword args and
-clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
+clime-option forms.  Returns a plist (:conform FORM :options FORMS).
+Resolves DSL aliases via `macroexpand'."
   (let* ((name (car args))
          (extracted (clime--extract-keywords
                      (cdr args)
@@ -337,24 +382,28 @@ clime-option forms.  Returns a plist (:conform FORM :options FORMS)."
          (member-names '()))
     (dolist (form body-forms)
       (when (consp form)
-        (pcase (car form)
-          ((or 'clime-option 'clime-opt)
-           (push (cadr form) member-names)
-           (push (clime--build-option
-                  (append (cdr form) (list :multiple t)))
-                 option-forms))
-          (_ (error "clime-zip %s: only clime-opt forms allowed, got %S"
-                    name (car form))))))
+        (let* ((expanded (macroexpand form))
+               (ctor (clime--expanded-constructor expanded)))
+          (if (eq ctor 'clime-make-option)
+              (let* ((plist (clime--expanded-option-plist expanded))
+                     (opt-name (cadr (plist-get plist :name))))
+                (push opt-name member-names)
+                ;; Zip options are implicitly :multiple — inject into form
+                ;; before macroexpanding, so the builder sees it.
+                (let ((multi-expanded
+                       (macroexpand (append form (list :multiple t)))))
+                  (push multi-expanded option-forms)))
+            (error "clime-zip %s: only option forms allowed, got %S"
+                   name (car form))))))
     (setq member-names (nreverse member-names))
     (when required
-      (dolist (form body-forms)
-        (when (and (consp form) (memq (car form) '(clime-option clime-opt)))
-          (let ((opt-plist (cddr form)))
-            (when (plist-get opt-plist :default)
-              (display-warning 'clime
-                (format "clime-zip `%s': option `%s' has :default, \
+      (dolist (opt-form (reverse option-forms))
+        (let ((plist (clime--expanded-option-plist opt-form)))
+          (when (and plist (plist-get plist :default))
+            (display-warning 'clime
+              (format "clime-zip `%s': option `%s' has :default, \
 which is vacuous — defaults apply after paired check"
-                        name (cadr form))))))))
+                      name (cadr (plist-get plist :name))))))))
     (list :conform `(clime-check-paired ',name ',member-names ,required)
           :options (nreverse option-forms))))
 
