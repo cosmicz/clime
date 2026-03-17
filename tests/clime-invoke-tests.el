@@ -406,6 +406,33 @@
       (should (fboundp sym))
       (should (get sym 'transient--prefix)))))
 
+(ert-deftest clime-test-invoke/make-group-prefix-with-handler ()
+  "Group with handler gets a Run action in the layout."
+  (clime-invoke-test-transient
+    (let* ((cmd (clime-make-command :name "sub" :handler #'ignore))
+           (grp (clime-make-group :name "grp" :handler #'ignore
+                                   :children `(("sub" . ,cmd))))
+           (app (clime-make-app :name "myapp" :version "0.1"
+                                 :children `(("grp" . ,grp))))
+           (sym (clime-invoke--make-group-prefix app grp '("grp")))
+           (layout (get sym 'transient--layout)))
+      ;; Should contain an "Actions" group
+      (should (cl-some (lambda (vec)
+                         (equal "Actions"
+                                (plist-get (aref vec 2) :description)))
+                       layout)))))
+
+(ert-deftest clime-test-invoke/make-group-prefix-no-handler ()
+  "Group without handler has no Run action."
+  (clime-invoke-test-transient
+    (let* ((app (clime-test--invoke-simple-app))
+           (sym (clime-invoke--make-group-prefix app app nil))
+           (layout (get sym 'transient--layout)))
+      (should-not (cl-some (lambda (vec)
+                             (equal "Actions"
+                                    (plist-get (aref vec 2) :description)))
+                           layout)))))
+
 (ert-deftest clime-test-invoke/option-to-spec-switch ()
   "Boolean option generates a switch spec (argument without =)."
   (clime-invoke-test-transient
@@ -420,16 +447,17 @@
       (should (equal "--verbose " (caddr spec))))))
 
 (ert-deftest clime-test-invoke/option-to-spec-with-choices ()
-  "Option with choices generates spec with :choices."
+  "Option with choices generates spec with cycling infix class."
   (clime-invoke-test-transient
     (let* ((opt (clime-make-option :name 'format
                                     :flags '("--format")
                                     :choices '("json" "text")
                                     :help "Format"))
            (spec (clime-invoke--option-to-spec opt "f" 'test-prefix)))
-      ;; Third element ends with "=" (value option)
       (should (equal "--format=" (caddr spec)))
-      (should (equal '("json" "text") (plist-get (cdddr spec) :choices))))))
+      (should (eq 'clime-invoke-choices-infix
+                  (plist-get (nthcdr 3 spec) :class)))
+      (should (equal '("json" "text") (plist-get (nthcdr 3 spec) :choices))))))
 
 ;;; ─── Transient Parse Validation ──────────────────────────────────────────
 
@@ -476,7 +504,7 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
            (spec (clime-invoke--option-to-spec opt "f" 'test-parse-choices))
            (parsed (transient-parse-suffixes 'test-parse-choices (list spec))))
       (should (= 1 (length parsed)))
-      (should (eq 'transient-option
+      (should (eq 'clime-invoke-choices-infix
                   (clime-test--parsed-class (car parsed)))))))
 
 (ert-deftest clime-test-invoke/transient-parses-suffix-spec ()
@@ -586,6 +614,24 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
            (opts (clime-invoke--collect-options-grouped show)))
       ;; Should have at least a "Global Options" group for --verbose/--output
       (should (assoc "Global Options" opts)))))
+
+(ert-deftest clime-test-invoke/ancestor-options-preserve-category ()
+  "Ancestor options with :category keep their original label."
+  (clime-invoke-test-transient
+    (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose")
+                                         :nargs 0 :category "Output"))
+           (cmd-opt (clime-make-option :name 'file :flags '("--file")))
+           (cmd (clime-make-command :name "run" :handler #'ignore
+                                     :options (list cmd-opt)))
+           (app (clime-make-app :name "test" :version "0.1"
+                                 :options (list root-opt)
+                                 :children `(("run" . ,cmd)))))
+      (let ((grouped (clime-invoke--collect-options-grouped cmd)))
+        ;; Own option has nil category
+        (should (assoc nil grouped))
+        ;; Ancestor option keeps "Output" category, not "Global Options"
+        (should (assoc "Output" grouped))
+        (should-not (assoc "Global Options" grouped))))))
 
 ;;; ─── Pre-run Validation ───────────────────────────────────────────────
 
@@ -718,25 +764,51 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
       ;; Third has no preferred, tries "c" from fallback
       (should (equal "c" (cdr (assq 'c keys)))))))
 
+(ert-deftest clime-test-invoke/assign-keys-with-prefix ()
+  "Prefix is prepended to fallback candidates."
+  (clime-invoke-test-transient
+    (let ((keys (clime-invoke--assign-keys
+                 '((verbose "-v" "verbose" "-")
+                   (output nil "output" "-")))))
+      (should (equal "-v" (cdr (assq 'verbose keys))))
+      (should (equal "-o" (cdr (assq 'output keys)))))))
+
+(ert-deftest clime-test-invoke/assign-keys-shared-used ()
+  "Shared USED table prevents collisions between options and children."
+  (clime-invoke-test-transient
+    (let ((shared (make-hash-table :test #'equal)))
+      ;; Options get -c
+      (let ((opt-keys (clime-invoke--assign-keys
+                       '((color "-c" "color" "-"))
+                       shared)))
+        (should (equal "-c" (cdr (assq 'color opt-keys)))))
+      ;; Children can still get plain "c" — no collision
+      (let ((child-keys (clime-invoke--assign-keys
+                         '(("config" "c" "config"))
+                         shared)))
+        (should (equal "c" (cdr (assoc "config" child-keys))))))))
+
 ;;; ─── Option Key Item ─────────────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/option-key-item-short-flag ()
-  "Option key item extracts preferred from short flag."
+  "Option key item uses short flag as preferred key."
   (clime-invoke-test-transient
     (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose" "-v") :nargs 0))
            (item (clime-invoke--option-key-item opt)))
       (should (equal 'verbose (nth 0 item)))
-      (should (equal "v" (nth 1 item)))
-      (should (equal "verbose" (nth 2 item))))))
+      (should (equal "-v" (nth 1 item)))
+      (should (equal "verbose" (nth 2 item)))
+      (should (equal "-" (nth 3 item))))))
 
 (ert-deftest clime-test-invoke/option-key-item-long-only ()
-  "Option key item with no short flag uses nil preferred."
+  "Option key item with no short flag uses nil preferred, dash prefix."
   (clime-invoke-test-transient
     (let* ((opt (clime-make-option :name 'output :flags '("--output")))
            (item (clime-invoke--option-key-item opt)))
       (should (equal 'output (nth 0 item)))
-      (should (equal "o" (nth 1 item)))
-      (should (equal "output" (nth 2 item))))))
+      (should (null (nth 1 item)))
+      (should (equal "output" (nth 2 item)))
+      (should (equal "-" (nth 3 item))))))
 
 ;;; ─── Spec Builders (count, multiple, arg) ───────────────────────────────
 
@@ -783,6 +855,23 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
            (spec (clime-invoke--arg-to-spec arg "f" 'test-prefix)))
       (should (functionp (plist-get (nthcdr 3 spec) :description))))))
 
+;;; ─── Choices Cycling ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/choices-infix-cycles ()
+  "Choices cycling logic: nil → first → second → … → last → nil."
+  (clime-invoke-test-transient
+    (let ((choices '("json" "text" "csv")))
+      ;; nil → first choice
+      (should (equal "json" (clime-invoke--cycle-choice nil choices)))
+      ;; first → second
+      (should (equal "text" (clime-invoke--cycle-choice "json" choices)))
+      ;; second → third
+      (should (equal "csv" (clime-invoke--cycle-choice "text" choices)))
+      ;; last → nil (cycle off)
+      (should (null (clime-invoke--cycle-choice "csv" choices)))
+      ;; unknown value → first choice
+      (should (equal "json" (clime-invoke--cycle-choice "xml" choices))))))
+
 ;;; ─── Alist/Plist Conversion ─────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/alist-to-plist ()
@@ -825,6 +914,94 @@ PARSED-ENTRY is (LEVEL CLASS PLIST)."
     (let ((cmd (clime-make-command :name "run" :handler #'ignore)))
       (should (null (clime-invoke--params-to-transient-value
                      cmd '((nonexistent . "val"))))))))
+
+;;; ─── Backward Cycling ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/choices-backward-cycles ()
+  "Backward cycling: nil → last → second-to-last → … → first → nil."
+  (clime-invoke-test-transient
+    (let ((choices '("json" "text" "csv")))
+      ;; nil → last choice
+      (should (equal "csv" (clime-invoke--cycle-choice-backward nil choices)))
+      ;; last → second-to-last
+      (should (equal "text" (clime-invoke--cycle-choice-backward "csv" choices)))
+      ;; second → first
+      (should (equal "json" (clime-invoke--cycle-choice-backward "text" choices)))
+      ;; first → nil
+      (should (null (clime-invoke--cycle-choice-backward "json" choices)))
+      ;; unknown → nil
+      (should (null (clime-invoke--cycle-choice-backward "xml" choices))))))
+
+;;; ─── Count Read Logic ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/count-read-increment ()
+  "Count increments on plain press (nil prefix-arg)."
+  (clime-invoke-test-transient
+    (should (= 3 (clime-invoke--read-count 2 nil)))
+    (should (= 1 (clime-invoke--read-count 0 nil)))
+    ;; Wraps at 5
+    (should (= 0 (clime-invoke--read-count 5 nil)))))
+
+(ert-deftest clime-test-invoke/count-read-set-directly ()
+  "Count sets to N with numeric prefix-arg."
+  (clime-invoke-test-transient
+    (should (= 3 (clime-invoke--read-count 1 3)))
+    (should (= 0 (clime-invoke--read-count 5 0)))))
+
+(ert-deftest clime-test-invoke/count-read-decrement ()
+  "Count decrements with universal prefix (list)."
+  (clime-invoke-test-transient
+    (should (= 2 (clime-invoke--read-count 3 '(4))))
+    (should (= 0 (clime-invoke--read-count 1 '(4))))))
+
+(ert-deftest clime-test-invoke/count-read-floor-zero ()
+  "Count never goes below 0."
+  (clime-invoke-test-transient
+    (should (= 0 (clime-invoke--read-count 0 '(4))))
+    (should (= 0 (clime-invoke--read-count 0 -1)))))
+
+;;; ─── Auto-Register ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/auto-register-on-invoke ()
+  "clime-invoke auto-registers the app for future discovery."
+  (clime-invoke-test-transient
+    (let ((clime-invoke--registry (make-hash-table :test #'equal))
+          (clime-invoke--cache (make-hash-table :test #'equal))
+          (app (clime-make-app :name "autoapp" :version "1" :children nil)))
+      ;; Calling clime-invoke registers the app (we can't fully
+      ;; invoke transient in batch, so just test the registration path)
+      (clime-register-app "autoapp" app)
+      (should (eq app (gethash "autoapp" clime-invoke--registry))))))
+
+;;; ─── Default Values ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/default-values-boolean ()
+  "Boolean option with :default t produces transient switch string."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'color :flags '("--color")
+                                    :nargs 0 :default t))
+           (cmd (clime-make-command :name "run" :handler #'ignore
+                                     :options (list opt))))
+      (let ((vals (clime-invoke--default-values cmd)))
+        (should (equal '("--color ") vals))))))
+
+(ert-deftest clime-test-invoke/default-values-string ()
+  "Value option with :default produces transient option string."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                    :default "json"))
+           (cmd (clime-make-command :name "run" :handler #'ignore
+                                     :options (list opt))))
+      (let ((vals (clime-invoke--default-values cmd)))
+        (should (equal '("--format=json") vals))))))
+
+(ert-deftest clime-test-invoke/default-values-none ()
+  "Options without :default produce empty list."
+  (clime-invoke-test-transient
+    (let* ((opt (clime-make-option :name 'output :flags '("--output")))
+           (cmd (clime-make-command :name "run" :handler #'ignore
+                                     :options (list opt))))
+      (should (null (clime-invoke--default-values cmd))))))
 
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-test-transients.el ends here

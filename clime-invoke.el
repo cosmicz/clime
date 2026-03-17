@@ -23,6 +23,20 @@
 (require 'clime-run)
 (require 'transient)
 
+;;; ─── Customization ────────────────────────────────────────────────────
+
+(defcustom clime-invoke-display-buffer-action
+  '(display-buffer-in-side-window
+    (side . bottom)
+    (dedicated . t)
+    (inhibit-same-window . t))
+  "Display buffer action for the transient popup window.
+Controls where the transient menu appears.  Set to nil to use
+transient's default behavior."
+  :type '(choice (const :tag "Default (transient manages)" nil)
+                 (sexp :tag "Custom display-buffer action"))
+  :group 'clime)
+
 ;;; ─── Internal State ────────────────────────────────────────────────────
 
 (defvar clime-invoke--cache (make-hash-table :test #'equal)
@@ -60,10 +74,18 @@ NAME is a string.  APP is a `clime-app' struct."
   "Initialize count to 0."
   (oset obj value 0))
 
+(defun clime-invoke--read-count (n prefix-arg)
+  "Compute next count value from current N and PREFIX-ARG.
+nil → increment (wraps at 5).  Integer → set directly.  Other → decrement."
+  (cond
+   ((integerp prefix-arg) (max 0 prefix-arg))
+   (prefix-arg (max 0 (1- n)))
+   (t (if (>= n 5) 0 (1+ n)))))
+
 (cl-defmethod transient-infix-read ((obj clime-invoke-count-infix))
-  "Increment the count, cycling back to 0 after 5."
-  (let ((n (or (oref obj value) 0)))
-    (if (>= n 5) 0 (1+ n))))
+  "Read count value.
+Plain press increments.  C-u decrements.  C-u N sets to N."
+  (clime-invoke--read-count (or (oref obj value) 0) current-prefix-arg))
 
 (cl-defmethod transient-format-value ((obj clime-invoke-count-infix))
   "Display the count."
@@ -113,6 +135,53 @@ NAME is a string.  APP is a `clime-app' struct."
     (when values
       (mapcar (lambda (v) (concat arg v)) values))))
 
+(defclass clime-invoke-choices-infix (transient-option)
+  ((choices :initarg :choices))
+  "Infix for options with :choices.  Key press cycles; C-u for completing-read.")
+
+(defun clime-invoke--cycle-choice (current choices)
+  "Return the next choice after CURRENT in CHOICES, cycling to nil after last.
+Returns the first choice when CURRENT is nil or not in CHOICES."
+  (let ((tail (and current (cdr (member current choices)))))
+    (cond
+     (tail (car tail))
+     ;; Current is last choice → cycle off
+     ((and current (member current choices)) nil)
+     ;; No current or not in choices → first choice
+     (t (car choices)))))
+
+(defun clime-invoke--cycle-choice-backward (current choices)
+  "Return the previous choice before CURRENT in CHOICES.
+Cycles: nil → last, first → nil."
+  (cond
+   ((null current) (car (last choices)))
+   (t (let ((pos (cl-position current choices :test #'equal)))
+        (cond
+         ((or (null pos) (= pos 0)) nil)
+         (t (nth (1- pos) choices)))))))
+
+(cl-defmethod transient-infix-read ((obj clime-invoke-choices-infix))
+  "Read choice value.
+Plain press cycles forward.  C-u opens completing-read.
+Negative prefix (C-- or C-u -1) cycles backward."
+  (let ((choices (oref obj choices)))
+    (cond
+     ;; Negative prefix → cycle backward
+     ((and (integerp current-prefix-arg) (< current-prefix-arg 0))
+      (clime-invoke--cycle-choice-backward (oref obj value) choices))
+     ;; Any other prefix → completing-read
+     (current-prefix-arg
+      (completing-read "Value: " choices nil t))
+     ;; Plain press → cycle forward
+     (t (clime-invoke--cycle-choice (oref obj value) choices)))))
+
+(cl-defmethod transient-format-value ((obj clime-invoke-choices-infix))
+  "Display current choice or unset."
+  (let ((value (oref obj value)))
+    (if value
+        (propertize value 'face 'transient-value)
+      (propertize "unset" 'face 'transient-inactive-value))))
+
 ;;; ─── Pure Helpers ──────────────────────────────────────────────────────
 
 (defun clime-invoke--preferred-key (option)
@@ -132,44 +201,57 @@ the first letter of the long flag (e.g. \"--output\" → \"o\")."
 
 (defun clime-invoke--option-key-item (option)
   "Build an assign-keys item for OPTION.
-Returns (NAME PREFERRED FALLBACK-STRING)."
-  (let* ((preferred (clime-invoke--preferred-key option))
+Returns (NAME PREFERRED FALLBACK-STRING PREFIX).
+Options use their short flag (e.g. \"-v\") as the preferred key and
+\"-\" as a prefix for fallback candidates, avoiding collisions with
+child command keys which use plain letters."
+  (let* ((short-flag (cl-loop for flag in (clime-option-flags option)
+                              when (and (= (length flag) 2)
+                                        (string-prefix-p "-" flag)
+                                        (not (string-prefix-p "--" flag)))
+                              return flag))
          (long-flag (cl-find-if (lambda (f) (string-prefix-p "--" f))
                                 (clime-option-flags option)))
          (fallback (and long-flag (substring long-flag 2))))
-    (list (clime-option-name option) preferred fallback)))
+    (list (clime-option-name option) short-flag fallback "-")))
 
-(defun clime-invoke--assign-keys (items)
+(defun clime-invoke--assign-keys (items &optional used)
   "Assign unique transient keys to ITEMS.
-Each element of ITEMS is (NAME PREFERRED FALLBACK-STRING) where:
+Each element of ITEMS is (NAME PREFERRED FALLBACK-STRING &optional PREFIX)
+where:
   NAME identifies the item (symbol or string),
-  PREFERRED is the preferred single-char key string (or nil),
-  FALLBACK-STRING is a string whose characters are tried in order.
+  PREFERRED is the preferred key string (or nil),
+  FALLBACK-STRING is a string whose characters are tried in order,
+  PREFIX is prepended to each fallback candidate (default \"\").
+USED, when non-nil, is a pre-populated hash table of taken keys.
 Return an alist of (NAME . KEY-STRING)."
-  (let ((used (make-hash-table :test #'equal))
+  (let ((used (or used (make-hash-table :test #'equal)))
         (result '()))
     (dolist (item items)
       (let* ((name (nth 0 item))
              (preferred (nth 1 item))
              (fallback (nth 2 item))
+             (prefix (or (nth 3 item) ""))
              (key nil))
         ;; Try preferred key
         (when (and preferred (not (gethash preferred used)))
           (setq key preferred))
-        ;; Try letters from fallback string
+        ;; Try prefix + letters from fallback string
         (unless key
           (when fallback
             (cl-loop for i from 0 below (length fallback)
                      for ch = (substring fallback i (1+ i))
+                     for candidate = (concat prefix ch)
                      when (and (string-match-p "[a-z]" ch)
-                               (not (gethash ch used)))
-                     return (setq key ch))))
-        ;; Last resort: first unused a-z
+                               (not (gethash candidate used)))
+                     return (setq key candidate))))
+        ;; Last resort: prefix + first unused a-z
         (unless key
           (cl-loop for code from ?a to ?z
                    for ch = (char-to-string code)
-                   when (not (gethash ch used))
-                   return (setq key ch)))
+                   for candidate = (concat prefix ch)
+                   when (not (gethash candidate used))
+                   return (setq key candidate)))
         (when key
           (puthash key t used)
           (push (cons name key) result))))
@@ -244,11 +326,16 @@ Returns an alist of (CATEGORY . OPTIONS-LIST)."
           (push opt ancestor-opts))))
     ;; Group own opts by their category
     (let ((result (clime-invoke--group-by-category (nreverse own-opts))))
-      ;; Add ancestor opts under "Global Options"
+      ;; Group ancestor opts by category too; nil-category → "Global Options"
       (when ancestor-opts
-        (setq result (append result
-                             (list (cons "Global Options"
-                                         (nreverse ancestor-opts))))))
+        (let ((ancestor-grouped (clime-invoke--group-by-category
+                                 (nreverse ancestor-opts))))
+          (setq result
+                (append result
+                        (mapcar (lambda (entry)
+                                  (cons (or (car entry) "Global Options")
+                                        (cdr entry)))
+                                ancestor-grouped)))))
       result)))
 
 (defun clime-invoke--visible-children (group)
@@ -383,10 +470,11 @@ Returns a shorthand spec list consumable by `transient-parse-suffixes'."
                                     (clime-option-choices option))))))
         `(,key ,help-str ,(concat primary-flag "=")
                :class clime-invoke-multi-infix ,@extra ,@desc-kw)))
-     ;; Option with choices
+     ;; Option with choices → cycling infix (C-u for completing-read)
      ((clime-option-choices option)
       (let ((choices (clime--resolve-value (clime-option-choices option))))
         `(,key ,help-str ,(concat primary-flag "=")
+               :class clime-invoke-choices-infix
                :choices ,choices ,@desc-kw)))
      ;; Plain value option
      (t
@@ -627,11 +715,12 @@ APP is the root `clime-app'.  Returns the prefix symbol."
                          (clime-invoke--make-arg-layout
                           prefix-sym (clime-node-args command))))
     ;; Run action (stays in transient on failure)
-    (setq layout (append layout
-                         (list (clime-invoke--make-group-vector
-                                prefix-sym "Actions"
-                                `(("RET" "Run" ,run-sym
-                                         :transient t))))))
+    (let ((run-desc (format "Run %s" (string-join path " "))))
+      (setq layout (append layout
+                           (list (clime-invoke--make-group-vector
+                                  prefix-sym "Actions"
+                                  `(("RET" ,run-desc ,run-sym
+                                           :transient t)))))))
     (clime-invoke--register-prefix prefix-sym command path layout)))
 
 (defun clime-invoke--make-group-prefix (app group path)
@@ -640,20 +729,24 @@ APP is the root `clime-app'.  Returns the prefix symbol.
 Shows options (own + ancestor) alongside child navigation."
   (let* ((prefix-sym (clime-invoke--prefix-symbol
                       (clime-node-name app) path))
-         ;; Options (own + ancestor)
+         ;; Shared key table prevents option/child collisions
+         (shared-used (make-hash-table :test #'equal))
+         ;; Options (own + ancestor) — assigned first with "-" prefix keys
          (grouped (clime-invoke--collect-options-grouped group))
          (all-opts (mapcan (lambda (entry) (copy-sequence (cdr entry))) grouped))
          (key-map (clime-invoke--assign-keys
-                   (mapcar #'clime-invoke--option-key-item all-opts)))
+                   (mapcar #'clime-invoke--option-key-item all-opts)
+                   shared-used))
          (opt-layout (clime-invoke--make-option-layout
                       prefix-sym grouped key-map))
-         ;; Children
+         ;; Children — assigned second, avoiding option keys
          (children (clime-invoke--visible-children group))
          (child-keys (clime-invoke--assign-keys
                       (mapcar (lambda (entry)
                                 (let ((name (car entry)))
                                   (list name (substring name 0 1) name)))
-                              children)))
+                              children)
+                      shared-used))
          (child-specs '())
          (layout '()))
     ;; Header
@@ -684,22 +777,61 @@ Shows options (own + ancestor) alongside child navigation."
                            (list (clime-invoke--make-group-vector
                                   prefix-sym "Commands"
                                   (nreverse child-specs))))))
+    ;; Run action for groups with handlers
+    (when (clime-node-handler group)
+      (let* ((run-sym (clime-invoke--make-run-action app group path prefix-sym))
+             (run-desc (format "Run %s"
+                               (or (and path (string-join path " "))
+                                   (clime-node-name group)))))
+        (setq layout (append layout
+                             (list (clime-invoke--make-group-vector
+                                    prefix-sym "Actions"
+                                    `(("RET" ,run-desc ,run-sym
+                                             :transient t))))))))
     (clime-invoke--register-prefix prefix-sym group path layout)))
+
+(defun clime-invoke--default-values (node)
+  "Compute transient value strings for options with :default on NODE.
+Returns a list of strings like (\"--flag \" \"--opt=val\")."
+  (let ((result '()))
+    (dolist (opt (clime-invoke--collect-options node))
+      (let ((default (clime-option-default opt)))
+        (when default
+          (let ((flag (car (clime-option-flags opt)))
+                (val (clime--resolve-value default)))
+            (cond
+             ((clime-option-boolean-p opt)
+              (when val (push (concat flag " ") result)))
+             (t
+              (push (concat flag "="
+                            (if (stringp val) val (format "%s" val)))
+                    result)))))))
+    (nreverse result)))
 
 (defun clime-invoke--register-prefix (prefix-sym node path layout)
   "Register PREFIX-SYM as a transient prefix with LAYOUT.
 NODE is the clime node.  PATH is the command path list."
   (defalias prefix-sym
-    (lambda () (interactive) (transient-setup prefix-sym)))
+    (lambda () (interactive)
+      ;; Inherit ancestor option values from parent transient
+      (when transient--prefix
+        (let ((parent-args (transient-args (oref transient--prefix command))))
+          (when parent-args
+            (oset (get prefix-sym 'transient--prefix) value parent-args))))
+      (transient-setup prefix-sym)))
   (put prefix-sym 'interactive-only t)
   (put prefix-sym 'function-documentation
        (format "Invoke: %s"
                (string-join (cons (clime-node-name node) (or path '())) " ")))
   (let* ((incompatible (clime-invoke--extract-incompatible node))
+         (defaults (clime-invoke--default-values node))
          (prefix-obj (apply #'transient-prefix
                             :command prefix-sym
-                            (when incompatible
-                              (list :incompatible incompatible)))))
+                            (append
+                             (when incompatible
+                               (list :incompatible incompatible))
+                             (when defaults
+                               (list :value defaults))))))
     (put prefix-sym 'transient--prefix prefix-obj))
   (put prefix-sym 'transient--layout layout)
   prefix-sym)
@@ -741,6 +873,9 @@ APP is a `clime-app' struct, or nil to select from registered apps.
 PATH is an optional list of strings naming a node to navigate to.
 PARAMS is an optional alist of (NAME . VALUE) to pre-populate infixes."
   (interactive (list nil))
+  ;; Auto-register for future interactive discovery
+  (when app
+    (clime-register-app (clime-node-name app) app))
   ;; Resolve app from registry when nil
   (unless app
     (let ((keys (clime-invoke--registry-keys)))
@@ -772,7 +907,10 @@ PARAMS is an optional alist of (NAME . VALUE) to pre-populate infixes."
         (let ((prefix-obj (get prefix-sym 'transient--prefix)))
           (oset prefix-obj value
                 (clime-invoke--params-to-transient-value node params))))
-      (transient-setup prefix-sym))))
+      (let ((transient-display-buffer-action
+             (or clime-invoke-display-buffer-action
+                 transient-display-buffer-action)))
+        (transient-setup prefix-sym)))))
 
 ;;;###autoload
 (defun clime-invoke-command (app command-path)
