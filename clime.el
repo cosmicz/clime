@@ -71,9 +71,6 @@ Reloads modules in dependency order to avoid stale definitions."
         (let ((file (locate-library (symbol-name mod))))
           (when file
             (load file nil t t))))))
-  ;; Clear invoke cache so regenerated prefixes use fresh code
-  (when (boundp 'clime-invoke--cache)
-    (clrhash clime-invoke--cache))
   (message "Reloaded %d clime modules" (length clime--modules)))
 
 (provide 'clime)
