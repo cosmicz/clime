@@ -444,6 +444,98 @@
     (let ((p (clime-invoke--handle-option opt '(color "--no-color"))))
       (should-not (plist-member p 'color)))))
 
+;;; ─── Handle Option Direct ────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/direct-choices-completing-read ()
+  "Direct input on choices option uses completing-read."
+  (let ((opt (clime-make-option :name 'format :flags '("--format")
+                                 :choices '("json" "text" "csv"))))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt coll &rest _) (car (last coll)))))
+      (let ((p (clime-invoke--handle-option-direct opt nil)))
+        (should (equal "csv" (plist-get p 'format)))))))
+
+(ert-deftest clime-test-invoke/direct-choices-empty-clears ()
+  "Direct input on choices with empty string clears value."
+  (let ((opt (clime-make-option :name 'format :flags '("--format")
+                                 :choices '("json" "text"))))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt _coll &rest _) "")))
+      (let ((p (clime-invoke--handle-option-direct opt '(format "json"))))
+        (should-not (plist-member p 'format))))))
+
+(ert-deftest clime-test-invoke/direct-count-sets-value ()
+  "Direct input on count option sets specific number."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v")
+                                 :nargs 0 :count t)))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &rest _) "3")))
+      (let ((p (clime-invoke--handle-option-direct opt nil)))
+        (should (= 3 (plist-get p 'verbose)))))))
+
+(ert-deftest clime-test-invoke/direct-count-zero-clears ()
+  "Direct input on count with 0 clears value."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v")
+                                 :nargs 0 :count t)))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &rest _) "0")))
+      (let ((p (clime-invoke--handle-option-direct opt '(verbose 3))))
+        (should-not (plist-member p 'verbose))))))
+
+(ert-deftest clime-test-invoke/direct-count-invalid-errors ()
+  "Direct input on count with non-numeric input signals error."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v")
+                                 :nargs 0 :count t)))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &rest _) "abc")))
+      (should-error (clime-invoke--handle-option-direct opt nil)))))
+
+(ert-deftest clime-test-invoke/direct-boolean-delegates ()
+  "Direct input on boolean delegates to cycling handler."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0)))
+    (let ((p (clime-invoke--handle-option-direct opt nil)))
+      (should (eq t (plist-get p 'verbose))))))
+
+(ert-deftest clime-test-invoke/direct-negatable-delegates ()
+  "Direct input on negatable delegates to cycling handler."
+  (let ((opt (clime-make-option :name 'color :flags '("--color")
+                                 :negatable t)))
+    (let ((p (clime-invoke--handle-option-direct opt nil)))
+      (should (equal "--color" (plist-get p 'color))))))
+
+(ert-deftest clime-test-invoke/direct-count-negative-errors ()
+  "Direct input on count rejects negative numbers."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v")
+                                 :nargs 0 :count t)))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &rest _) "-1")))
+      (should-error (clime-invoke--handle-option-direct opt nil)))))
+
+(ert-deftest clime-test-invoke/direct-count-over-max-errors ()
+  "Direct input on count rejects values > 5."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v")
+                                 :nargs 0 :count t)))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &rest _) "6")))
+      (should-error (clime-invoke--handle-option-direct opt nil)))))
+
+(ert-deftest clime-test-invoke/direct-multiple-delegates ()
+  "Direct input on multiple option delegates to cycling handler."
+  (let ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :multiple t)))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &rest _) "foo")))
+      (let ((p (clime-invoke--handle-option-direct opt nil)))
+        (should (equal '("foo") (plist-get p 'tag)))))))
+
+(ert-deftest clime-test-invoke/direct-plain-delegates ()
+  "Direct input on plain value option delegates to cycling handler."
+  (let ((opt (clime-make-option :name 'output :flags '("--output"))))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &rest _) "/tmp/out")))
+      (let ((p (clime-invoke--handle-option-direct opt nil)))
+        (should (equal "/tmp/out" (plist-get p 'output)))))))
+
 ;;; ─── Format Value ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/format-value-boolean ()

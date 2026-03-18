@@ -571,6 +571,38 @@ Returns the updated params plist."
         (clime-invoke--plist-remove params name)
       (plist-put params name val))))
 
+(defun clime-invoke--handle-option-direct (option params)
+  "Handle direct-input interaction for OPTION, updating PARAMS.
+Unlike cycling, this prompts the user for an explicit value.
+Returns the updated params plist."
+  (let* ((name (clime-option-name option))
+         (current (plist-get params name)))
+    (cond
+     ;; Choices: completing-read
+     ((clime-option-choices option)
+      (let* ((choices (clime--resolve-value (clime-option-choices option)))
+             (val (completing-read
+                   (format "%s: " (or (clime-option-help option) (symbol-name name)))
+                   choices nil t (and current (format "%s" current)))))
+        (if (string-empty-p val)
+            (clime-invoke--plist-remove params name)
+          (plist-put params name val))))
+     ;; Count: prompt for number
+     ((clime-option-count option)
+      (let* ((prompt (format "%s (0-5, current %s): "
+                             (or (clime-option-help option) (symbol-name name))
+                             (or current 0)))
+             (input (read-string prompt))
+             (n (and (string-match-p "\\`[0-9]+\\'" input)
+                     (string-to-number input))))
+        (unless (and n (<= 0 n) (<= n 5))
+          (error "Invalid count: %s (expected 0-5)" input))
+        (if (zerop n)
+            (clime-invoke--plist-remove params name)
+          (plist-put params name n))))
+     ;; Boolean/negatable/plain: delegate to cycling handler
+     (t (clime-invoke--handle-option option params)))))
+
 ;;; ─── Run Handler ────────────────────────────────────────────────────
 ;;;
 
@@ -675,12 +707,23 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
           (setq running nil))
          ;; Help
          ((equal key "?")
-          (setq error-msg
-                (format "Keys: %s"
-                        (mapconcat (lambda (e) (car e)) key-map ", "))))
+          (let ((has-options (cl-some (lambda (e) (eq (cadr e) :option))
+                                     key-map)))
+            (setq error-msg
+                  (format "Keys: %s%s"
+                          (mapconcat (lambda (e) (car e)) key-map ", ")
+                          (if has-options
+                              "  (=X for direct input)"
+                            "")))))
          ;; Dispatch from key-map
          (t
           (let ((action (cdr (assoc key key-map))))
+            ;; "= X" direct-input: look up corresponding "- X" option
+            (when (and (null action) (string-prefix-p "= " key))
+              (let* ((opt-key (concat "- " (substring key 2)))
+                     (opt-action (cdr (assoc opt-key key-map))))
+                (when (and opt-action (eq (car opt-action) :option))
+                  (setq action (list :option-direct (cadr opt-action))))))
             (if (null action)
                 (setq error-msg (format "Unknown key: %s" key))
               (pcase (car action)
@@ -688,6 +731,13 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
                  (let ((opt (cadr action)))
                    (condition-case err
                        (setq params (clime-invoke--handle-option opt params))
+                     (quit nil)
+                     (error
+                      (setq error-msg (error-message-string err))))))
+                (:option-direct
+                 (let ((opt (cadr action)))
+                   (condition-case err
+                       (setq params (clime-invoke--handle-option-direct opt params))
                      (quit nil)
                      (error
                       (setq error-msg (error-message-string err))))))
