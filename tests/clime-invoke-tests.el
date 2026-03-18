@@ -568,11 +568,273 @@
     (should (string-match-p "auto" (clime-invoke--format-value opt nil)))))
 
 (ert-deftest clime-test-invoke/format-value-choices ()
-  "Choices show selected value or unset."
+  "Choices show all options inline; selected highlighted."
   (let ((opt (clime-make-option :name 'format :flags '("--format")
                                  :choices '("json" "text"))))
-    (should (string-match-p "json" (clime-invoke--format-value opt '(format "json"))))
-    (should (string-match-p "unset" (clime-invoke--format-value opt nil)))))
+    (let ((with-val (clime-invoke--format-value opt '(format "json")))
+          (without (clime-invoke--format-value opt nil)))
+      ;; Both cases show all choices
+      (should (string-match-p "json" with-val))
+      (should (string-match-p "text" with-val))
+      (should (string-match-p "json" without))
+      (should (string-match-p "text" without)))))
+
+(ert-deftest clime-test-invoke/format-value-choices-inline ()
+  "Choices displayed inline with all options visible."
+  (let ((opt (clime-make-option :name 'format :flags '("--format")
+                                 :choices '("json" "text" "csv"))))
+    (let ((val-str (clime-invoke--format-value opt '(format "json"))))
+      ;; All choices appear
+      (should (string-match-p "json" val-str))
+      (should (string-match-p "text" val-str))
+      (should (string-match-p "csv" val-str)))))
+
+(ert-deftest clime-test-invoke/format-value-choices-default-parens ()
+  "Default value in choices list shown in parens."
+  (let ((opt (clime-make-option :name 'format :flags '("--format")
+                                 :choices '("json" "text" "csv")
+                                 :default "text")))
+    (let ((val-str (clime-invoke--format-value opt nil)))
+      ;; Default shown in parens, not highlighted
+      (should (string-match-p "(text)" val-str)))))
+
+(ert-deftest clime-test-invoke/format-value-default-no-choices ()
+  "Default value without choices shown in parens."
+  (let ((opt (clime-make-option :name 'limit :flags '("--limit")
+                                 :default "10")))
+    (let ((val-str (clime-invoke--format-value opt nil)))
+      (should (string-match-p "(10)" val-str)))))
+
+(ert-deftest clime-test-invoke/format-value-explicit-has-active-face ()
+  "Explicitly set value has clime-invoke-active face."
+  (let ((opt (clime-make-option :name 'limit :flags '("--limit"))))
+    (let ((val-str (clime-invoke--format-value opt '(limit "20"))))
+      (should (string-match-p "20" val-str))
+      ;; Check the face property
+      (let ((pos (string-match "20" val-str)))
+        (should (eq 'clime-invoke-active
+                    (get-text-property pos 'face val-str)))))))
+
+(ert-deftest clime-test-invoke/format-value-default-no-active-face ()
+  "Default value does NOT have clime-invoke-active face."
+  (let ((opt (clime-make-option :name 'limit :flags '("--limit")
+                                 :default "10")))
+    (let ((val-str (clime-invoke--format-value opt nil)))
+      (let ((pos (string-match "10" val-str)))
+        (should-not (eq 'clime-invoke-active
+                        (get-text-property pos 'face val-str)))))))
+
+(ert-deftest clime-test-invoke/format-value-choices-truncated ()
+  "Large choices list truncated around selected value."
+  (let ((opt (clime-make-option :name 'color :flags '("--color")
+                                 :choices '("red" "orange" "yellow" "green"
+                                            "blue" "indigo" "violet"))))
+    (let ((val-str (clime-invoke--format-value opt '(color "blue"))))
+      ;; Selected value visible
+      (should (string-match-p "blue" val-str))
+      ;; Ellipsis indicates truncation
+      (should (string-match-p "\\.\\.\\." val-str)))))
+
+(ert-deftest clime-test-invoke/format-value-choices-no-value-no-default ()
+  "Choices with no value and no default shows all unhighlighted."
+  (let ((opt (clime-make-option :name 'format :flags '("--format")
+                                 :choices '("json" "text"))))
+    (let ((val-str (clime-invoke--format-value opt nil)))
+      (should (string-match-p "json" val-str))
+      (should (string-match-p "text" val-str))
+      ;; No active face on either
+      (let ((pos (string-match "json" val-str)))
+        (should-not (eq 'clime-invoke-active
+                        (get-text-property pos 'face val-str)))))))
+
+(ert-deftest clime-test-invoke/format-value-choices-five-no-truncation ()
+  "Exactly 5 choices: no truncation."
+  (let ((opt (clime-make-option :name 'c :flags '("--c")
+                                 :choices '("a" "b" "c" "d" "e"))))
+    (let ((val-str (clime-invoke--format-value opt '(c "c"))))
+      (should (string-match-p "a" val-str))
+      (should (string-match-p "e" val-str))
+      (should-not (string-match-p "\\.\\.\\." val-str)))))
+
+(ert-deftest clime-test-invoke/format-desc-arg ()
+  "Format-desc works for args (not just options)."
+  (let ((arg (clime-make-arg :name 'file :help "File path")))
+    (let ((desc (clime-invoke--format-desc arg nil)))
+      (should (string-match-p "File path" desc)))))
+
+(ert-deftest clime-test-invoke/format-desc-arg-required ()
+  "Format-desc shows required annotation for unset required arg."
+  (let ((arg (clime-make-arg :name 'file :help "File path")))
+    (let ((desc (clime-invoke--format-desc arg nil)))
+      (should (string-match-p "(required)" desc)))))
+
+(ert-deftest clime-test-invoke/header-root-no-version ()
+  "Root without version shows name only."
+  (let* ((app (clime-make-app :name "myapp" :children nil))
+         (content (clime-invoke--render-to-string app nil nil nil t)))
+    (should (string-match-p "myapp" content))))
+
+;;; ─── Format Desc ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/format-desc-help-and-long-flag ()
+  "Desc column shows help text with long flag in parens."
+  (let ((opt (clime-make-option :name 'verbose :flags '("--verbose" "-v")
+                                 :nargs 0 :help "Be verbose")))
+    (let ((desc (clime-invoke--format-desc opt nil)))
+      (should (string-match-p "Be verbose" desc))
+      (should (string-match-p "(--verbose)" desc)))))
+
+(ert-deftest clime-test-invoke/format-desc-no-help ()
+  "Desc column shows long flag when no help text."
+  (let ((opt (clime-make-option :name 'limit :flags '("--limit"))))
+    (let ((desc (clime-invoke--format-desc opt nil)))
+      (should (string-match-p "--limit" desc)))))
+
+(ert-deftest clime-test-invoke/format-desc-required ()
+  "Desc column shows required annotation."
+  (let ((opt (clime-make-option :name 'output :flags '("--output")
+                                 :required t :help "Output file")))
+    (let ((desc (clime-invoke--format-desc opt nil)))
+      (should (string-match-p "(required)" desc)))))
+
+(ert-deftest clime-test-invoke/format-desc-deprecated ()
+  "Desc column shows deprecated annotation."
+  (let ((opt (clime-make-option :name 'old :flags '("--old")
+                                 :deprecated t :help "Old option")))
+    (let ((desc (clime-invoke--format-desc opt nil)))
+      (should (string-match-p "(deprecated)" desc)))))
+
+(ert-deftest clime-test-invoke/format-desc-type-hint ()
+  "Desc column shows type hint for non-string types."
+  (let ((opt (clime-make-option :name 'count :flags '("--count")
+                                 :type 'integer :help "Count")))
+    (let ((desc (clime-invoke--format-desc opt nil)))
+      (should (string-match-p "(integer)" desc)))))
+
+(ert-deftest clime-test-invoke/format-desc-multi-hint ()
+  "Desc column shows multi hint for multiple options."
+  (let ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :multiple t :help "Tags")))
+    (let ((desc (clime-invoke--format-desc opt nil)))
+      (should (string-match-p "(multi)" desc)))))
+
+;;; ─── Format Env ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/format-env-with-value ()
+  "Env column shows var name and resolved value."
+  (let ((opt (clime-make-option :name 'home :flags '("--home")
+                                 :env "HOME")))
+    (let ((env-str (clime-invoke--format-env opt nil)))
+      (should (string-match-p "\\$HOME=" env-str))
+      ;; Should have a resolved value (HOME is always set)
+      (should (string-match-p "\\$HOME=/" env-str)))))
+
+(ert-deftest clime-test-invoke/format-env-empty ()
+  "Env column shows just var name when env is unset."
+  (let ((opt (clime-make-option :name 'foo :flags '("--foo")
+                                 :env "CLIME_TEST_NONEXISTENT_VAR_XYZ")))
+    (let ((env-str (clime-invoke--format-env opt nil)))
+      (should (string-match-p "\\$CLIME_TEST_NONEXISTENT_VAR_XYZ" env-str))
+      (should-not (string-match-p "=" env-str)))))
+
+(ert-deftest clime-test-invoke/format-env-active-source ()
+  "Env value highlighted when it's the active source."
+  (let ((opt (clime-make-option :name 'home :flags '("--home")
+                                 :env "HOME")))
+    ;; No explicit value set — env is the active source
+    (let ((env-str (clime-invoke--format-env opt nil)))
+      (let ((eq-pos (string-match "=." env-str)))
+        (when eq-pos
+          (should (eq 'clime-invoke-active
+                      (get-text-property (1+ eq-pos) 'face env-str))))))))
+
+(ert-deftest clime-test-invoke/format-env-not-active-when-explicit ()
+  "Env value NOT highlighted when explicit value is set."
+  (let ((opt (clime-make-option :name 'home :flags '("--home")
+                                 :env "HOME")))
+    ;; Explicit value set — env is not the active source
+    (let ((env-str (clime-invoke--format-env opt '(home "/custom"))))
+      (let ((eq-pos (string-match "=." env-str)))
+        (when eq-pos
+          (should-not (eq 'clime-invoke-active
+                          (get-text-property (1+ eq-pos) 'face env-str))))))))
+
+(ert-deftest clime-test-invoke/format-env-nil-when-no-env ()
+  "No env column when option has no :env slot."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0)))
+    (should (null (clime-invoke--format-env opt nil)))))
+
+;;; ─── Breadcrumb Header ─────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/header-root-shows-name-version ()
+  "Root node header shows app name and version."
+  (let* ((app (clime-make-app :name "myapp" :version "1.2.3"
+                               :help "My app" :children nil))
+         (content (clime-invoke--render-to-string app nil nil nil t)))
+    (should (string-match-p "myapp" content))
+    (should (string-match-p "1\\.2\\.3" content))))
+
+(ert-deftest clime-test-invoke/header-breadcrumb-path ()
+  "Nested node header shows breadcrumb path."
+  (let* ((cmd (clime-make-command :name "show" :help "Show resource"
+                                   :handler #'ignore))
+         (grp (clime-make-group :name "admin" :help "Admin commands"
+                                 :children `(("show" . ,cmd))))
+         (app (clime-make-app :name "myapp" :version "1.0"
+                               :children `(("admin" . ,grp))))
+         (content (clime-invoke--render-to-string cmd nil nil nil)))
+    (should (string-match-p "myapp" content))
+    (should (string-match-p "admin" content))
+    (should (string-match-p "show" content))
+    (should (string-match-p "Show resource" content))))
+
+;;; ─── Actions Footer ────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/actions-section ()
+  "Actions section groups RET and q on the same or adjacent lines."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (content (clime-invoke--render-to-string cmd nil nil nil t)))
+    (should (string-match-p "Actions" content))
+    (should (string-match-p "RET" content))
+    (should (string-match-p "Run" content))
+    (should (string-match-p "Quit" content))))
+
+;;; ─── Key Faces ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/render-option-key-face ()
+  "Option keys use clime-invoke-option-key face."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0
+                                  :help "Be verbose"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (content (clime-invoke--render-to-string cmd nil nil nil)))
+    (let ((pos (string-match "-v" content)))
+      (should pos)
+      (should (eq 'clime-invoke-option-key
+                  (get-text-property pos 'face content))))))
+
+(ert-deftest clime-test-invoke/render-command-key-face ()
+  "Command keys use clime-invoke-command-key face."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                   :help "Show"))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("show" . ,cmd))))
+         (content (clime-invoke--render-to-string app nil nil nil)))
+    ;; Find "s" after "Commands" heading to avoid matching header text
+    (let* ((cmds-pos (string-match "Commands" content))
+           (pos (and cmds-pos (string-match "\\bs\\b" content (1+ cmds-pos)))))
+      (should pos)
+      (should (eq 'clime-invoke-command-key
+                  (get-text-property pos 'face content))))))
+
+(ert-deftest clime-test-invoke/render-action-key-face ()
+  "Action keys (RET, q) use clime-invoke-action-key face."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (content (clime-invoke--render-to-string cmd nil nil nil t)))
+    (let ((pos (string-match "RET" content)))
+      (should pos)
+      (should (eq 'clime-invoke-action-key
+                  (get-text-property pos 'face content))))))
 
 ;;; ─── Visible Children ───────────────────────────────────────────────
 
@@ -609,13 +871,17 @@
          (content (clime-invoke--render-to-string cmd nil nil nil)))
     (should (string-match-p "(required)" content))))
 
-(ert-deftest clime-test-invoke/render-no-required-when-set ()
-  "Required marker hidden when arg has a value."
+(ert-deftest clime-test-invoke/render-required-dimmed-when-set ()
+  "Required marker stays visible but dimmed when arg has a value."
   (let* ((arg (clime-make-arg :name 'file :help "File path"))
          (cmd (clime-make-command :name "run" :handler #'ignore
                                    :args (list arg)))
          (content (clime-invoke--render-to-string cmd '(file "test.txt") nil nil)))
-    (should-not (string-match-p "(required)" content))))
+    ;; Still shows (required) text
+    (should (string-match-p "(required)" content))
+    ;; But in shadow face, not warning
+    (let ((pos (string-match "(required)" content)))
+      (should (eq 'shadow (get-text-property pos 'face content))))))
 
 (ert-deftest clime-test-invoke/render-quit-at-root ()
   "Root shows 'Quit', non-root shows 'Return'."
