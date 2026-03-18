@@ -986,5 +986,219 @@
          (result (clime-invoke--run-handler app cmd '("run") nil)))
     (should (= 1 (car result)))))
 
+;;; ─── Validation Tests ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/validate-param-valid-string ()
+  "Valid string value returns nil."
+  (let ((opt (clime-make-option :name 'name :flags '("--name"))))
+    (should-not (clime-invoke--validate-param opt '(name "hello")))))
+
+(ert-deftest clime-test-invoke/validate-param-valid-integer ()
+  "Valid integer string returns nil."
+  (let ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer)))
+    (should-not (clime-invoke--validate-param opt '(count "42")))))
+
+(ert-deftest clime-test-invoke/validate-param-invalid-integer ()
+  "Non-numeric string for integer type returns error string."
+  (let ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer)))
+    (should (stringp (clime-invoke--validate-param opt '(count "abc"))))))
+
+(ert-deftest clime-test-invoke/validate-param-valid-choice ()
+  "Value matching choices returns nil."
+  (let ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                :choices '("json" "text"))))
+    (should-not (clime-invoke--validate-param opt '(fmt "json")))))
+
+(ert-deftest clime-test-invoke/validate-param-invalid-choice ()
+  "Value not in choices returns error string."
+  (let ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                :choices '("json" "text"))))
+    (should (stringp (clime-invoke--validate-param opt '(fmt "xml"))))))
+
+(ert-deftest clime-test-invoke/validate-param-unset-skipped ()
+  "Unset param returns nil (no validation)."
+  (let ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer)))
+    (should-not (clime-invoke--validate-param opt '()))))
+
+(ert-deftest clime-test-invoke/validate-param-non-string-skipped ()
+  "Non-string value (e.g. boolean t) is not validated."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0)))
+    (should-not (clime-invoke--validate-param opt '(verbose t)))))
+
+(ert-deftest clime-test-invoke/validate-param-dynamic-choices ()
+  "Dynamic choice function is resolved and validated."
+  (let ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                :choices (lambda () '("json" "text")))))
+    (should-not (clime-invoke--validate-param opt '(fmt "json")))
+    (should (stringp (clime-invoke--validate-param opt '(fmt "xml"))))))
+
+(ert-deftest clime-test-invoke/run-conformer-checks-pass ()
+  "Conformers that pass return nil."
+  (let* ((conform (lambda (_params _node) nil))
+         (cmd (clime-make-command :name "test" :handler #'ignore :conform (list conform))))
+    (should-not (clime-invoke--run-conformer-checks cmd '()))))
+
+(ert-deftest clime-test-invoke/run-conformer-checks-single-fn ()
+  "Single conformer function (not wrapped in list) works."
+  (let* ((conform (lambda (_params _node)
+                    (signal 'clime-usage-error '("single fn error"))))
+         (cmd (clime-make-command :name "test" :handler #'ignore :conform conform)))
+    (should (equal '("single fn error")
+                   (clime-invoke--run-conformer-checks cmd '())))))
+
+(ert-deftest clime-test-invoke/run-conformer-checks-fail ()
+  "Conformer signaling usage-error returns error strings."
+  (let* ((conform (lambda (_params _node)
+                    (signal 'clime-usage-error '("mutex violated"))))
+         (cmd (clime-make-command :name "test" :handler #'ignore :conform (list conform))))
+    (should (equal '("mutex violated")
+                   (clime-invoke--run-conformer-checks cmd '())))))
+
+(ert-deftest clime-test-invoke/run-conformer-checks-copies-params ()
+  "Conformers receive a copy; original params are not mutated."
+  (let* ((original '(foo "bar"))
+         (conform (lambda (params _node)
+                    (plist-put params 'foo "mutated")))
+         (cmd (clime-make-command :name "test" :handler #'ignore :conform (list conform))))
+    (clime-invoke--run-conformer-checks cmd original)
+    (should (equal "bar" (plist-get original 'foo)))))
+
+(ert-deftest clime-test-invoke/validate-all-no-errors ()
+  "Clean params produce empty error lists."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                 :choices '("json" "text")))
+         (cmd (clime-make-command :name "test" :handler #'ignore :options (list opt))))
+    (let ((result (clime-invoke--validate-all cmd '(fmt "json"))))
+      (should-not (car result))
+      (should-not (cdr result)))))
+
+(ert-deftest clime-test-invoke/validate-all-param-error ()
+  "Invalid param value appears in param-errors alist."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer))
+         (cmd (clime-make-command :name "test" :handler #'ignore :options (list opt))))
+    (let ((result (clime-invoke--validate-all cmd '(count "abc"))))
+      (should (assq 'count (car result)))
+      (should (stringp (cdr (assq 'count (car result))))))))
+
+(ert-deftest clime-test-invoke/validate-all-conformer-error ()
+  "Conformer error appears in general-errors."
+  (let* ((conform (lambda (_params _node)
+                    (signal 'clime-usage-error '("bad combo"))))
+         (cmd (clime-make-command :name "test" :handler #'ignore :conform (list conform))))
+    (let ((result (clime-invoke--validate-all cmd '())))
+      (should (member "bad combo" (cdr result))))))
+
+(ert-deftest clime-test-invoke/validate-all-requires-error ()
+  "Unmet requires constraint appears in general-errors."
+  (let* ((opt-a (clime-make-option :name 'key :flags '("--key")))
+         (opt-b (clime-make-option :name 'cert :flags '("--cert")
+                                   :requires '(key)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt-a opt-b))))
+    (let ((result (clime-invoke--validate-all cmd '(cert "foo"))))
+      (should (cl-some (lambda (e) (string-match-p "requires" e))
+                       (cdr result))))))
+
+;; Render with validation errors
+
+(ert-deftest clime-test-invoke/render-param-error-inline ()
+  "Param validation error shows inline with arrow marker."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count" "-c")
+                                 :type 'integer))
+         (cmd (clime-make-command :name "test" :handler #'ignore :options (list opt)))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("test" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         (validation '(((count . "invalid integer")) . nil))
+         (content (clime-invoke--render-to-string
+                   cmd '(count "abc") nil nil nil validation)))
+    (should (string-match-p "← invalid integer" content))))
+
+(ert-deftest clime-test-invoke/render-general-error-in-header ()
+  "General validation errors appear in the error area."
+  (let* ((cmd (clime-make-command :name "test" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("test" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         (validation '(nil . ("mutex violated")))
+         (content (clime-invoke--render-to-string
+                   cmd '() nil nil nil validation)))
+    (should (string-match-p "mutex violated" content))))
+
+(ert-deftest clime-test-invoke/render-no-validation-no-errors ()
+  "Without validation-result, no error markers appear."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count" "-c")
+                                 :type 'integer))
+         (cmd (clime-make-command :name "test" :handler #'ignore :options (list opt)))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("test" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         (content (clime-invoke--render-to-string
+                   cmd '(count "abc") nil nil nil nil)))
+    (should-not (string-match-p "←" content))))
+
+(ert-deftest clime-test-invoke/render-combined-errors ()
+  "Both user error-msg and general validation errors merge."
+  (let* ((cmd (clime-make-command :name "test" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("test" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         (validation '(nil . ("req unmet")))
+         (content (clime-invoke--render-to-string
+                   cmd '() nil "user error" nil validation)))
+    (should (string-match-p "user error" content))
+    (should (string-match-p "req unmet" content))))
+
+(ert-deftest clime-test-invoke/validate-param-arg-invalid ()
+  "Arg with type constraint returns error for invalid value."
+  (let ((arg (clime-make-arg :name 'port :type 'integer)))
+    (should (stringp (clime-invoke--validate-param arg '(port "abc"))))))
+
+(ert-deftest clime-test-invoke/validate-param-arg-choices ()
+  "Arg with choices validates against them."
+  (let ((arg (clime-make-arg :name 'env :choices '("dev" "prod"))))
+    (should-not (clime-invoke--validate-param arg '(env "dev")))
+    (should (stringp (clime-invoke--validate-param arg '(env "staging"))))))
+
+(ert-deftest clime-test-invoke/validate-all-ancestor-options ()
+  "Ancestor option errors are included in param-errors."
+  (let* ((parent-opt (clime-make-option :name 'port :flags '("--port")
+                                        :type 'integer))
+         (cmd (clime-make-command :name "serve" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :options (list parent-opt)
+                              :children `(("serve" . ,cmd)))))
+    (setf (clime-node-parent cmd) app)
+    (let ((result (clime-invoke--validate-all cmd '(port "abc"))))
+      (should (assq 'port (car result))))))
+
+(ert-deftest clime-test-invoke/validate-all-empty-node ()
+  "Node with no options, args, or conformers returns empty results."
+  (let ((cmd (clime-make-command :name "test" :handler #'ignore)))
+    (let ((result (clime-invoke--validate-all cmd '())))
+      (should-not (car result))
+      (should-not (cdr result)))))
+
+(ert-deftest clime-test-invoke/validate-all-multiple-conformer-errors ()
+  "Multiple conformers each contribute their own errors."
+  (let* ((c1 (lambda (_p _n) (signal 'clime-usage-error '("error one"))))
+         (c2 (lambda (_p _n) (signal 'clime-usage-error '("error two"))))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :conform (list c1 c2))))
+    (let ((result (clime-invoke--validate-all cmd '())))
+      (should (member "error one" (cdr result)))
+      (should (member "error two" (cdr result))))))
+
+(ert-deftest clime-test-invoke/validate-all-mixed-errors ()
+  "Both param-errors and general-errors can coexist."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer))
+         (conform (lambda (_p _n) (signal 'clime-usage-error '("bad state"))))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt)
+                                  :conform (list conform))))
+    (let ((result (clime-invoke--validate-all cmd '(count "abc"))))
+      (should (assq 'count (car result)))
+      (should (member "bad state" (cdr result))))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here

@@ -927,5 +927,41 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
     (should (string-match-p "Installing foo" (cdr result)))
     (should (string-match-p "tags=dev" (cdr result)))))
 
+(ert-deftest clime-test-integration/pkm-invalid-sort-choice ()
+  "pkm list --sort with invalid choice reports a usage error."
+  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+         (result (clime-test--run-script pkm '("list" "--sort" "invalid"))))
+    (should (= 2 (car result)))
+    (should (string-match-p "Invalid value" (cdr result)))))
+
+(ert-deftest clime-test-integration/pkm-mutex-table-csv ()
+  "pkm list --table --csv reports mutual exclusion error."
+  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+         (result (clime-test--run-script pkm '("list" "--table" "--csv"))))
+    (should (= 2 (car result)))
+    (should (string-match-p "mutually exclusive\\|cannot be used together\\|only one"
+                            (cdr result)))))
+
+(ert-deftest clime-test-integration/pkm-missing-required-arg ()
+  "pkm install without package name reports a usage error."
+  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+         (result (clime-test--run-script pkm '("install"))))
+    (should (= 2 (car result)))
+    (should (string-match-p "required\\|missing" (cdr result)))))
+
+(ert-deftest clime-test-integration/pkm-valid-sort-choice ()
+  "pkm list --sort date succeeds."
+  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+         (result (clime-test--run-script pkm '("list" "--sort" "date"))))
+    (should (= 0 (car result)))
+    (should (string-match-p "sort=date" (cdr result)))))
+
+(ert-deftest clime-test-integration/pkm-negatable-color ()
+  "pkm list --no-color reports color=off."
+  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+         (result (clime-test--run-script pkm '("list" "--no-color"))))
+    (should (= 0 (car result)))
+    (should (string-match-p "color=nil" (cdr result)))))
+
 (provide 'clime-integration-tests)
 ;;; clime-integration-tests.el ends here
