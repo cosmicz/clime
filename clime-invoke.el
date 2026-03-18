@@ -83,6 +83,11 @@
   "Face for inline validation error text."
   :group 'clime)
 
+(defface clime-invoke-dimmed
+  '((t :inherit shadow))
+  "Face for inactive elements during prefix key input."
+  :group 'clime)
+
 
 
 ;;; ─── Customization ──────────────────────────────────────────────────
@@ -584,17 +589,20 @@ At root, shows appname vVERSION."
     (string-join (nreverse parts))))
 
 (defun clime-invoke--render-to-string (node params key-map error-msg
-                                      &optional at-root validation-result)
+                                      &optional at-root validation-result
+                                      prefix-state)
   "Render the menu for NODE with PARAMS, KEY-MAP, and ERROR-MSG.
 When KEY-MAP is nil, builds one automatically from NODE.
 AT-ROOT non-nil means this is the entry-point node (q exits entirely).
 VALIDATION-RESULT is (PARAM-ERRORS . GENERAL-ERRORS) from `clime-invoke--validate-all'.
+PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active.
 Uses 4-column layout: Key | Desc | Value | Env."
   (unless key-map
     (setq key-map (clime-invoke--build-key-map node)))
   (let ((lines '())
         (param-errors (car validation-result))
-        (general-errors (cdr validation-result)))
+        (general-errors (cdr validation-result))
+        (dimmed prefix-state))
     ;; Header (breadcrumb)
     (let ((header (clime-invoke--format-header node)))
       (unless (string-empty-p header)
@@ -631,22 +639,27 @@ Uses 4-column layout: Key | Desc | Value | Env."
                    (env-str (clime-invoke--format-env opt params))
                    (param-err (cdr (assq name param-errors))))
               (when key
-                (push (concat
-                       (format " %s %s  %s"
-                               (propertize (format "%3s" (clime-invoke--display-key key))
-                                           'face 'clime-invoke-option-key)
-                               (clime-invoke--pad-to desc 30)
-                               val-str)
-                       (when param-err
-                         (concat "  " (propertize (concat "← " param-err)
-                                                  'face 'clime-invoke-invalid)))
-                       (when env-str (concat "  " env-str)))
-                      lines))))
+                (let ((display-key (if prefix-state
+                                       (clime-invoke--prefix-display-key key prefix-state)
+                                     (clime-invoke--display-key key))))
+                  (push (concat
+                         (format " %s %s  %s"
+                                 (propertize (format "%3s" display-key)
+                                             'face 'clime-invoke-option-key)
+                                 (clime-invoke--pad-to desc 30)
+                                 val-str)
+                         (when param-err
+                           (concat "  " (propertize (concat "← " param-err)
+                                                    'face 'clime-invoke-invalid)))
+                         (when env-str (concat "  " env-str)))
+                        lines)))))
           (push "" lines))))
     ;; Positional args
     (let ((args (clime-node-args node)))
       (when args
-        (push (propertize "Arguments" 'face 'clime-invoke-heading) lines)
+        (push (propertize "Arguments" 'face (if dimmed 'clime-invoke-dimmed
+                                              'clime-invoke-heading))
+              lines)
         (dolist (arg args)
           (let* ((name (clime-arg-name arg))
                  (key (car (cl-find-if
@@ -663,7 +676,9 @@ Uses 4-column layout: Key | Desc | Value | Env."
             (when key
               (push (concat
                      (format " %s %s  %s"
-                             (propertize (format "%3s" key) 'face 'clime-invoke-arg-key)
+                             (propertize (format "%3s" key)
+                                         'face (if dimmed 'clime-invoke-dimmed
+                                                 'clime-invoke-arg-key))
                              (clime-invoke--pad-to desc 30)
                              val-str)
                      (when param-err
@@ -675,7 +690,9 @@ Uses 4-column layout: Key | Desc | Value | Env."
     (when (clime-group-p node)
       (let ((children (clime-invoke--visible-children node)))
         (when children
-          (push (propertize "Commands" 'face 'clime-invoke-heading) lines)
+          (push (propertize "Commands" 'face (if dimmed 'clime-invoke-dimmed
+                                               'clime-invoke-heading))
+                lines)
           (dolist (entry children)
             (let* ((name (car entry))
                    (child (cdr entry))
@@ -687,20 +704,25 @@ Uses 4-column layout: Key | Desc | Value | Env."
                    (help (or (clime-node-help child) name)))
               (when key
                 (push (format " %s %s"
-                              (propertize (format "%3s" key) 'face 'clime-invoke-command-key)
+                              (propertize (format "%3s" key)
+                                          'face (if dimmed 'clime-invoke-dimmed
+                                                  'clime-invoke-command-key))
                               help)
                       lines))))
           (push "" lines))))
     ;; Actions footer
-    (push (propertize "Actions" 'face 'clime-invoke-heading) lines)
-    (let ((actions '()))
+    (push (propertize "Actions" 'face (if dimmed 'clime-invoke-dimmed
+                                        'clime-invoke-heading))
+          lines)
+    (let ((actions '())
+          (act-face (if dimmed 'clime-invoke-dimmed 'clime-invoke-action-key)))
       (when (clime-node-handler node)
         (push (format "%s %s"
-                      (propertize "RET" 'face 'clime-invoke-action-key)
+                      (propertize "RET" 'face act-face)
                       "Run")
               actions))
       (push (format "%s %s"
-                    (propertize "q" 'face 'clime-invoke-action-key)
+                    (propertize "q" 'face act-face)
                     (if at-root "Quit" "Return"))
             actions)
       (push (concat " " (string-join (nreverse actions) "    ")) lines))
@@ -712,6 +734,13 @@ Uses 4-column layout: Key | Desc | Value | Env."
       (concat "-" (match-string 1 key))
     key))
 
+(defun clime-invoke--prefix-display-key (key prefix)
+  "Format option KEY with PREFIX for display during prefix state.
+Extracts the letter from \"- v\" and prepends PREFIX (e.g. \"=v\")."
+  (if (string-match "\\`- \\(.\\)\\'" key)
+      (concat prefix (match-string 1 key))
+    key))
+
 (defun clime-invoke--pad-to (str width)
   "Pad STR with spaces to WIDTH characters."
   (if (>= (length str) width)
@@ -719,14 +748,17 @@ Uses 4-column layout: Key | Desc | Value | Env."
     (concat str (make-string (- width (length str)) ?\s))))
 
 (defun clime-invoke--render (node params key-map error-msg buffer
-                            &optional at-root validation-result)
+                            &optional at-root validation-result
+                            prefix-state)
   "Render menu for NODE into BUFFER.
-VALIDATION-RESULT is (PARAM-ERRORS . GENERAL-ERRORS) or nil."
+VALIDATION-RESULT is (PARAM-ERRORS . GENERAL-ERRORS) or nil.
+PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active."
   (with-current-buffer buffer
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (clime-invoke--render-to-string
-               node params key-map error-msg at-root validation-result))
+               node params key-map error-msg at-root validation-result
+               prefix-state))
       (goto-char (point-min))))
   ;; Fit window to content
   (let ((win (get-buffer-window buffer)))
@@ -905,7 +937,7 @@ EXIT-CODE is shown in the mode-line."
 
 ;;; ─── Event Loop ─────────────────────────────────────────────────────
 
-(defvar clime-invoke-prefix-timeout 1.5
+(defvar clime-invoke-prefix-timeout 5
   "Seconds to wait for second key after a prefix key (- or =).")
 
 (defun clime-invoke--read-prefixed-key (prefix)
@@ -939,8 +971,17 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
       (let* ((ch (read-key))
              (key (key-description (vector ch)))
              (key (if (member key '("-" "="))
-                      (or (clime-invoke--read-prefixed-key key)
-                          :prefix-cancelled)
+                      (progn
+                        ;; Re-render with prefix state visible, show hint in echo area
+                        (clime-invoke--render node params key-map error-msg buf
+                                              at-root validation-result key)
+                        (message (if (equal key "-") "- cycle" "= direct"))
+                        (let ((ch2 (read-event nil nil clime-invoke-prefix-timeout)))
+                          (message nil)
+                          (cond
+                           ((null ch2) :prefix-cancelled)
+                           ((memq ch2 '(?\C-g 7)) :prefix-cancelled)
+                           (t (concat key " " (key-description (vector ch2)))))))
                     key)))
         (setq error-msg nil)
         (when (eq key :prefix-cancelled)

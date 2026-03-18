@@ -1200,5 +1200,113 @@
       (should (assq 'count (car result)))
       (should (member "bad state" (cdr result))))))
 
+;;; ─── Prefix State Rendering ─────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/render-prefix-dash-shows-dash-keys ()
+  "With prefix-state \"-\", option keys show as \"-X\"."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0
+                                  :help "Be verbose"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (content (clime-invoke--render-to-string cmd nil nil nil nil nil "-")))
+    (should (string-match-p "-v" content))))
+
+(ert-deftest clime-test-invoke/render-prefix-eq-shows-eq-keys ()
+  "With prefix-state \"=\", option keys show as \"=X\"."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0
+                                  :help "Be verbose"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (content (clime-invoke--render-to-string cmd nil nil nil nil nil "=")))
+    (should (string-match-p "=v" content))))
+
+(ert-deftest clime-test-invoke/render-prefix-dims-command-keys ()
+  "During prefix state, command keys are dimmed."
+  (let* ((child (clime-make-command :name "show" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("show" . ,child))))
+         (content (clime-invoke--render-to-string app nil nil nil nil nil "-")))
+    ;; Find "s" key after "Commands" heading
+    (let* ((cmds-pos (string-match "Commands" content))
+           (pos (and cmds-pos (string-match "\\bs\\b" content (1+ cmds-pos)))))
+      (should pos)
+      (should (eq 'clime-invoke-dimmed
+                  (get-text-property pos 'face content))))))
+
+(ert-deftest clime-test-invoke/render-prefix-dims-arg-keys ()
+  "During prefix state, arg keys are dimmed."
+  (let* ((arg (clime-make-arg :name 'file :help "Input file"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :args (list arg)))
+         (content (clime-invoke--render-to-string cmd nil nil nil nil nil "-")))
+    (let* ((args-pos (string-match "Arguments" content))
+           (pos (and args-pos (string-match "\\bf\\b" content (1+ args-pos)))))
+      (should pos)
+      (should (eq 'clime-invoke-dimmed
+                  (get-text-property pos 'face content))))))
+
+(ert-deftest clime-test-invoke/render-prefix-dims-action-keys ()
+  "During prefix state, action keys (RET, q) are dimmed."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (content (clime-invoke--render-to-string cmd nil nil nil t nil "-")))
+    (let ((ret-pos (string-match "RET" content)))
+      (should ret-pos)
+      (should (eq 'clime-invoke-dimmed
+                  (get-text-property ret-pos 'face content))))
+    (let ((q-pos (string-match "\\bq\\b" content)))
+      (should q-pos)
+      (should (eq 'clime-invoke-dimmed
+                  (get-text-property q-pos 'face content))))))
+
+(ert-deftest clime-test-invoke/render-prefix-option-keys-not-dimmed ()
+  "During prefix state, option keys keep their option-key face."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0
+                                  :help "Be verbose"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (content (clime-invoke--render-to-string cmd nil nil nil nil nil "-")))
+    (let ((pos (string-match "-v" content)))
+      (should pos)
+      (should (eq 'clime-invoke-option-key
+                  (get-text-property pos 'face content))))))
+
+(ert-deftest clime-test-invoke/render-no-prefix-no-dimming ()
+  "Without prefix state, no dimming occurs."
+  (let* ((child (clime-make-command :name "show" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("show" . ,child))))
+         (content (clime-invoke--render-to-string app nil nil nil)))
+    (let* ((cmds-pos (string-match "Commands" content))
+           (pos (and cmds-pos (string-match "\\bs\\b" content (1+ cmds-pos)))))
+      (should pos)
+      (should (eq 'clime-invoke-command-key
+                  (get-text-property pos 'face content))))))
+
+(ert-deftest clime-test-invoke/render-prefix-dims-non-option-headings ()
+  "During prefix state, non-option section headings are dimmed."
+  (let* ((arg (clime-make-arg :name 'file :help "Input file"))
+         (child (clime-make-command :name "sub" :handler #'ignore))
+         (grp (clime-make-group :name "top" :handler #'ignore
+                                 :args (list arg)
+                                 :children `(("sub" . ,child))))
+         (content (clime-invoke--render-to-string grp nil nil nil nil nil "-")))
+    ;; Arguments heading dimmed
+    (let ((pos (string-match "Arguments" content)))
+      (should pos)
+      (should (eq 'clime-invoke-dimmed (get-text-property pos 'face content))))
+    ;; Commands heading dimmed
+    (let ((pos (string-match "Commands" content)))
+      (should pos)
+      (should (eq 'clime-invoke-dimmed (get-text-property pos 'face content))))
+    ;; Actions heading dimmed
+    (let ((pos (string-match "Actions" content)))
+      (should pos)
+      (should (eq 'clime-invoke-dimmed (get-text-property pos 'face content))))
+    ;; Options heading NOT dimmed
+    (let ((pos (string-match "Options" content)))
+      ;; No own options on this group, so Options heading shouldn't appear
+      ;; But if it did, it would keep its normal face
+      (should-not pos))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here
