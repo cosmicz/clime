@@ -124,7 +124,7 @@ wrapping, output formats with accumulation / custom envelopes /
 streaming (~clime-output-format~).
 
 *Tooling:*
-interactive transient UI (~clime-invoke~), hot-reload (~clime-reload~),
+interactive menu UI (~clime-invoke~), hot-reload (~clime-reload~),
 single-file distribution via ~bundle~.
 
 ** Options
@@ -1083,27 +1083,30 @@ hook has run.
 *** Interactive UI (~clime-invoke~)
 
 Any ~clime-app~ can be invoked interactively from Emacs via
-~clime-invoke~, which auto-generates a [[https://magit.vc/manual/transient/][transient.el]] menu:
+~clime-invoke~, which auto-generates a lightweight ~read-key~ menu:
 
 #+begin_src emacs-lisp
 (require 'clime-invoke)
 (clime-invoke my-app)
 #+end_src
 
-Groups become nested transient prefixes (press a key to drill down,
-~q~ to go back).  Options become infixes (switches and value inputs).
-Leaf commands show a "Run" action that collects infix values, prompts
-for positional args, calls ~clime-run~, and displays output in the
-~*clime-output*~ buffer.
+Groups become nested menus (press a key to drill down, ~q~ to go
+back).  Options are cycled with ~-X~ (prefix dash + key) or set
+directly with ~=X~ (completing-read for choices, read-string for
+counts).  Leaf commands show a "Run" action (~RET~) that collects
+values, calls ~clime-run~, and displays output.
 
-Requires the ~transient~ package (ships with Emacs 29+).
+Inline validation highlights invalid parameters as you set them.
+Prefix keys (~-~ / ~=~) re-render the buffer with dimmed non-option
+keys for visual feedback.  No external dependencies.
 
 *** Hot-reload (~clime-reload~)
 
 ~clime-reload~ force-reloads all clime modules in dependency order,
-including optional modules (~clime-invoke~, ~clime-make~) if already
-loaded.  Useful during development to pick up changes without
-restarting Emacs.
+including ~clime.el~ itself and optional modules (~clime-invoke~,
+~clime-make~) if already loaded.  Clears and reapplies face specs so
+~defface~ changes take effect.  Useful during development to pick up
+changes without restarting Emacs.
 
 * DSL Reference
 

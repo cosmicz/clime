@@ -93,7 +93,34 @@
   construction returns.  Parse-time calls remain as idempotent safety
   nets.
 
+- **Inline validation in invoke menu**: validation pipeline runs after
+  every parameter mutation in the invoke event loop.  Per-param type and
+  choice errors shown inline (`← error text`) with `clime-invoke-invalid`
+  face.  Conformer and `:requires` errors shown in the header area.
+  Display-only — does not block input; full validation at RET via
+  `clime-parse-finalize`.
+
+- **`=` prefix for direct option input**: pressing `=` then an option
+  key opens `completing-read` (for choices) or `read-string` (for
+  counts) instead of cycling.  Boolean/negatable options fall through
+  to cycling.
+
+- **Prefix state visual feedback**: pressing `-` or `=` re-renders the
+  menu buffer with option keys showing the prefix (`-v`/`=v`), non-option
+  keys and headings dimmed via `clime-invoke-dimmed` face.  Hint shown
+  in echo area.
+
+- **Invoke keymap sub-builders**: `clime-invoke--build-key-map` refactored
+  into `build-child-actions`, `build-arg-actions`, `build-option-actions`
+  composable helpers.
+
 ### Changed
+
+- **`clime-invoke` rewritten as lightweight `read-key` menu**: replaced
+  the `transient.el` dependency with a custom event loop.  The app tree
+  IS the menu — no separate transient prefix/suffix definitions.  Groups
+  become nested menus, options cycle with `-X` or set directly with `=X`,
+  `RET` runs, `q` returns.  No external dependencies.
 
 - **Option/arg `:conform` signature**: changed from `(value)` to
   `(value, param)` where `param` is the option or arg struct.  Enables
@@ -102,6 +129,24 @@
 - **DSL builder refactor**: extracted `clime--emit-kw`, `clime--emit-body`,
   and `clime--prepare-aliases` helpers to eliminate repeated keyword-emit
   boilerplate across all DSL builders.  No behavior change.
+
+- **Invoke face palette**: option keys now inherit
+  `font-lock-variable-name-face` (blue in Gruvbox) instead of
+  `font-lock-keyword-face` (red in Gruvbox, clashing with error).
+  Headings use bold only (no color inherit).
+
+- **`:conform` slot always a list**: `clime-conform-append` and DSL emit
+  functions now always produce a list.  Read sites guard with `functionp`
+  for backwards compatibility with direct struct construction.
+
+- **`clime-app` macro uses `setq`**: expands to `(progn (defvar NAME)
+  (setq NAME ...))` instead of `(defvar NAME ...)`.  Re-evaluating the
+  form or reloading the file now updates the app variable.
+
+- **`clime-reload` self-reloads**: loads `clime.el` itself first so
+  changes to reload logic take effect immediately.  Clears
+  `face-defface-spec` on all clime faces before loading optional modules
+  so `defface` reapplies new specs on reload.
 
 - **Developer-facing deprecation warnings** now use `display-warning`
   instead of bare `message`.  Affects the `:flag` → `:bool` DSL
@@ -126,6 +171,12 @@
 - **Resolved aliases now have correct parent refs**: `clime--resolve-aliases`
   was replacing alias nodes with new command structs without setting
   `:parent`, breaking ancestor option inheritance through aliases.
+
+- **Invoke run-handler respects buffered errors**: exit code now reflects
+  errors accumulated during handler execution, not just the final return.
+
+- **Invoke run-handler handles `clime-help-requested`**: pressing `--help`
+  style keys in the invoke menu no longer signals an unhandled error.
 
 ## 0.3.0 — 2026-03-13
 
