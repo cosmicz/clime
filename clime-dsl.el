@@ -260,8 +260,7 @@ are preserved.  Only truly absent keys are omitted."
 (defun clime--emit-body (classified keys)
   "Return constructor pairs for non-nil classified body KEYS.
 Collections (:options, :args, :children, :output-formats) wrap values
-in (list ...).  :handler emits its value bare.  :conform emits a single
-function bare, or a list if multiple."
+in (list ...).  :handler emits its value bare.  :conform is always a list."
   (let (result)
     (dolist (key keys)
       (let ((val (plist-get classified key)))
@@ -269,7 +268,7 @@ function bare, or a list if multiple."
           (push key result)
           (push (pcase key
                   (:handler val)
-                  (:conform (if (= (length val) 1) (car val) `(list ,@val)))
+                  (:conform `(list ,@val))
                   (_ `(list ,@val)))
                 result))))
     (nreverse result)))
@@ -299,7 +298,7 @@ For :handler and :conform, emits from classified only (no merge)."
              (push key result)
              (push (pcase key
                      (:handler val)
-                     (:conform (if (= (length val) 1) (car val) `(list ,@val))))
+                     (:conform `(list ,@val)))
                    result))))
         (_
          (let ((merged (clime--merge-kw-body
@@ -566,11 +565,13 @@ Child forms:
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
-    `(defvar ,name
-       (clime-make-app
-        :name ,name-str
-        ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup))
-        ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler))))))
+    `(progn
+       (defvar ,name nil ,(format "CLI app defined by `clime-app'."))
+       (setq ,name
+             (clime-make-app
+              :name ,name-str
+              ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup))
+              ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler)))))))
 
 ;;; ─── DSL Form Macros ───────────────────────────────────────────────────
 

@@ -415,11 +415,12 @@ PATH is the command path for error messages.  Signals `clime-usage-error'."
                               (clime-arg-name arg)
                               (string-join path " "))))))))
 
-(defun clime--check-requires (nodes params)
-  "Check :requires constraints across NODES for PARAMS.
-Signal `clime-usage-error' if an option with :requires is set but any
-of its required options are absent from PARAMS."
-  (let ((all-opts '()))
+(defun clime--find-unsatisfied-requires (nodes params)
+  "Return list of error strings for unmet :requires constraints.
+Checks all options across NODES against PARAMS.  Returns nil when
+all constraints are satisfied."
+  (let ((all-opts '())
+        (errors '()))
     ;; Collect all options for flag lookup
     (dolist (node nodes)
       (dolist (opt (clime-node-options node))
@@ -445,10 +446,18 @@ of its required options are absent from PARAMS."
                                         (car (clime-option-flags req-opt))
                                       (format "--%s" name))))
                                 missing)))
-                  (signal 'clime-usage-error
-                          (list (format "%s requires %s"
-                                        flag
-                                        (mapconcat #'identity missing-flags ", ")))))))))))))
+                  (push (format "%s requires %s"
+                                flag
+                                (mapconcat #'identity missing-flags ", "))
+                        errors))))))))
+    (nreverse errors)))
+
+(defun clime--check-requires (nodes params)
+  "Check :requires constraints across NODES for PARAMS.
+Signal `clime-usage-error' if an option with :requires is set but any
+of its required options are absent from PARAMS."
+  (when-let ((errors (clime--find-unsatisfied-requires nodes params)))
+    (signal 'clime-usage-error (list (car errors)))))
 
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
@@ -698,18 +707,18 @@ Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
 
 (defun clime--apply-node-conform (node params)
   "Run NODE's :conform functions on PARAMS, return updated PARAMS.
-:conform may be a single function or a list of functions, each taking
-\(params, node).  Signaled errors become `clime-usage-error'."
-  (let ((conform (clime-node-conform node)))
-    (when conform
-      (let ((fns (if (functionp conform) (list conform) conform)))
-        (dolist (fn fns)
-          (condition-case err
-              (setq params (funcall fn params node))
-            (clime-usage-error (signal (car err) (cdr err)))
-            (error
-             (signal 'clime-usage-error
-                     (list (error-message-string err)))))))))
+:conform is a list of functions, each taking (params, node).
+Signaled errors become `clime-usage-error'."
+  (let ((fns (clime-node-conform node)))
+    (when fns
+      (when (functionp fns) (setq fns (list fns)))
+      (dolist (fn fns)
+        (condition-case err
+            (setq params (funcall fn params node))
+          (clime-usage-error (signal (car err) (cdr err)))
+          (error
+           (signal 'clime-usage-error
+                   (list (error-message-string err))))))))
   params)
 
 (defun clime--conform-inline-children (node dispatch-nodes params)

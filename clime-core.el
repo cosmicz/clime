@@ -128,10 +128,10 @@ Defaults :required to t (unlike options which default to nil)."
 
 (defun clime-conform-append (existing fn)
   "Append conformer FN to EXISTING conform slot value.
-EXISTING may be nil, a single function, or a list of functions.
-Returns a value suitable for the :conform slot."
+EXISTING may be nil or a list of functions.
+Always returns a list."
   (cond
-   ((null existing) fn)
+   ((null existing) (list fn))
    ((functionp existing) (list existing fn))
    (t (append existing (list fn)))))
 
