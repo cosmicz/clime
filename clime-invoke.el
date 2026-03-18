@@ -541,6 +541,24 @@ Returns the updated params plist."
              do (push k result) (push v result))
     (nreverse result)))
 
+(defun clime-invoke--handle-arg (arg params)
+  "Handle user interaction for positional ARG, updating PARAMS.
+Returns the updated params plist."
+  (let* ((name (clime-arg-name arg))
+         (current (plist-get params name))
+         (choices (and (clime-arg-choices arg)
+                       (clime--resolve-value (clime-arg-choices arg))))
+         (val (if choices
+                  (completing-read
+                   (format "%s: " (or (clime-arg-help arg) (symbol-name name)))
+                   choices nil t current)
+                (read-string
+                 (format "%s: " (or (clime-arg-help arg) (symbol-name name)))
+                 current))))
+    (if (string-empty-p val)
+        (clime-invoke--plist-remove params name)
+      (plist-put params name val))))
+
 ;;; ─── Run Handler ────────────────────────────────────────────────────
 ;;;
 
@@ -557,40 +575,24 @@ conformers, required checks) before calling the handler."
                   :display-path path
                   :params (copy-sequence params)
                   :visited-nodes visited-nodes))
-         (fmt clime--active-output-format)
-         (streaming (clime-output-format-streaming fmt))
-         (clime--output-items nil)
-         (clime--output-errors nil)
-         (retval nil)
          (exit-code nil)
          (output (with-output-to-string
                    (setq exit-code
                          (condition-case err
                              (progn
                                (clime-parse-finalize result)
-                               (let ((ctx (clime-context--create
-                                           :app app
-                                           :command node
-                                           :path path
-                                           :params (clime-parse-result-params result))))
-                                 (setq retval (funcall (clime-node-handler node) ctx)))
-                               0)
+                               (let ((ctx (clime--build-context app result)))
+                                 (clime-run--execute
+                                  (clime-node-handler node) ctx)))
                            (clime-usage-error
                             (princ (cadr err))
                             2)
+                           (clime-help-requested
+                            (clime--print-help (cdr err))
+                            0)
                            (error
-                            (if streaming
-                                (funcall (clime-output-format-error-handler fmt)
-                                         (error-message-string err))
-                              (push (error-message-string err) clime--output-errors))
-                            1)))
-                   ;; Flush output like clime-run does
-                   (if streaming
-                       (when retval
-                         (princ (funcall (clime-output-format-encoder fmt) retval)))
-                     (clime--output-flush
-                      (clime-output-format-finalize fmt)
-                      retval)))))
+                            (princ (error-message-string err))
+                            1))))))
     (cons (or exit-code 0) output)))
 
 ;;; ─── Output Display ─────────────────────────────────────────────────
@@ -662,24 +664,9 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
                      (error
                       (setq error-msg (error-message-string err))))))
                 (:arg
-                 (let* ((arg (cadr action))
-                        (name (clime-arg-name arg))
-                        (current (plist-get params name))
-                        (choices (and (clime-arg-choices arg)
-                                      (clime--resolve-value (clime-arg-choices arg)))))
+                 (let ((arg (cadr action)))
                    (condition-case err
-                       (let ((val (if choices
-                                      (completing-read
-                                       (format "%s: " (or (clime-arg-help arg)
-                                                          (symbol-name name)))
-                                       choices nil t current)
-                                    (read-string
-                                     (format "%s: " (or (clime-arg-help arg)
-                                                        (symbol-name name)))
-                                     current))))
-                         (if (string-empty-p val)
-                             (setq params (clime-invoke--plist-remove params name))
-                           (setq params (plist-put params name val))))
+                       (setq params (clime-invoke--handle-arg arg params))
                      (quit nil)
                      (error
                       (setq error-msg (error-message-string err))))))

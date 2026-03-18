@@ -551,5 +551,32 @@
          (result (clime-invoke--run-handler app cmd '("run") nil)))
     (should (= 1 (car result)))))
 
+(ert-deftest clime-test-invoke/run-help-requested ()
+  "Handler signaling help-requested returns exit 0 with help text."
+  (let* ((handler (lambda (ctx)
+                    (signal 'clime-help-requested
+                            (list :node (clime-context-command ctx)
+                                  :path '("run")))))
+         (cmd (clime-make-command :name "run" :handler handler
+                                   :help "Run something"))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("run" . ,cmd))))
+         (result (clime-invoke--run-handler app cmd '("run") nil)))
+    (should (= 0 (car result)))
+    (should (string-match-p "Run something" (cdr result)))))
+
+(ert-deftest clime-test-invoke/run-buffered-errors-exit-1 ()
+  "Handler that emits buffered errors returns exit code 1."
+  (let* ((handler (lambda (_ctx)
+                    (clime-output-error "something went wrong")))
+         (cmd (clime-make-command :name "run" :handler handler))
+         (app (clime-make-app :name "test" :version "1" :json-mode t
+                               :children `(("run" . ,cmd))))
+         ;; Bind a buffered (non-streaming) format so errors accumulate
+         (clime--active-output-format
+          (car (clime-app-output-formats app)))
+         (result (clime-invoke--run-handler app cmd '("run") nil)))
+    (should (= 1 (car result)))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here
