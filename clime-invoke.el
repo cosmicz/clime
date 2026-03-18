@@ -206,6 +206,60 @@ Excludes hidden nodes.  Promotes inline group children."
 
 ;;; ─── Key Map Building ───────────────────────────────────────────────
 
+(defun clime-invoke--build-child-actions (node shared-used)
+  "Build (:child NAME NODE) actions for visible children of NODE.
+SHARED-USED is a hash table of taken keys.  Returns alist of (KEY . ACTION)."
+  (when (clime-group-p node)
+    (let* ((children (clime-invoke--visible-children node))
+           (child-keys (clime-invoke--assign-keys
+                        (mapcar (lambda (entry)
+                                  (let ((name (car entry)))
+                                    (list name (substring name 0 1) name)))
+                                children)
+                        shared-used))
+           (actions '()))
+      (dolist (entry children)
+        (let* ((name (car entry))
+               (child (cdr entry))
+               (key (cdr (assoc name child-keys))))
+          (when key
+            (push (cons key (list :child name child)) actions))))
+      (nreverse actions))))
+
+(defun clime-invoke--build-arg-actions (node shared-used)
+  "Build (:arg ARG) actions for positional args of NODE.
+SHARED-USED is a hash table of taken keys.  Returns alist of (KEY . ACTION)."
+  (let* ((args (clime-node-args node))
+         (arg-keys (clime-invoke--assign-keys
+                    (mapcar (lambda (a)
+                              (let ((name (symbol-name (clime-arg-name a))))
+                                (list (clime-arg-name a) nil name)))
+                            args)
+                    shared-used))
+         (actions '()))
+    (dolist (arg args)
+      (let ((key (cdr (assq (clime-arg-name arg) arg-keys))))
+        (when key
+          (push (cons key (list :arg arg)) actions))))
+    (nreverse actions)))
+
+(defun clime-invoke--build-option-actions (node)
+  "Build (:option OPTION) actions for own + ancestor options of NODE.
+Options use the \"- X\" two-key namespace.  Returns alist of (KEY . ACTION)."
+  (let* ((own (cl-remove-if #'clime-option-hidden (clime-node-options node)))
+         (ancestor (clime-help--collect-ancestor-options node))
+         (opts (append own ancestor))
+         (opt-used (make-hash-table :test #'equal))
+         (key-map (clime-invoke--assign-keys
+                   (mapcar #'clime-invoke--option-key-item opts)
+                   opt-used))
+         (actions '()))
+    (dolist (opt opts)
+      (let ((letter (cdr (assq (clime-option-name opt) key-map))))
+        (when letter
+          (push (cons (concat "- " letter) (list :option opt)) actions))))
+    (nreverse actions)))
+
 (defun clime-invoke--build-key-map (node)
   "Build a key dispatch map for NODE.
 Returns an alist of (KEY . ACTION) where ACTION is one of:
@@ -213,56 +267,14 @@ Returns an alist of (KEY . ACTION) where ACTION is one of:
   (:arg ARG)         — prompt for positional arg value
   (:child NAME NODE) — enter child node
   (:run NODE)        — run handler"
-  (let ((shared-used (make-hash-table :test #'equal))
-        (actions '()))
-    ;; Reserve q for quit and ? for help
+  (let ((shared-used (make-hash-table :test #'equal)))
     (puthash "q" t shared-used)
     (puthash "?" t shared-used)
-    ;; Children get keys first (plain letters, priority)
-    (when (clime-group-p node)
-      (let* ((children (clime-invoke--visible-children node))
-             (child-keys (clime-invoke--assign-keys
-                          (mapcar (lambda (entry)
-                                    (let ((name (car entry)))
-                                      (list name (substring name 0 1) name)))
-                                  children)
-                          shared-used)))
-        (dolist (entry children)
-          (let* ((name (car entry))
-                 (child (cdr entry))
-                 (key (cdr (assoc name child-keys))))
-            (when key
-              (push (cons key (list :child name child)) actions))))))
-    ;; Positional args get keys second
-    (let* ((args (clime-node-args node))
-           (arg-keys (clime-invoke--assign-keys
-                      (mapcar (lambda (a)
-                                (let ((name (symbol-name (clime-arg-name a))))
-                                  (list (clime-arg-name a) nil name)))
-                              args)
-                      shared-used)))
-      (dolist (arg args)
-        (let ((key (cdr (assq (clime-arg-name arg) arg-keys))))
-          (when key
-            (push (cons key (list :arg arg)) actions)))))
-    ;; Options last — all use "- X" two-key namespace (no collision with children)
-    (let* ((own (cl-remove-if #'clime-option-hidden (clime-node-options node)))
-           (ancestor (clime-help--collect-ancestor-options node))
-           (opts (append own ancestor))
-           (opt-used (make-hash-table :test #'equal))
-           (key-map (clime-invoke--assign-keys
-                     (mapcar #'clime-invoke--option-key-item opts)
-                     opt-used)))
-      (dolist (opt opts)
-        (let ((letter (cdr (assq (clime-option-name opt) key-map))))
-          (when letter
-            (let* ((action (list :option opt))
-                   (flag-key (concat "- " letter)))
-              (push (cons flag-key action) actions))))))
-    ;; RET for run (if handler exists)
-    (when (clime-node-handler node)
-      (push (cons "RET" (list :run node)) actions))
-    (nreverse actions)))
+    (append (clime-invoke--build-child-actions node shared-used)
+            (clime-invoke--build-arg-actions node shared-used)
+            (clime-invoke--build-option-actions node)
+            (when (clime-node-handler node)
+              (list (cons "RET" (list :run node)))))))
 
 ;;; ─── Value Formatting ───────────────────────────────────────────────
 
@@ -619,6 +631,19 @@ EXIT-CODE is shown in the mode-line."
 
 ;;; ─── Event Loop ─────────────────────────────────────────────────────
 
+(defvar clime-invoke-prefix-timeout 1.5
+  "Seconds to wait for second key after a prefix key (- or =).")
+
+(defun clime-invoke--read-prefixed-key (prefix)
+  "Read one more key after PREFIX with timeout.
+Returns the full key string (e.g. \"- v\") or nil on timeout/C-g."
+  (let ((ch (read-event (format "%s " prefix) nil clime-invoke-prefix-timeout)))
+    (message nil)
+    (cond
+     ((null ch) nil)
+     ((memq ch '(?\C-g 7)) nil)
+     (t (concat prefix " " (key-description (vector ch)))))))
+
 (defun clime-invoke--loop (app node path params &optional at-root)
   "Run the menu event loop for NODE.
 APP is the root app.  PATH is the current command path.
@@ -635,13 +660,16 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
       (clime-invoke--render node params key-map error-msg buf at-root)
       (let* ((ch (read-key))
              (key (key-description (vector ch)))
-             ;; "-" is a prefix for option flags: read one more key
-             (key (if (equal key "-")
-                      (let ((ch2 (read-key)))
-                        (concat "- " (key-description (vector ch2))))
+             (key (if (member key '("-" "="))
+                      (or (clime-invoke--read-prefixed-key key)
+                          :prefix-cancelled)
                     key)))
         (setq error-msg nil)
+        (when (eq key :prefix-cancelled)
+          (setq key nil))
         (cond
+         ;; Prefix cancelled (timeout or C-g during prefix read)
+         ((null key) nil)
          ;; Quit
          ((or (equal key "q") (equal key "C-g"))
           (setq running nil))

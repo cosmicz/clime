@@ -312,6 +312,56 @@
   (should (equal "s" (clime-invoke--display-key "s")))
   (should (equal "RET" (clime-invoke--display-key "RET"))))
 
+;;; ─── Sub-Builders ───────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/build-child-actions ()
+  "Child actions use plain letter keys."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("show" . ,cmd))))
+         (used (make-hash-table :test #'equal))
+         (actions (clime-invoke--build-child-actions app used)))
+    (should (= 1 (length actions)))
+    (should (eq :child (car (cdr (car actions)))))
+    ;; Key should be reserved in used table
+    (should (gethash (caar actions) used))))
+
+(ert-deftest clime-test-invoke/build-arg-actions ()
+  "Arg actions get keys from arg name."
+  (let* ((arg (clime-make-arg :name 'file :help "File"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :args (list arg)))
+         (used (make-hash-table :test #'equal))
+         (actions (clime-invoke--build-arg-actions cmd used)))
+    (should (= 1 (length actions)))
+    (should (eq :arg (car (cdr (car actions)))))))
+
+(ert-deftest clime-test-invoke/build-option-actions ()
+  "Option actions use \"- X\" namespace."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (actions (clime-invoke--build-option-actions cmd)))
+    (should (= 1 (length actions)))
+    (should (string-prefix-p "- " (caar actions)))
+    (should (eq :option (car (cdr (car actions)))))))
+
+(ert-deftest clime-test-invoke/build-option-actions-hidden ()
+  "Hidden options are excluded."
+  (let* ((opt (clime-make-option :name 'debug :flags '("--debug")
+                                  :nargs 0 :hidden t))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (actions (clime-invoke--build-option-actions cmd)))
+    (should (null actions))))
+
+;;; ─── Prefix Key ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/read-prefixed-key-timeout ()
+  "Prefix read returns nil on timeout."
+  (let ((clime-invoke-prefix-timeout 0.01))
+    (should (null (clime-invoke--read-prefixed-key "-")))))
+
 ;;; ─── Build Key Map ───────────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/keymap-children-first ()
