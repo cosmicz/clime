@@ -1,16 +1,14 @@
 #+title: clime
 #+options: toc:nil num:nil
 
-Emacs Lisp is a great language for text processing, system
-orchestration, and anything that benefits from deep Emacs integration
---- but building a proper CLI with it means hand-rolling argument
-parsing, help text, error messages, and dispatch every time.  *clime*
-removes that overhead.  Declare your commands, options, and arguments
-in a single ~clime-app~ form and get a complete CLI: parsed and
-type-checked arguments, auto-generated ~--help~, environment variable
-support, structured output formats, and clean error messages.  Apps
-run from the shell via a polyglot shebang or interactively from Emacs
-via auto-generated transient menus.
+*clime* is an application interface framework for Emacs Lisp.
+Declare your commands, options, and arguments once in a ~clime-app~
+form --- with types, validation, env vars, and structured output ---
+then run the same definition through multiple frontends: as a *CLI*
+from the shell (~clime-run-batch~), as an *interactive menu* inside
+Emacs (~clime-invoke~), or (planned) as an *HTTP API*
+(~clime-serve~).  The app tree /is/ the schema: one definition,
+multiple interfaces.
 
 * Getting Started
 
