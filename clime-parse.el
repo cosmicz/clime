@@ -378,9 +378,10 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
 
 (defun clime--apply-defaults (nodes params)
   "Apply default values for all options and args in NODES not already in PARAMS.
-NODES is a list of nodes whose params to process.  Returns updated PARAMS."
+NODES is a list of nodes whose params to process.  Returns updated PARAMS.
+Walks inline group children to reach options in mutex/zip groups."
   (dolist (node nodes)
-    (dolist (opt (clime-node-options node))
+    (dolist (opt (clime-node-all-options node))
       (let ((name (clime-option-name opt)))
         (unless (plist-member params name)
           (let ((default (clime-option-default opt)))

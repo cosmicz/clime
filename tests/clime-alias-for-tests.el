@@ -619,5 +619,90 @@
       (should (equal "csv" (plist-get params 'format)))
       (should (equal 10 (plist-get params 'limit))))))
 
+;;; ─── :vals / :defaults with mutex groups ─────────────────────────────
+
+(ert-deftest clime-test-alias-for/vals-with-mutex-option ()
+  "alias :vals targeting an option inside clime-mutex resolves without error."
+  (eval '(clime-app clime-test--af-vals-mutex
+           :version "1"
+           (clime-command query
+             :help "Run a query"
+             (clime-mutex query-mode
+               (clime-opt todo ("--todo" "-t") :help "TODO keyword")
+               (clime-opt sexp ("--sexp") :help "S-expression query"))
+             (clime-handler (ctx)
+               (clime-let ctx (todo sexp)
+                 (or todo sexp))))
+           (clime-group shortcuts :inline :category "Shortcuts"
+             (clime-alias-for waiting (query)
+               :help "Show WAITING items"
+               :vals '((todo . "WAITING")))))
+        t)
+  ;; Alias resolves — no error about unknown option
+  (let* ((shortcuts (cdr (assoc "shortcuts"
+                                 (clime-group-children
+                                  clime-test--af-vals-mutex))))
+         (resolved (cdr (assoc "waiting"
+                                (clime-group-children shortcuts))))
+         (all-opt-names (mapcar #'clime-option-name
+                                (clime-node-all-options resolved))))
+    ;; todo removed by :vals, sexp remains in mutex group
+    (should-not (memq 'todo all-opt-names))
+    (should (memq 'sexp all-opt-names))
+    ;; locked-vals stored
+    (should (equal '((todo . "WAITING")) (clime-node-locked-vals resolved))))
+  ;; Parse works — locked val injected
+  (let* ((result (clime-parse clime-test--af-vals-mutex '("waiting")))
+         (params (clime-parse-result-params result)))
+    (should (equal "WAITING" (plist-get params 'todo)))))
+
+(ert-deftest clime-test-alias-for/defaults-with-mutex-option ()
+  "alias :defaults targeting an option inside clime-mutex resolves without error."
+  (eval '(clime-app clime-test--af-defaults-mutex
+           :version "1"
+           (clime-command query
+             :help "Run a query"
+             (clime-mutex query-mode
+               (clime-opt todo ("--todo" "-t") :help "TODO keyword")
+               (clime-opt sexp ("--sexp") :help "S-expression query"))
+             (clime-handler (ctx)
+               (clime-let ctx (todo)
+                 todo)))
+           (clime-alias-for pending (query)
+             :help "Show TODO items"
+             :defaults '((todo . "TODO"))))
+        t)
+  ;; Default patched on the mutex-nested option
+  (let* ((result (clime-parse clime-test--af-defaults-mutex '("pending")))
+         (params (clime-parse-result-params result)))
+    (should (equal "TODO" (plist-get params 'todo))))
+  ;; Can still override
+  (let* ((result (clime-parse clime-test--af-defaults-mutex
+                              '("pending" "--todo" "DONE")))
+         (params (clime-parse-result-params result)))
+    (should (equal "DONE" (plist-get params 'todo)))))
+
+(ert-deftest clime-test-alias-for/vals-mutex-does-not-mutate-target ()
+  "alias :vals on mutex option does not affect the original command."
+  (eval '(clime-app clime-test--af-vals-mutex-nomut
+           :version "1"
+           (clime-command query
+             :help "Query"
+             (clime-mutex qm
+               (clime-opt todo ("--todo") :help "Keyword")
+               (clime-opt sexp ("--sexp") :help "Sexp"))
+             (clime-handler (ctx) nil))
+           (clime-alias-for waiting (query)
+             :vals '((todo . "WAITING"))))
+        t)
+  ;; Original query command still has todo in its mutex
+  (let* ((query (cdr (assoc "query"
+                             (clime-group-children
+                              clime-test--af-vals-mutex-nomut))))
+         (all-opt-names (mapcar #'clime-option-name
+                                (clime-node-all-options query))))
+    (should (memq 'todo all-opt-names))
+    (should (memq 'sexp all-opt-names))))
+
 (provide 'clime-alias-for-tests)
 ;;; clime-alias-for-tests.el ends here

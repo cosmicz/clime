@@ -358,6 +358,35 @@ Walk the tree, find commands with non-nil `alias', resolve them
 by copying args, options, and handler from the target.  Idempotent."
   (clime--resolve-aliases-walk app app))
 
+(defun clime--deep-copy-inline-children (children)
+  "Deep-copy CHILDREN alist for alias resolution.
+Copies inline group structs and their option structs to avoid
+mutating the original target command."
+  (mapcar (lambda (entry)
+            (let ((child (cdr entry)))
+              (if (and (clime-group-p child) (clime-node-inline child))
+                  (let ((copy (copy-sequence child)))
+                    (setf (clime-node-options copy)
+                          (mapcar #'copy-sequence (clime-node-options child)))
+                    (when (clime-group-children child)
+                      (setf (clime-group-children copy)
+                            (clime--deep-copy-inline-children
+                             (clime-group-children child))))
+                    (cons (car entry) copy))
+                entry)))
+          children))
+
+(defun clime--remove-option-from-tree (node name)
+  "Remove option NAME from NODE's options or its inline children's."
+  (setf (clime-node-options node)
+        (cl-remove-if (lambda (o) (eq (clime-option-name o) name))
+                      (clime-node-options node)))
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (let ((child (cdr entry)))
+        (when (and (clime-group-p child) (clime-node-inline child))
+          (clime--remove-option-from-tree child name))))))
+
 (defun clime--resolve-aliases-walk (node app)
   "Walk NODE's subtree resolving aliases against APP root.
 Alias nodes are replaced in-place in the children alist with
@@ -376,7 +405,10 @@ resolved command copies."
                             :name (clime-node-name child)
                             :handler (clime-node-handler target)
                             :args (clime-node-args target)
-                            :options (copy-sequence (clime-node-options target))
+                            :options (mapcar #'copy-sequence
+                                            (clime-node-options target))
+                            :children (clime--deep-copy-inline-children
+                                       (clime-group-children target))
                             :help (or (clime-node-help child)
                                       (clime-node-help target))
                             :epilog (or (clime-node-epilog child)
@@ -385,32 +417,25 @@ resolved command copies."
                             :hidden (clime-node-hidden child)
                             :aliases (clime-node-aliases child)
                             :deprecated (clime-node-deprecated child))))
-            ;; Apply :defaults — patch :default on copied options
+            ;; Apply :defaults — patch :default on deep-copied options
             (dolist (dfl defaults)
               (let* ((name (car dfl))
                      (val (cdr dfl))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
-                                      (clime-node-options resolved))))
+                                      (clime-node-all-options resolved))))
                 (unless opt
                   (error "Alias %s: :defaults names unknown option `%s'"
                          (clime-node-name child) name))
-                ;; Replace with a copy to avoid mutating target's option
-                (let ((new-opt (copy-sequence opt)))
-                  (setf (clime-option-default new-opt) val)
-                  (setf (clime-node-options resolved)
-                        (mapcar (lambda (o) (if (eq o opt) new-opt o))
-                                (clime-node-options resolved))))))
-            ;; Apply :vals — remove options from list (hidden from CLI/help)
+                (setf (clime-option-default opt) val)))
+            ;; Apply :vals — remove options from tree (hidden from CLI/help)
             (dolist (val-entry vals)
               (let* ((name (car val-entry))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
-                                      (clime-node-options resolved))))
+                                      (clime-node-all-options resolved))))
                 (unless opt
                   (error "Alias %s: :vals names unknown option `%s'"
                          (clime-node-name child) name))
-                (setf (clime-node-options resolved)
-                      (cl-remove-if (lambda (o) (eq (clime-option-name o) name))
-                                    (clime-node-options resolved)))))
+                (clime--remove-option-from-tree resolved name)))
             ;; Store vals for injection during finalize
             (when vals
               (setf (clime-node-locked-vals resolved) vals))
