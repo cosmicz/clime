@@ -1575,8 +1575,13 @@
     ;; Root has keyword-provided option
     (should (= 1 (length (clime-group-options app))))
     (should (eq 'verbose (clime-option-name (car (clime-group-options app)))))
-    ;; Command has mutex options
-    (should (= 2 (length (clime-command-options cmd))))
+    ;; Mutex options live on the inline group child, not the command
+    (should (= 0 (length (clime-command-options cmd))))
+    (let ((grp (cdr (assoc "fmt" (clime-group-children cmd)))))
+      (should grp)
+      (should (clime-node-inline grp))
+      (should (= 2 (length (clime-node-options grp)))))
+    ;; But they're still findable via inline group traversal
     (should (clime-node-find-option cmd "--json"))
     (should (clime-node-find-option cmd "--csv"))))
 

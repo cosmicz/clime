@@ -85,20 +85,9 @@ constructor symbol in the expanded form."
     (dolist (form forms)
       (when (consp form)
         (pcase (car form)
-          ;; Mutex/zip: structural forms with no aliases; their expansion
-          ;; is not constructor-based, so handle directly.
-          ('clime-mutex
-           (let ((result (clime--build-mutex-conform (cdr form))))
-             (dolist (opt (plist-get result :options))
-               (push opt options))
-             (push (plist-get result :conform) conform-fns)))
-          ('clime-zip
-           (let ((result (clime--build-zip-conform (cdr form))))
-             (dolist (opt (plist-get result :options))
-               (push opt options))
-             (push (plist-get result :conform) conform-fns)))
-          ;; All other forms: macroexpand to resolve aliases, then
-          ;; classify by the constructor in the expanded form.
+          ;; All forms: macroexpand to resolve aliases (including
+          ;; clime-mutex/clime-zip which expand to inline groups),
+          ;; then classify by the constructor in the expanded form.
           (_
            (let* ((expanded (macroexpand form))
                   (ctor (clime--expanded-constructor expanded))
@@ -384,9 +373,11 @@ extracts the trailing keywords from the merge-template call."
 (defun clime--build-mutex-conform (args)
   "Build an exclusive group from DSL ARGS.
 ARGS is (NAME &rest BODY) where BODY contains keyword args and
-clime-option forms.  Returns a plist (:conform FORM :options FORMS).
+clime-option forms.  Returns a (cons NAME-STR (clime-make-group ...))
+form suitable for :children classification.
 Resolves DSL aliases via `macroexpand'."
   (let* ((name (car args))
+         (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:required :help :doc :default)))
@@ -419,15 +410,21 @@ Resolves DSL aliases via `macroexpand'."
               (format "clime-mutex `%s': option `%s' has :default, \
 which is vacuous — defaults apply after exclusivity check"
                       name (cadr (plist-get plist :name))))))))
-    (list :conform `(clime-check-exclusive ',name ',member-names ,default ,required)
-          :options (nreverse option-forms))))
+    `(cons ,name-str
+           (clime-make-group
+            :name ,name-str
+            :inline t
+            :conform (list (clime-check-exclusive ',name ',member-names ,default ,required))
+            :options (list ,@(nreverse option-forms))))))
 
 (defun clime--build-zip-conform (args)
   "Build a paired group from DSL ARGS.
 ARGS is (NAME &rest BODY) where BODY contains keyword args and
-clime-option forms.  Returns a plist (:conform FORM :options FORMS).
+clime-option forms.  Returns a (cons NAME-STR (clime-make-group ...))
+form suitable for :children classification.
 Resolves DSL aliases via `macroexpand'."
   (let* ((name (car args))
+         (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:required :help :doc)))
@@ -459,8 +456,12 @@ Resolves DSL aliases via `macroexpand'."
               (format "clime-zip `%s': option `%s' has :default, \
 which is vacuous — defaults apply after paired check"
                       name (cadr (plist-get plist :name))))))))
-    (list :conform `(clime-check-paired ',name ',member-names ,required)
-          :options (nreverse option-forms))))
+    `(cons ,name-str
+           (clime-make-group
+            :name ,name-str
+            :inline t
+            :conform (list (clime-check-paired ',name ',member-names ,required))
+            :options (list ,@(nreverse option-forms))))))
 
 (defun clime--build-handler (args)
   "Build a lambda form from DSL ARGS.
@@ -494,7 +495,7 @@ ARGS is (NAME &rest BODY)."
             :name ,name-str
             :handler ,handler
             ,@(clime--emit-kw keywords '(:help :aliases :hidden :epilog :examples :category :deprecated))
-            ,@(clime--emit-merged keywords classified '(:conform :options :args))))))
+            ,@(clime--emit-merged keywords classified '(:conform :options :args :children))))))
 
 (defun clime--build-alias-for (args)
   "Build a `clime-command' alias-for form from DSL ARGS.
@@ -747,11 +748,9 @@ NAME is a symbol — the group name (used as key in ctx).
 BODY is a mix of keyword args and clime-option forms.
 
 The winner's option name is injected into params under NAME.
-Expands to a node :conform entry via `clime-check-exclusive'."
+Expands to an inline group with conformer via `clime-check-exclusive'."
   (declare (indent 1))
-  (let ((result (clime--build-mutex-conform (cons name body))))
-    `(list :conform ,(plist-get result :conform)
-           :options (list ,@(plist-get result :options)))))
+  (clime--build-mutex-conform (cons name body)))
 
 (defmacro clime-zip (name &rest body)
   "Define a paired (zip) group NAME with BODY.
@@ -760,11 +759,9 @@ BODY is a mix of keyword args and clime-option forms.
 
 Wrapped options auto-get :multiple set.
 A zipped alist is injected into params under NAME.
-Expands to a node :conform entry via `clime-check-paired'."
+Expands to an inline group with conformer via `clime-check-paired'."
   (declare (indent 1))
-  (let ((result (clime--build-zip-conform (cons name body))))
-    `(list :conform ,(plist-get result :conform)
-           :options (list ,@(plist-get result :options)))))
+  (clime--build-zip-conform (cons name body)))
 
 (defmacro clime-handler (arglist &rest body)
   "Define a command handler with ARGLIST and BODY.

@@ -252,7 +252,7 @@ Excludes hidden nodes.  Promotes inline group children."
 (defun clime-invoke--build-child-actions (node shared-used)
   "Build (:child NAME NODE) actions for visible children of NODE.
 SHARED-USED is a hash table of taken keys.  Returns alist of (KEY . ACTION)."
-  (when (clime-group-p node)
+  (when (clime-branch-p node)
     (let* ((children (clime-invoke--visible-children node))
            (child-keys (clime-invoke--assign-keys
                         (mapcar (lambda (entry)
@@ -289,7 +289,7 @@ SHARED-USED is a hash table of taken keys.  Returns alist of (KEY . ACTION)."
 (defun clime-invoke--build-option-actions (node)
   "Build (:option OPTION) actions for own + ancestor options of NODE.
 Options use the \"- X\" two-key namespace.  Returns alist of (KEY . ACTION)."
-  (let* ((own (cl-remove-if #'clime-option-hidden (clime-node-options node)))
+  (let* ((own (cl-remove-if #'clime-option-hidden (clime-node-all-options node)))
          (ancestor (clime-help--collect-ancestor-options node))
          (opts (append own ancestor))
          (opt-used (make-hash-table :test #'equal))
@@ -496,15 +496,24 @@ Reuses `clime--transform-value' for type coercion and choices validation."
 
 (defun clime-invoke--run-conformer-checks (node params)
   "Run NODE's conformers on a copy of PARAMS, returning error strings.
+Also walks inline group children (postorder) to collect their errors.
 Returns a list of error message strings, or nil if all pass."
-  (let ((errors nil)
-        (fns (clime-node-conform node)))
-    (when (functionp fns) (setq fns (list fns)))
-    (dolist (conform fns)
-      (condition-case err
-          (funcall conform (copy-sequence params) node)
-        (clime-usage-error
-         (push (cadr err) errors))))
+  (let ((errors nil))
+    ;; Walk inline group children first (postorder)
+    (when (clime-group-p node)
+      (dolist (entry (clime-group-children node))
+        (let ((child (cdr entry)))
+          (when (and (clime-group-p child) (clime-node-inline child))
+            (setq errors (nconc errors
+                                (clime-invoke--run-conformer-checks child params)))))))
+    ;; Then this node's own conformers
+    (let ((fns (clime-node-conform node)))
+      (when (functionp fns) (setq fns (list fns)))
+      (dolist (conform fns)
+        (condition-case err
+            (funcall conform (copy-sequence params) node)
+          (clime-usage-error
+           (push (cadr err) errors)))))
     (nreverse errors)))
 
 (defun clime-invoke--validate-all (node params)
@@ -513,8 +522,8 @@ PARAM-ERRORS is an alist of (NAME . error-string) for per-param issues.
 GENERAL-ERRORS is a list of strings from conformers and requires checks."
   (let ((param-errors nil)
         (general-errors nil))
-    ;; Per-param validation: own options + ancestor options + args
-    (dolist (opt (clime-node-options node))
+    ;; Per-param validation: own options (including inline groups) + ancestor options + args
+    (dolist (opt (clime-node-all-options node))
       (when-let ((err (clime-invoke--validate-param opt params)))
         (push (cons (clime-option-name opt) err) param-errors)))
     (dolist (opt (clime-help--collect-ancestor-options node))
@@ -618,7 +627,7 @@ Uses 4-column layout: Key | Desc | Value | Env."
               lines)
         (push "" lines)))
     ;; Options grouped: own options by category, then ancestor as "Global Options"
-    (let* ((own (cl-remove-if #'clime-option-hidden (clime-node-options node)))
+    (let* ((own (cl-remove-if #'clime-option-hidden (clime-node-all-options node)))
            (ancestor (clime-help--collect-ancestor-options node))
            (grouped (append
                      (when own (list (cons nil own)))
@@ -686,8 +695,8 @@ Uses 4-column layout: Key | Desc | Value | Env."
                                                 'face 'clime-invoke-invalid))))
                     lines))))
         (push "" lines)))
-    ;; Children
-    (when (clime-group-p node)
+    ;; Children (only on branch nodes, not commands)
+    (when (clime-branch-p node)
       (let ((children (clime-invoke--visible-children node)))
         (when children
           (push (propertize "Commands" 'face (if dimmed 'clime-invoke-dimmed

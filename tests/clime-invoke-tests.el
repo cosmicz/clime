@@ -1308,5 +1308,72 @@
       ;; But if it did, it would keep its normal face
       (should-not pos))))
 
+;;; ─── Inline Group Conformer Discovery (clime-swl) ──────────────────
+
+(ert-deftest clime-test-invoke/run-conformer-checks-inline-group ()
+  "Conformers on inline group children are discovered and run."
+  (let* ((conform (lambda (_params _node)
+                    (signal 'clime-usage-error '("inline group error"))))
+         (grp (clime-group--create :name "fmt" :inline t :conform (list conform)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :children (list (cons "fmt" grp)))))
+    (should (equal '("inline group error")
+                   (clime-invoke--run-conformer-checks cmd '())))))
+
+(ert-deftest clime-test-invoke/run-conformer-checks-inline-group-pass ()
+  "Inline group conformers that pass produce no errors."
+  (let* ((conform (lambda (params _node) params))
+         (grp (clime-group--create :name "fmt" :inline t :conform (list conform)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :children (list (cons "fmt" grp)))))
+    (should-not (clime-invoke--run-conformer-checks cmd '()))))
+
+(ert-deftest clime-test-invoke/option-actions-include-inline-group-options ()
+  "Option actions include options from inline group children."
+  (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0))
+         (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+         (grp (clime-group--create :name "fmt" :inline t
+                                   :options (list opt-json opt-csv)))
+         (opt-verbose (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt-verbose)
+                                  :children (list (cons "fmt" grp)))))
+    (let* ((actions (clime-invoke--build-option-actions cmd))
+           (opt-names (mapcar (lambda (a) (clime-option-name (cadr (cdr a)))) actions)))
+      ;; All three options should have actions
+      (should (= 3 (length actions)))
+      (should (memq 'verbose opt-names))
+      (should (memq 'json opt-names))
+      (should (memq 'csv opt-names)))))
+
+(ert-deftest clime-test-invoke/validate-all-includes-inline-group-options ()
+  "Per-param validation covers options from inline group children."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                 :choices '("json" "text")))
+         (grp (clime-group--create :name "output" :inline t
+                                   :options (list opt)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :children (list (cons "output" grp)))))
+    ;; Invalid choice should produce a param error
+    (let ((result (clime-invoke--validate-all cmd '(fmt "xml"))))
+      (should (assq 'fmt (car result))))))
+
+(ert-deftest clime-test-invoke/render-shows-inline-group-options ()
+  "Invoke render includes inline group options in the options section."
+  (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0
+                                       :help "JSON output"))
+         (grp (clime-group--create :name "fmt" :inline t
+                                   :options (list opt-json)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :children (list (cons "fmt" grp))))
+         (key-map (clime-invoke--build-key-map cmd))
+         (buf (generate-new-buffer " *test-render*")))
+    (unwind-protect
+        (progn
+          (clime-invoke--render cmd '() key-map nil buf nil nil)
+          (let ((content (with-current-buffer buf (buffer-string))))
+            (should (string-match-p "--json" content))))
+      (kill-buffer buf))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here

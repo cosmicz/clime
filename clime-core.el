@@ -146,8 +146,7 @@ signals an error if no member is set.  The returned callable takes
 \(params, node) and returns updated PARAMS with the winner's name
 injected under GROUP-NAME.
 
-The returned symbol carries a `clime-exclusive-members' property
-holding MEMBER-NAMES, enabling introspection by `clime-invoke'."
+The returned symbol is a named function for debugging convenience."
   (let* ((fn (lambda (params _node)
     (let ((set-names (cl-remove-if-not
                       (lambda (k) (plist-member params k))
@@ -180,7 +179,6 @@ holding MEMBER-NAMES, enabling introspection by `clime-invoke'."
        (t params)))))
          (sym (make-symbol (format "clime-exclusive-%s" group-name))))
     (fset sym fn)
-    (put sym 'clime-exclusive-members member-names)
     sym))
 
 (defun clime-check-paired (group-name member-names &optional required)
@@ -275,12 +273,22 @@ each alias is replaced with a copy of its target command (or group)."
   (defaults nil :type list :documentation "Alist of (name . value) to override defaults on copied options.")
   (vals nil :type list :documentation "Alist of (name . value) for locked params, hidden from CLI and help."))
 
+;;; ─── Group ──────────────────────────────────────────────────────────────
+
+(cl-defstruct (clime-group (:include clime-node)
+                           (:constructor clime-group--create)
+                           (:copier nil))
+  "A branch node (subcommand group) in the CLI tree."
+  (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups."))
+
 ;;; ─── Command ────────────────────────────────────────────────────────────
 
-(cl-defstruct (clime-command (:include clime-node)
+(cl-defstruct (clime-command (:include clime-group)
                              (:constructor clime-command--create)
                              (:copier nil))
-  "A leaf command in the CLI tree.")
+  "A leaf command in the CLI tree.
+Inherits :children from `clime-group' to host inline conformer groups
+\(e.g. from `clime-mutex'/`clime-zip'), but is not a branch node.")
 
 (defun clime-make-command (&rest args)
   "Create a `clime-command' with validation.
@@ -291,14 +299,6 @@ ARGS is a plist of slot values."
   (unless (plist-get args :handler)
     (error "clime-make-command: :handler is required"))
   (apply #'clime-command--create args))
-
-;;; ─── Group ──────────────────────────────────────────────────────────────
-
-(cl-defstruct (clime-group (:include clime-node)
-                           (:constructor clime-group--create)
-                           (:copier nil))
-  "A branch node (subcommand group) in the CLI tree."
-  (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups."))
 
 (defun clime--set-direct-parents (node)
   "Set the :parent of each direct child in NODE's children alist to NODE."
@@ -595,12 +595,24 @@ otherwise include all params as-is."
 
 ;;; ─── Tree Queries ───────────────────────────────────────────────────────
 
+(defun clime-node-all-options (node)
+  "Return all options for NODE, including those from inline group children.
+Recurses into inline group children to collect promoted options."
+  (let ((opts (copy-sequence (clime-node-options node))))
+    (when (clime-group-p node)
+      (dolist (entry (clime-group-children node))
+        (let ((child (cdr entry)))
+          (when (and (clime-group-p child) (clime-node-inline child))
+            (setq opts (append opts (clime-node-all-options child)))))))
+    opts))
+
 (defun clime-node-find-option (node flag)
   "Find the `clime-option' in NODE whose flags contain FLAG string.
+Searches NODE's own options, then recurses into inline group children.
 Return the option struct, or nil if not found."
   (cl-find-if (lambda (opt)
                 (member flag (clime-option-flags opt)))
-              (clime-node-options node)))
+              (clime-node-all-options node)))
 
 (defun clime-group-find-child (group name)
   "Find a child node in GROUP by NAME or alias.

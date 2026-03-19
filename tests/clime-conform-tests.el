@@ -1191,5 +1191,116 @@ satisfy the at-least-one requirement — user must explicitly choose."
     (should (equal (with-output-to-string (clime-run app '("config")))
                    "val=injected"))))
 
+;;; ─── Inline Group Structure (clime-swl) ────────────────────────────
+
+(ert-deftest clime-test-conform/mutex-expands-to-inline-group ()
+  "clime-mutex creates an inline group child with conformer attached."
+  (eval
+   '(clime-app clime-test--mutex-inline-app
+      :version "1"
+      (clime-command run
+        :help "Run"
+        (clime-mutex output-format
+          (clime-option fmt-json ("--json") :bool)
+          (clime-option fmt-csv ("--csv") :bool))
+        (clime-handler (_ctx) nil)))
+   t)
+  (let* ((app (symbol-value 'clime-test--mutex-inline-app))
+         (cmd (cdr (assoc "run" (clime-group-children app))))
+         ;; The command itself should NOT have a :conform (it moved to the group)
+         (cmd-conform (clime-node-conform cmd)))
+    ;; Command should have an inline group child
+    (should (clime-group-p cmd))
+    (let* ((children (clime-group-children cmd))
+           (grp-entry (assoc "output-format" children))
+           (grp (cdr grp-entry)))
+      (should grp-entry)
+      (should (clime-group-p grp))
+      (should (clime-node-inline grp))
+      ;; Conformer lives on the inline group, not the command
+      (should (clime-node-conform grp))
+      (should-not cmd-conform)
+      ;; Options live on the inline group
+      (should (= 2 (length (clime-node-options grp))))
+      ;; But options are still findable from the command (via inline promotion)
+      (should (clime-node-find-option cmd "--json"))
+      (should (clime-node-find-option cmd "--csv")))))
+
+(ert-deftest clime-test-conform/zip-expands-to-inline-group ()
+  "clime-zip creates an inline group child with conformer attached."
+  (eval
+   '(clime-app clime-test--zip-inline-app
+      :version "1"
+      (clime-command run
+        :help "Run"
+        (clime-zip skip-reason
+          (clime-option skip ("--skip"))
+          (clime-option reason ("--reason")))
+        (clime-handler (_ctx) nil)))
+   t)
+  (let* ((app (symbol-value 'clime-test--zip-inline-app))
+         (cmd (cdr (assoc "run" (clime-group-children app))))
+         (cmd-conform (clime-node-conform cmd)))
+    (should (clime-group-p cmd))
+    (let* ((children (clime-group-children cmd))
+           (grp-entry (assoc "skip-reason" children))
+           (grp (cdr grp-entry)))
+      (should grp-entry)
+      (should (clime-group-p grp))
+      (should (clime-node-inline grp))
+      (should (clime-node-conform grp))
+      (should-not cmd-conform)
+      (should (= 2 (length (clime-node-options grp)))))))
+
+(ert-deftest clime-test-conform/mutex-inline-group-at-app-level ()
+  "clime-mutex at app level creates inline group child on app."
+  (eval
+   '(clime-app clime-test--mutex-app-level-app
+      :version "1"
+      (clime-mutex fmt
+        (clime-option json ("--json") :bool)
+        (clime-option csv ("--csv") :bool))
+      (clime-command run
+        :help "Run"
+        (clime-handler (_ctx) nil)))
+   t)
+  (let* ((app (symbol-value 'clime-test--mutex-app-level-app))
+         (grp-entry (assoc "fmt" (clime-group-children app)))
+         (grp (cdr grp-entry)))
+    (should grp-entry)
+    (should (clime-group-p grp))
+    (should (clime-node-inline grp))
+    ;; Options promoted through inline group
+    (should (clime-node-find-option app "--json"))
+    (should (clime-node-find-option app "--csv"))))
+
+(ert-deftest clime-test-conform/exclusive-members-property-removed ()
+  "clime-check-exclusive no longer sets clime-exclusive-members property."
+  (let ((conformer (clime-check-exclusive 'fmt '(json csv))))
+    (should-not (get conformer 'clime-exclusive-members))))
+
+(ert-deftest clime-test-conform/all-options-collects-inline-group-options ()
+  "clime-node-all-options returns own + inline group child options."
+  (let* ((opt-a (clime-make-option :name 'aaa :flags '("--aaa") :nargs 0))
+         (opt-b (clime-make-option :name 'bbb :flags '("--bbb") :nargs 0))
+         (opt-c (clime-make-option :name 'ccc :flags '("--ccc") :nargs 0))
+         (grp (clime-group--create :name "grp" :inline t
+                                   :options (list opt-b opt-c)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt-a)
+                                  :children (list (cons "grp" grp)))))
+    (let ((all (clime-node-all-options cmd)))
+      (should (= 3 (length all)))
+      (should (memq opt-a all))
+      (should (memq opt-b all))
+      (should (memq opt-c all)))))
+
+(ert-deftest clime-test-conform/all-options-no-inline-children ()
+  "clime-node-all-options with no inline children returns own options."
+  (let* ((opt (clime-make-option :name 'foo :flags '("--foo") :nargs 0))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt))))
+    (should (equal (list opt) (clime-node-all-options cmd)))))
+
 (provide 'clime-conform-tests)
 ;;; clime-conform-tests.el ends here
