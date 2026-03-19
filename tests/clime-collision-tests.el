@@ -7,6 +7,7 @@
 ;;; Commentary:
 
 ;; Tests for definition-time ancestor flag collision detection.
+;; Collisions are caught at construction time in clime-make-app.
 
 ;;; Code:
 
@@ -22,12 +23,11 @@
   (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose" "-v")))
          (cmd-opt (clime-make-option :name 'json :flags '("--json")))
          (cmd (clime-make-command :name "show" :handler #'ignore
-                                  :options (list cmd-opt)))
-         (app (clime-make-app :name "t" :version "1"
-                              :options (list root-opt)
-                              :children (list (cons "show" cmd)))))
+                                  :options (list cmd-opt))))
     ;; Should not signal
-    (clime--set-parent-refs app)))
+    (clime-make-app :name "t" :version "1"
+                    :options (list root-opt)
+                    :children (list (cons "show" cmd)))))
 
 (ert-deftest clime-test-collision/siblings-allowed ()
   "Sibling commands may share the same flag names."
@@ -36,12 +36,11 @@
          (cmd-a (clime-make-command :name "send" :handler #'ignore
                                     :options (list opt-a)))
          (cmd-b (clime-make-command :name "move" :handler #'ignore
-                                    :options (list opt-b)))
-         (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "send" cmd-a)
-                                              (cons "move" cmd-b)))))
+                                    :options (list opt-b))))
     ;; Should not signal — siblings don't collide
-    (clime--set-parent-refs app)))
+    (clime-make-app :name "t" :version "1"
+                    :children (list (cons "send" cmd-a)
+                                    (cons "move" cmd-b)))))
 
 ;;; ─── Collision Detected ───────────────────────────────────────────────
 
@@ -50,11 +49,10 @@
   (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose" "-v")))
          (cmd-opt (clime-make-option :name 'verbose :flags '("--verbose")))
          (cmd (clime-make-command :name "show" :handler #'ignore
-                                  :options (list cmd-opt)))
-         (app (clime-make-app :name "t" :version "1"
-                              :options (list root-opt)
-                              :children (list (cons "show" cmd)))))
-    (should-error (clime--set-parent-refs app)
+                                  :options (list cmd-opt))))
+    (should-error (clime-make-app :name "t" :version "1"
+                                  :options (list root-opt)
+                                  :children (list (cons "show" cmd)))
                   :type 'error)))
 
 (ert-deftest clime-test-collision/child-vs-root-short-flag ()
@@ -62,11 +60,10 @@
   (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose" "-v")))
          (cmd-opt (clime-make-option :name 'very :flags '("-v")))
          (cmd (clime-make-command :name "show" :handler #'ignore
-                                  :options (list cmd-opt)))
-         (app (clime-make-app :name "t" :version "1"
-                              :options (list root-opt)
-                              :children (list (cons "show" cmd)))))
-    (should-error (clime--set-parent-refs app)
+                                  :options (list cmd-opt))))
+    (should-error (clime-make-app :name "t" :version "1"
+                                  :options (list root-opt)
+                                  :children (list (cons "show" cmd)))
                   :type 'error)))
 
 (ert-deftest clime-test-collision/grandchild-vs-root ()
@@ -76,11 +73,10 @@
          (cmd (clime-make-command :name "add" :handler #'ignore
                                   :options (list cmd-opt)))
          (grp (clime-make-group :name "dep"
-                                :children (list (cons "add" cmd))))
-         (app (clime-make-app :name "t" :version "1"
-                              :options (list root-opt)
-                              :children (list (cons "dep" grp)))))
-    (should-error (clime--set-parent-refs app)
+                                :children (list (cons "add" cmd)))))
+    (should-error (clime-make-app :name "t" :version "1"
+                                  :options (list root-opt)
+                                  :children (list (cons "dep" grp)))
                   :type 'error)))
 
 (ert-deftest clime-test-collision/child-vs-group ()
@@ -91,10 +87,9 @@
                                   :options (list cmd-opt)))
          (grp (clime-make-group :name "dep"
                                 :options (list grp-opt)
-                                :children (list (cons "add" cmd))))
-         (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "dep" grp)))))
-    (should-error (clime--set-parent-refs app)
+                                :children (list (cons "add" cmd)))))
+    (should-error (clime-make-app :name "t" :version "1"
+                                  :children (list (cons "dep" grp)))
                   :type 'error)))
 
 ;;; ─── Error Message Content ────────────────────────────────────────────
@@ -104,12 +99,12 @@
   (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose")))
          (cmd-opt (clime-make-option :name 'verbose :flags '("--verbose")))
          (cmd (clime-make-command :name "show" :handler #'ignore
-                                  :options (list cmd-opt)))
-         (app (clime-make-app :name "t" :version "1"
-                              :options (list root-opt)
-                              :children (list (cons "show" cmd)))))
+                                  :options (list cmd-opt))))
     (condition-case err
-        (progn (clime--set-parent-refs app) (ert-fail "Expected error"))
+        (progn (clime-make-app :name "t" :version "1"
+                               :options (list root-opt)
+                               :children (list (cons "show" cmd)))
+               (ert-fail "Expected error"))
       (error
        (let ((msg (error-message-string err)))
          (should (string-match-p "--verbose" msg))

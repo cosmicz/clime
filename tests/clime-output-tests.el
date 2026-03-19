@@ -764,16 +764,8 @@
                       :output-formats (list fmt))
      :type 'error)))
 
-(ert-deftest clime-test-output/format-auto-mutex ()
-  "Output formats get auto-assigned mutex group."
-  (let* ((fmt (clime-make-output-format :name 'json :flags '("--json")))
-         (app (clime-make-app :name "t" :version "1"
-                               :output-formats (list fmt))))
-    (should (eq (clime-option-mutex (car (clime-app-output-formats app)))
-                'clime--output-format))))
-
-(ert-deftest clime-test-output/format-mutex-enforced ()
-  "Multiple output formats are mutually exclusive."
+(ert-deftest clime-test-output/format-auto-exclusive ()
+  "Multiple output formats are automatically mutually exclusive."
   (let* ((cmd (clime-make-command :name "x" :handler #'ignore))
          (json (clime-make-output-format :name 'json :flags '("--json")))
          (yaml (clime-make-output-format :name 'yaml :flags '("--yaml")))
@@ -782,6 +774,16 @@
                                :children (list (cons "x" cmd))))
          (code (clime-run app '("x" "--json" "--yaml"))))
     (should (= code 2))))
+
+(ert-deftest clime-test-output/format-single-no-conform ()
+  "Single output format does not get auto-exclusivity conformer."
+  (let* ((cmd (clime-make-command :name "x" :handler #'ignore))
+         (json (clime-make-output-format :name 'json :flags '("--json")))
+         (app (clime-make-app :name "t" :version "1"
+                               :output-formats (list json)
+                               :children (list (cons "x" cmd)))))
+    ;; No conform attached for single format
+    (should-not (clime-node-conform app))))
 
 ;;; ─── Help ──────────────────────────────────────────────────────────
 

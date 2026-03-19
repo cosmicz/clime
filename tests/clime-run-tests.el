@@ -419,5 +419,36 @@
         (should (= code 0))
         (should (equal clime-test--run-output "ok"))))))
 
+;;; ─── clime-run--execute ─────────────────────────────────────────────
+
+(ert-deftest clime-test-run/execute-returns-0-on-success ()
+  "Successful handler returns exit code 0."
+  (let* ((ctx (clime-context--create :app nil :command nil :path nil :params nil))
+         (code (clime-run--execute (lambda (_) "ok") ctx)))
+    (should (= 0 code))))
+
+(ert-deftest clime-test-run/execute-re-signals-usage-error ()
+  "Usage error is re-signaled to caller."
+  (let ((ctx (clime-context--create :app nil :command nil :path nil :params nil)))
+    (should-error
+     (clime-run--execute (lambda (_) (signal 'clime-usage-error '("bad"))) ctx)
+     :type 'clime-usage-error)))
+
+(ert-deftest clime-test-run/execute-re-signals-help-requested ()
+  "Help-requested is re-signaled to caller."
+  (let ((ctx (clime-context--create :app nil :command nil :path nil :params nil)))
+    (should-error
+     (clime-run--execute (lambda (_) (signal 'clime-help-requested '(:node nil))) ctx)
+     :type 'clime-help-requested)))
+
+(ert-deftest clime-test-run/execute-generic-error-returns-1 ()
+  "Generic error returns exit code 1 when debug-on-error is nil."
+  (let ((debug-on-error nil)
+        (ctx (clime-context--create :app nil :command nil :path nil :params nil))
+        (code nil))
+    (with-output-to-string
+      (setq code (clime-run--execute (lambda (_) (error "boom")) ctx)))
+    (should (= 1 code))))
+
 (provide 'clime-run-tests)
 ;;; clime-run-tests.el ends here

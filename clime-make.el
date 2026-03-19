@@ -401,22 +401,22 @@ CTX is the clime context."
 
    (clime-arg file :help "The .el file to initialize")
 
-   (clime-option extra-load-path ("--load-path" "-L") :multiple t
+   (clime-opt extra-load-path ("--load-path" "-L") :multiple
                  :help "Additional load paths to include in the shebang")
 
-   (clime-option self-dir ("--self-dir") :bool t
+   (clime-opt self-dir ("--self-dir") :bool
                  :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
-   (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
+   (clime-opt rel-load-path ("--rel-load-path" "-R") :multiple
                  :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
 
-   (clime-option standalone ("--standalone") :bool t
+   (clime-opt standalone ("--standalone") :bool
                  :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-   (clime-option force ("--force" "-f") :bool t
+   (clime-opt force ("--force" "-f") :bool
                  :help "Replace an existing non-clime shebang")
 
-   (clime-option env ("--env" "-e") :multiple t
+   (clime-opt env ("--env" "-e") :multiple
                  :help "Set environment variable in shebang (NAME=VALUE)")
 
    (clime-handler (ctx) (clime-make--init-handler ctx)))
@@ -427,16 +427,16 @@ CTX is the clime context."
 
                  (clime-arg files :nargs :rest :help "Source files in dependency order")
 
-                 (clime-option output ("--output" "-o") :required t
+                 (clime-opt output ("--output" "-o") :required
                                :help "Output file path")
 
-                 (clime-option provide ("--provide" "-p")
+                 (clime-opt provide ("--provide" "-p")
                                :help "Feature name for (provide 'FEATURE) (default: output filename)")
 
-                 (clime-option main ("--main" "-m")
+                 (clime-opt main ("--main" "-m")
                                :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
 
-                 (clime-option description ("--description" "-d")
+                 (clime-opt description ("--description" "-d")
                                :help "One-line description for the file header")
 
                  (clime-handler (ctx) (clime-make--bundle-handler ctx)))
@@ -456,22 +456,22 @@ CTX is the clime context."
 
    (clime-arg file :help "The .el file to set up")
 
-   (clime-option extra-load-path ("--load-path" "-L") :multiple t
+   (clime-opt extra-load-path ("--load-path" "-L") :multiple
                  :help "Additional load paths to include in the shebang")
 
-   (clime-option self-dir ("--self-dir") :bool t
+   (clime-opt self-dir ("--self-dir") :bool
                  :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
-   (clime-option rel-load-path ("--rel-load-path" "-R") :multiple t
+   (clime-opt rel-load-path ("--rel-load-path" "-R") :multiple
                  :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
 
-   (clime-option standalone ("--standalone") :bool t
+   (clime-opt standalone ("--standalone") :bool
                  :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-   (clime-option force ("--force" "-f") :bool t
+   (clime-opt force ("--force" "-f") :bool
                  :help "Replace an existing non-clime shebang")
 
-   (clime-option env ("--env" "-e") :multiple t
+   (clime-opt env ("--env" "-e") :multiple
                  :help "Set environment variable in shebang (NAME=VALUE)")
 
    (clime-handler (ctx) (clime-make--quickstart-handler ctx))))

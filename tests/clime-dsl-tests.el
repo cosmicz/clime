@@ -417,7 +417,7 @@
   (should-not (plist-member clime--opt-test-bool-tmpl :bool)))
 
 (ert-deftest clime-test-dsl/flag-deprecated-warning ()
-  ":flag t emits a deprecation warning."
+  ":flag t emits a deprecation warning via display-warning."
   (let ((msgs (clime-test-with-messages
                 (eval '(clime-app clime-test--dsl-flag-depr
                          :version "1"
@@ -426,7 +426,7 @@
                            (clime-option force ("--force") :flag t)
                            (clime-handler (ctx) nil)))
                       t))))
-    (should (cl-some (lambda (m) (string-match-p ":bool" m)) msgs))))
+    (should (cl-some (lambda (m) (string-match-p "Warning (clime):.*:bool" m)) msgs))))
 
 ;;; ─── Separator Shorthand ────────────────────────────────────────────
 
@@ -902,6 +902,764 @@
 (ert-deftest clime-test-dsl/indent-handler ()
   "clime-handler has lisp-indent-function 1 (arglist)."
   (should (equal 1 (get 'clime-handler 'lisp-indent-function))))
+
+;;; ─── Emit Helpers ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/emit-kw-basic ()
+  "emit-kw returns flat plist of present keys."
+  (let ((kw '(:help "desc" :hidden t :epilog "end")))
+    (should (equal (clime--emit-kw kw '(:help :hidden))
+                   '(:help "desc" :hidden t)))))
+
+(ert-deftest clime-test-dsl/emit-kw-absent-keys-omitted ()
+  "emit-kw omits keys not in the keywords plist."
+  (let ((kw '(:help "desc")))
+    (should (equal (clime--emit-kw kw '(:help :hidden :epilog))
+                   '(:help "desc")))))
+
+(ert-deftest clime-test-dsl/emit-kw-preserves-explicit-nil ()
+  "emit-kw preserves explicitly-false values via plist-member."
+  (let ((kw '(:hidden nil :help "desc")))
+    (should (equal (clime--emit-kw kw '(:hidden :help))
+                   '(:hidden nil :help "desc")))))
+
+(ert-deftest clime-test-dsl/emit-kw-empty ()
+  "emit-kw returns nil when no keys match."
+  (should (null (clime--emit-kw '(:help "x") '(:hidden :epilog)))))
+
+(ert-deftest clime-test-dsl/emit-body-collections ()
+  "emit-body wraps collection values in (list ...)."
+  (let* ((opt-form '(clime-make-option :name 'v :flags '("-v")))
+         (classified (list :options (list opt-form) :args nil :handler nil)))
+    (should (equal (clime--emit-body classified '(:options :args))
+                   `(:options (list ,opt-form))))))
+
+(ert-deftest clime-test-dsl/emit-body-handler-bare ()
+  "emit-body emits :handler value without list wrapping."
+  (let ((handler-form '(lambda (ctx) "ok")))
+    (should (equal (clime--emit-body (list :handler handler-form) '(:handler))
+                   `(:handler ,handler-form)))))
+
+(ert-deftest clime-test-dsl/emit-body-skips-nil ()
+  "emit-body omits keys with nil values."
+  (should (null (clime--emit-body '(:options nil :args nil) '(:options :args)))))
+
+(ert-deftest clime-test-dsl/prepare-aliases-normalizes ()
+  "prepare-aliases normalizes symbol aliases to quoted string lists."
+  (let* ((kw '(:help "desc" :aliases (foo bar)))
+         (result (clime--prepare-aliases kw)))
+    (should (equal (plist-get result :aliases) '(quote ("foo" "bar"))))
+    (should (equal (plist-get result :help) "desc"))))
+
+(ert-deftest clime-test-dsl/prepare-aliases-no-op ()
+  "prepare-aliases returns keywords unchanged when no :aliases."
+  (let ((kw '(:help "desc")))
+    (should (eq (clime--prepare-aliases kw) kw))))
+
+;;; ─── Bare Boolean Normalization ─────────────────────────────────────
+
+(ert-deftest clime-test-dsl/bare-bool-single ()
+  "Bare :bool at end of plist normalizes to :bool t."
+  (should (equal (clime--normalize-bare-booleans '(:bool) clime--boolean-keywords)
+                 '(:bool t))))
+
+(ert-deftest clime-test-dsl/bare-bool-before-keyword ()
+  "Bare :bool before another keyword inserts t."
+  (should (equal (clime--normalize-bare-booleans '(:bool :hidden) clime--boolean-keywords)
+                 '(:bool t :hidden t))))
+
+(ert-deftest clime-test-dsl/bare-bool-before-cons ()
+  "Bare :hidden before a cons form (DSL child) inserts t."
+  (should (equal (clime--normalize-bare-booleans
+                  '(:hidden (clime-option foo ("--foo")))
+                  clime--boolean-keywords)
+                 '(:hidden t (clime-option foo ("--foo"))))))
+
+(ert-deftest clime-test-dsl/bare-bool-explicit-t-unchanged ()
+  "Explicit :bool t passes through unchanged."
+  (should (equal (clime--normalize-bare-booleans '(:bool t :hidden t) clime--boolean-keywords)
+                 '(:bool t :hidden t))))
+
+(ert-deftest clime-test-dsl/bare-bool-explicit-nil-preserved ()
+  "Explicit :hidden nil is preserved (not replaced with t)."
+  (should (equal (clime--normalize-bare-booleans '(:hidden nil) clime--boolean-keywords)
+                 '(:hidden nil))))
+
+(ert-deftest clime-test-dsl/bare-bool-non-boolean-key-unchanged ()
+  "Non-boolean keyword :help with value passes through normally."
+  (should (equal (clime--normalize-bare-booleans '(:help "desc" :bool) clime--boolean-keywords)
+                 '(:help "desc" :bool t))))
+
+(ert-deftest clime-test-dsl/bare-bool-deprecated-string-preserved ()
+  ":deprecated followed by string preserves the string value."
+  (should (equal (clime--normalize-bare-booleans '(:deprecated "use --new") clime--boolean-keywords)
+                 '(:deprecated "use --new"))))
+
+(ert-deftest clime-test-dsl/bare-bool-deprecated-bare ()
+  "Bare :deprecated at end normalizes to :deprecated t."
+  (should (equal (clime--normalize-bare-booleans '(:deprecated) clime--boolean-keywords)
+                 '(:deprecated t))))
+
+(ert-deftest clime-test-dsl/bare-bool-mixed-plist ()
+  "Mixed bare and valued keywords in option-like plist."
+  (should (equal (clime--normalize-bare-booleans
+                  '(:bool :multiple :default "x" :hidden)
+                  clime--boolean-keywords)
+                 '(:bool t :multiple t :default "x" :hidden t))))
+
+(ert-deftest clime-test-dsl/bare-bool-nargs-keyword-value ()
+  "Non-boolean :nargs consumes :rest as its value, not as bare boolean."
+  (should (equal (clime--normalize-bare-booleans
+                  '(:nargs :rest :required nil :help "IDs")
+                  clime--boolean-keywords)
+                 '(:nargs :rest :required nil :help "IDs"))))
+
+(ert-deftest clime-test-dsl/bare-bool-nargs-integer ()
+  "Non-boolean :nargs with integer value passes through."
+  (should (equal (clime--normalize-bare-booleans
+                  '(:nargs 0 :hidden)
+                  clime--boolean-keywords)
+                 '(:nargs 0 :hidden t)))
+  (should (equal (clime--normalize-bare-booleans
+                  '(:nargs 2 :help "stuff")
+                  clime--boolean-keywords)
+                 '(:nargs 2 :help "stuff"))))
+
+(ert-deftest clime-test-dsl/bare-bool-option-integration ()
+  "Bare :bool in clime-option DSL produces :nargs 0 option."
+  (eval '(clime-app clime-test--bare-bool-opt
+           :version "1"
+           (clime-command run
+             :help "run"
+             (clime-option verbose ("--verbose" "-v") :bool :hidden)
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (car (clime-group-children clime-test--bare-bool-opt))))
+         (opt (car (clime-command-options cmd))))
+    (should (= 0 (clime-option-nargs opt)))
+    (should (clime-option-hidden opt))))
+
+(ert-deftest clime-test-dsl/bare-bool-command-integration ()
+  "Bare :hidden in clime-command DSL hides the command."
+  (eval '(clime-app clime-test--bare-bool-cmd
+           :version "1"
+           (clime-command secret
+             :hidden
+             :help "secret cmd"
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (car (clime-group-children clime-test--bare-bool-cmd)))))
+    (should (clime-node-hidden cmd))))
+
+(ert-deftest clime-test-dsl/bare-bool-group-inline ()
+  "Bare :inline in clime-group DSL sets inline flag."
+  (eval '(clime-app clime-test--bare-bool-grp
+           :version "1"
+           (clime-group admin
+             :inline
+             :help "admin"
+             (clime-command nuke
+               :help "nuke"
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((grp (cdr (car (clime-group-children clime-test--bare-bool-grp)))))
+    (should (clime-group-inline grp))))
+
+;;; ─── DSL Aliases ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/clime-opt-alias ()
+  "clime-opt produces identical struct to clime-option."
+  (let ((via-option (eval '(clime-option verbose ("-v" "--verbose") :bool :help "Verbose") t))
+        (via-opt    (eval '(clime-opt    verbose ("-v" "--verbose") :bool :help "Verbose") t)))
+    (should (equal via-option via-opt))))
+
+(ert-deftest clime-test-dsl/clime-argument-alias ()
+  "clime-argument produces identical struct to clime-arg."
+  (let ((via-arg      (eval '(clime-arg      name :help "Person" :required nil) t))
+        (via-argument (eval '(clime-argument name :help "Person" :required nil) t)))
+    (should (equal via-arg via-argument))))
+
+(ert-deftest clime-test-dsl/clime-defoption-alias ()
+  "clime-defoption works as alias for clime-defopt."
+  (eval '(clime-defoption test-alias-defoption :type 'string :help "Test") t)
+  (should (boundp 'clime--opt-test-alias-defoption))
+  (should (plist-get (symbol-value 'clime--opt-test-alias-defoption) :type)))
+
+(ert-deftest clime-test-dsl/clime-defargument-alias ()
+  "clime-defargument works as alias for clime-defarg."
+  (eval '(clime-defargument test-alias-defargument :type 'string :help "Test") t)
+  (should (boundp 'clime--arg-test-alias-defargument))
+  (should (plist-get (symbol-value 'clime--arg-test-alias-defargument) :type)))
+
+(ert-deftest clime-test-dsl/classify-body-recognizes-clime-opt ()
+  "clime--classify-body recognizes clime-opt in app/command bodies."
+  (eval '(clime-app clime-test--alias-opt-app
+           :version "1"
+           (clime-opt name ("-n" "--name") :help "Name")
+           (clime-handler (ctx) nil))
+        t)
+  (should (clime-node-find-option clime-test--alias-opt-app "--name")))
+
+(ert-deftest clime-test-dsl/classify-body-recognizes-clime-argument ()
+  "clime--classify-body recognizes clime-argument in app/command bodies."
+  (eval '(clime-app clime-test--alias-arg-app
+           :version "1"
+           (clime-argument who :help "Who")
+           (clime-handler (ctx) nil))
+        t)
+  (should (= 1 (length (clime-app-args clime-test--alias-arg-app)))))
+
+(ert-deftest clime-test-dsl/clime-opt-inside-command ()
+  "clime-opt works inside a clime-command body."
+  (eval '(clime-app clime-test--alias-opt-cmd-app
+           :version "1"
+           (clime-command greet
+             :help "Greet"
+             (clime-opt name ("-n" "--name") :help "Name")
+             (clime-argument who :help "Who")
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--alias-opt-cmd-app)))))
+    (should (clime-node-find-option cmd "--name"))
+    (should (= 1 (length (clime-command-args cmd))))))
+
+(ert-deftest clime-test-dsl/indent-clime-opt ()
+  "clime-opt has same indent as clime-option (2)."
+  (should (equal 2 (get 'clime-opt 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/indent-clime-argument ()
+  "clime-argument has same indent as clime-arg (1)."
+  (should (equal 1 (get 'clime-argument 'lisp-indent-function))))
+
+;;; ─── Alias Forms in Mutex/Zip ──────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/clime-opt-inside-mutex ()
+  "clime-opt (short alias) works inside clime-mutex."
+  (eval '(clime-app clime-test--alias-opt-mutex
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-mutex fmt
+               (clime-opt json ("--json") :bool)
+               (clime-opt csv ("--csv") :bool))
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--alias-opt-mutex)))))
+    (should (clime-node-find-option cmd "--json"))
+    (should (clime-node-find-option cmd "--csv"))))
+
+(ert-deftest clime-test-dsl/clime-opt-inside-zip ()
+  "clime-opt (short alias) works inside clime-zip."
+  (eval '(clime-app clime-test--alias-opt-zip
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-zip sr
+               (clime-opt skip ("--skip"))
+               (clime-opt reason ("--reason")))
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--alias-opt-zip)))))
+    (should (clime-node-find-option cmd "--skip"))
+    (should (clime-node-find-option cmd "--reason"))))
+
+(ert-deftest clime-test-dsl/mutex-alias-identical-to-canonical ()
+  "clime-mutex with clime-opt produces same options as clime-option."
+  (eval '(clime-app clime-test--mutex-via-opt
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-mutex fmt
+               (clime-opt json ("--json") :bool)
+               (clime-opt csv ("--csv") :bool))
+             (clime-handler (ctx) nil)))
+        t)
+  (eval '(clime-app clime-test--mutex-via-option
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-mutex fmt
+               (clime-option json ("--json") :bool)
+               (clime-option csv ("--csv") :bool))
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd-opt (cdr (car (clime-app-children clime-test--mutex-via-opt))))
+         (cmd-option (cdr (car (clime-app-children clime-test--mutex-via-option)))))
+    (should (equal (clime-command-options cmd-opt)
+                   (clime-command-options cmd-option)))))
+
+(ert-deftest clime-test-dsl/zip-alias-identical-to-canonical ()
+  "clime-zip with clime-opt produces same options as clime-option."
+  (eval '(clime-app clime-test--zip-via-opt
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-zip sr
+               (clime-opt skip ("--skip"))
+               (clime-opt reason ("--reason")))
+             (clime-handler (ctx) nil)))
+        t)
+  (eval '(clime-app clime-test--zip-via-option
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-zip sr
+               (clime-option skip ("--skip"))
+               (clime-option reason ("--reason")))
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd-opt (cdr (car (clime-app-children clime-test--zip-via-opt))))
+         (cmd-option (cdr (car (clime-app-children clime-test--zip-via-option)))))
+    (should (equal (clime-command-options cmd-opt)
+                   (clime-command-options cmd-option)))))
+
+;;; ─── Alias Forms in Group Bodies ───────────────────────────────────────
+
+(ert-deftest clime-test-dsl/clime-opt-inside-group ()
+  "clime-opt works inside a clime-group body."
+  (eval '(clime-app clime-test--alias-opt-grp
+           :version "1"
+           (clime-group config
+             :help "Config"
+             (clime-opt scope ("--scope") :default "local")
+             (clime-argument profile :help "Profile name")
+             (clime-command list
+               :help "List"
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((grp (cdr (assoc "config" (clime-group-children clime-test--alias-opt-grp)))))
+    (should (= (length (clime-group-options grp)) 1))
+    (should (= (length (clime-group-args grp)) 1))
+    (should (eq (clime-option-name (car (clime-group-options grp))) 'scope))
+    (should (eq (clime-arg-name (car (clime-group-args grp))) 'profile))))
+
+;;; ─── Template (:from) Inside Mutex/Zip ─────────────────────────────────
+
+(ert-deftest clime-test-dsl/from-option-inside-mutex ()
+  "clime-opt with :from template works inside clime-mutex."
+  (eval '(progn
+           (clime-defopt test-mutex-tmpl :bool :help "A format flag")
+           (clime-app clime-test--from-mutex
+             :version "1"
+             (clime-command run
+               :help "Run"
+               (clime-mutex fmt
+                 (clime-opt json ("--json") :from test-mutex-tmpl)
+                 (clime-opt csv ("--csv") :from test-mutex-tmpl))
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--from-mutex)))))
+    (should (clime-node-find-option cmd "--json"))
+    (should (clime-node-find-option cmd "--csv"))
+    (should (clime-option-boolean-p (clime-node-find-option cmd "--json")))))
+
+(ert-deftest clime-test-dsl/from-option-inside-zip ()
+  "clime-opt with :from template works inside clime-zip."
+  (eval '(progn
+           (clime-defopt test-zip-tmpl :type 'string :help "A value")
+           (clime-app clime-test--from-zip
+             :version "1"
+             (clime-command run
+               :help "Run"
+               (clime-zip sr
+                 (clime-opt skip ("--skip") :from test-zip-tmpl)
+                 (clime-opt reason ("--reason") :from test-zip-tmpl))
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((cmd (cdr (car (clime-app-children clime-test--from-zip)))))
+    (should (clime-node-find-option cmd "--skip"))
+    (should (clime-node-find-option cmd "--reason"))
+    ;; Zip auto-sets :multiple
+    (should (clime-option-multiple (clime-node-find-option cmd "--skip")))))
+
+;;; ─── Form Composition: clime-def* Macros ─────────────────────────────────
+
+(ert-deftest clime-test-dsl/defcommand-basic ()
+  "clime-defcommand binds a defvar to (name . command-struct)."
+  (eval '(clime-defcommand clime-test--defcmd-show
+           :help "Show a thing"
+           (clime-arg id :help "Resource ID")
+           (clime-handler (ctx) "shown"))
+        t)
+  (should (consp clime-test--defcmd-show))
+  (should (equal (car clime-test--defcmd-show) "clime-test--defcmd-show"))
+  (should (clime-command-p (cdr clime-test--defcmd-show)))
+  (should (equal (clime-node-help (cdr clime-test--defcmd-show)) "Show a thing"))
+  (should (= 1 (length (clime-command-args (cdr clime-test--defcmd-show)))))
+  (should (functionp (clime-command-handler (cdr clime-test--defcmd-show)))))
+
+(ert-deftest clime-test-dsl/defgroup-basic ()
+  "clime-defgroup binds a defvar to (name . group-struct)."
+  (eval '(clime-defgroup clime-test--defgrp-admin
+           :help "Admin commands"
+           (clime-command status
+             :help "Status"
+             (clime-handler (ctx) "ok")))
+        t)
+  (should (consp clime-test--defgrp-admin))
+  (should (equal (car clime-test--defgrp-admin) "clime-test--defgrp-admin"))
+  (should (clime-group-p (cdr clime-test--defgrp-admin)))
+  (should (equal (clime-node-help (cdr clime-test--defgrp-admin)) "Admin commands"))
+  (should (= 1 (length (clime-group-children (cdr clime-test--defgrp-admin))))))
+
+(ert-deftest clime-test-dsl/defcommand-indent ()
+  "clime-defcommand has indent 1."
+  (should (equal 1 (get 'clime-defcommand 'lisp-indent-function))))
+
+(ert-deftest clime-test-dsl/defgroup-indent ()
+  "clime-defgroup has indent 1."
+  (should (equal 1 (get 'clime-defgroup 'lisp-indent-function))))
+
+;;; ─── Form Composition: Keyword-Merge in Containers ──────────────────────
+
+(ert-deftest clime-test-dsl/app-kw-options ()
+  "clime-app :options keyword merges with inline options."
+  (eval '(progn
+           (defvar clime-test--shared-verbose
+             (clime-opt verbose ("-v" "--verbose") :count t :help "Verbosity"))
+           (clime-app clime-test--kw-opts-app
+             :version "1"
+             :options (list clime-test--shared-verbose)
+             (clime-opt debug ("-d" "--debug") :bool :help "Debug mode")
+             (clime-command ping
+               :help "Ping"
+               (clime-handler (ctx) "pong"))))
+        t)
+  (let ((app clime-test--kw-opts-app))
+    ;; Both keyword-provided and inline options present
+    (should (= 2 (length (clime-group-options app))))
+    ;; Keyword options come first
+    (should (eq 'verbose (clime-option-name (car (clime-group-options app)))))
+    (should (eq 'debug (clime-option-name (cadr (clime-group-options app)))))))
+
+(ert-deftest clime-test-dsl/app-kw-children ()
+  "clime-app :children keyword merges with inline children."
+  (eval '(progn
+           (clime-defcommand clime-test--ext-show
+             :help "Show"
+             (clime-arg id :help "ID")
+             (clime-handler (ctx) nil))
+           (clime-app clime-test--kw-children-app
+             :version "1"
+             :children (list clime-test--ext-show)
+             (clime-command add
+               :help "Add"
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((app clime-test--kw-children-app))
+    (should (= 2 (length (clime-group-children app))))
+    ;; Keyword children come first
+    (should (equal "clime-test--ext-show" (caar (clime-group-children app))))
+    (should (equal "add" (caadr (clime-group-children app))))))
+
+(ert-deftest clime-test-dsl/app-kw-args ()
+  "clime-app :args keyword merges with inline args."
+  (eval '(progn
+           (defvar clime-test--shared-target
+             (clime-arg target :help "Target"))
+           (clime-app clime-test--kw-args-app
+             :version "1"
+             :args (list clime-test--shared-target)
+             (clime-arg extra :help "Extra" :required nil)
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((app clime-test--kw-args-app))
+    (should (= 2 (length (clime-group-args app))))
+    (should (eq 'target (clime-arg-name (car (clime-group-args app)))))
+    (should (eq 'extra (clime-arg-name (cadr (clime-group-args app)))))))
+
+(ert-deftest clime-test-dsl/app-kw-output-formats ()
+  "clime-app :output-formats keyword merges with inline formats."
+  (eval '(progn
+           (defvar clime-test--ext-yaml
+             (clime-output-format yaml ("--yaml") :help "YAML output"))
+           (clime-app clime-test--kw-fmts-app
+             :version "1"
+             :output-formats (list clime-test--ext-yaml)
+             (clime-output-format csv ("--csv") :help "CSV output")
+             (clime-command test
+               :help "Test"
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((app clime-test--kw-fmts-app))
+    (should (= 2 (length (clime-app-output-formats app))))))
+
+(ert-deftest clime-test-dsl/group-kw-merge ()
+  "clime-group accepts :options, :children, :args keywords."
+  (eval '(progn
+           (defvar clime-test--grp-shared-opt
+             (clime-opt scope ("--scope") :default "local"))
+           (clime-defcommand clime-test--grp-ext-list
+             :help "List"
+             (clime-handler (ctx) nil))
+           (clime-app clime-test--kw-grp-app
+             :version "1"
+             (clime-group config
+               :help "Config"
+               :options (list clime-test--grp-shared-opt)
+               :children (list clime-test--grp-ext-list)
+               (clime-opt color ("--color") :bool)
+               (clime-command set
+                 :help "Set"
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let ((grp (cdr (assoc "config" (clime-group-children clime-test--kw-grp-app)))))
+    (should (= 2 (length (clime-group-options grp))))
+    (should (eq 'scope (clime-option-name (car (clime-group-options grp)))))
+    (should (= 2 (length (clime-group-children grp))))
+    (should (equal "clime-test--grp-ext-list" (caar (clime-group-children grp))))))
+
+(ert-deftest clime-test-dsl/command-kw-merge ()
+  "clime-command accepts :options, :args keywords."
+  (eval '(progn
+           (defvar clime-test--cmd-shared-opt
+             (clime-opt format ("-f" "--format") :default "text"))
+           (clime-app clime-test--kw-cmd-app
+             :version "1"
+             (clime-command show
+               :help "Show"
+               :options (list clime-test--cmd-shared-opt)
+               (clime-opt color ("--color") :bool)
+               (clime-arg id :help "ID")
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((cmd (cdr (assoc "show" (clime-group-children clime-test--kw-cmd-app)))))
+    (should (= 2 (length (clime-command-options cmd))))
+    (should (eq 'format (clime-option-name (car (clime-command-options cmd)))))))
+
+(ert-deftest clime-test-dsl/kw-only-no-inline ()
+  "Keyword-only composition works (no inline forms)."
+  (eval '(progn
+           (clime-defcommand clime-test--kw-only-show
+             :help "Show"
+             (clime-arg id :help "ID")
+             (clime-handler (ctx) nil))
+           (clime-defcommand clime-test--kw-only-add
+             :help "Add"
+             (clime-handler (ctx) nil))
+           (clime-app clime-test--kw-only-app
+             :version "1"
+             :children (list clime-test--kw-only-show
+                            clime-test--kw-only-add)))
+        t)
+  (let ((app clime-test--kw-only-app))
+    (should (= 2 (length (clime-group-children app))))))
+
+(ert-deftest clime-test-dsl/inline-only-unchanged ()
+  "Inline-only composition (no keywords) still works as before."
+  (eval '(clime-app clime-test--inline-only-app
+           :version "1"
+           (clime-command ping
+             :help "Ping"
+             (clime-handler (ctx) "pong"))
+           (clime-command pong
+             :help "Pong"
+             (clime-handler (ctx) "ping")))
+        t)
+  (should (= 2 (length (clime-group-children clime-test--inline-only-app)))))
+
+;;; ─── Form Composition: Integration ──────────────────────────────────────
+
+(ert-deftest clime-test-dsl/compose-parse-dispatch ()
+  "App composed via keyword-merge parses and dispatches correctly."
+  (eval '(progn
+           (clime-defcommand clime-test--compose-show
+             :help "Show"
+             (clime-opt format ("-f" "--format") :default "text")
+             (clime-arg id :help "ID")
+             (clime-handler (ctx)
+               (list (clime-ctx-get ctx 'id)
+                     (clime-ctx-get ctx 'format))))
+           (defvar clime-test--compose-verbose
+             (clime-opt verbose ("-v" "--verbose") :count t))
+           (clime-app clime-test--compose-app
+             :version "1"
+             :options (list clime-test--compose-verbose)
+             :children (list clime-test--compose-show)
+             (clime-command add
+               :help "Add"
+               (clime-handler (ctx) "added"))))
+        t)
+  ;; Parse: external child command
+  (let ((result (clime-parse clime-test--compose-app
+                             '("-v" "clime-test--compose-show" "-f" "json" "abc"))))
+    (should (equal (clime-command-name (clime-parse-result-command result))
+                   "clime-test--compose-show"))
+    (should (= 1 (plist-get (clime-parse-result-params result) 'verbose)))
+    (should (equal "json" (plist-get (clime-parse-result-params result) 'format)))
+    (should (equal "abc" (plist-get (clime-parse-result-params result) 'id))))
+  ;; Parse: inline child command
+  (let ((result (clime-parse clime-test--compose-app '("add"))))
+    (should (equal (clime-command-name (clime-parse-result-command result)) "add"))))
+
+(ert-deftest clime-test-dsl/compose-group-with-defcommands ()
+  "defgroup with defcommand children composes into app."
+  (eval '(progn
+           (clime-defcommand clime-test--dep-add
+             :help "Add dependency"
+             (clime-arg id :help "Dep ID")
+             (clime-handler (ctx) nil))
+           (clime-defcommand clime-test--dep-rm
+             :help "Remove dependency"
+             :aliases (rm)
+             (clime-arg id :help "Dep ID")
+             (clime-handler (ctx) nil))
+           (clime-defgroup clime-test--dep-grp
+             :help "Dependencies"
+             :children (list clime-test--dep-add
+                            clime-test--dep-rm))
+           (clime-app clime-test--compose-grp-app
+             :version "1"
+             :children (list clime-test--dep-grp)))
+        t)
+  (let* ((app clime-test--compose-grp-app)
+         (dep (cdr (assoc "clime-test--dep-grp" (clime-group-children app)))))
+    (should (clime-group-p dep))
+    (should (= 2 (length (clime-group-children dep))))))
+
+(ert-deftest clime-test-dsl/compose-tree-validation ()
+  "Tree validation catches flag collisions from keyword-merged options."
+  (should-error
+   (eval '(progn
+            (defvar clime-test--collision-opt
+              (clime-opt verbose ("-v" "--verbose") :count t))
+            (clime-app clime-test--collision-app
+              :version "1"
+              :options (list clime-test--collision-opt)
+              (clime-command show
+                :help "Show"
+                ;; Collides with root -v/--verbose
+                (clime-opt verbose ("-v") :bool)
+                (clime-handler (ctx) nil))))
+         t)
+   :type 'error))
+
+;;; ─── Merge Helper ───────────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/merge-kw-body-both ()
+  "clime--merge-kw-body with both kw and body produces append form."
+  (let ((result (clime--merge-kw-body 'my-list '(a b))))
+    (should (equal result '(append my-list (list a b))))))
+
+(ert-deftest clime-test-dsl/merge-kw-body-kw-only ()
+  "clime--merge-kw-body with kw only returns kw expression."
+  (should (equal (clime--merge-kw-body 'my-list nil) 'my-list)))
+
+(ert-deftest clime-test-dsl/merge-kw-body-body-only ()
+  "clime--merge-kw-body with body only returns (list ...)."
+  (should (equal (clime--merge-kw-body nil '(a b)) '(list a b))))
+
+(ert-deftest clime-test-dsl/merge-kw-body-neither ()
+  "clime--merge-kw-body with neither returns nil."
+  (should-not (clime--merge-kw-body nil nil)))
+
+;;; ─── Form Composition: Edge Cases ────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/kw-options-with-mutex ()
+  "Keyword :options merges correctly alongside inline clime-mutex."
+  (eval '(progn
+           (defvar clime-test--mutex-shared-opt
+             (clime-opt verbose ("-v" "--verbose") :count t))
+           (clime-app clime-test--kw-mutex-app
+             :version "1"
+             :options (list clime-test--mutex-shared-opt)
+             (clime-command run
+               :help "Run"
+               (clime-mutex fmt
+                 (clime-opt json ("--json") :bool)
+                 (clime-opt csv ("--csv") :bool))
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((app clime-test--kw-mutex-app)
+         (cmd (cdr (assoc "run" (clime-group-children app)))))
+    ;; Root has keyword-provided option
+    (should (= 1 (length (clime-group-options app))))
+    (should (eq 'verbose (clime-option-name (car (clime-group-options app)))))
+    ;; Mutex options live on the inline group child, not the command
+    (should (= 0 (length (clime-command-options cmd))))
+    (let ((grp (cdr (assoc "fmt" (clime-group-children cmd)))))
+      (should grp)
+      (should (clime-node-inline grp))
+      (should (= 2 (length (clime-node-options grp)))))
+    ;; But they're still findable via inline group traversal
+    (should (clime-node-find-option cmd "--json"))
+    (should (clime-node-find-option cmd "--csv"))))
+
+(ert-deftest clime-test-dsl/kw-empty-list ()
+  "Empty :options keyword list doesn't break things."
+  (eval '(clime-app clime-test--kw-empty-app
+           :version "1"
+           :options nil
+           :children nil
+           (clime-opt debug ("-d") :bool)
+           (clime-command ping
+             :help "Ping"
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((app clime-test--kw-empty-app))
+    (should (= 1 (length (clime-group-options app))))
+    (should (= 1 (length (clime-group-children app))))))
+
+(ert-deftest clime-test-dsl/defcommand-with-kw-options ()
+  "clime-defcommand itself can use :options keyword."
+  (eval '(progn
+           (defvar clime-test--defcmd-shared-opt
+             (clime-opt format ("-f" "--format") :default "text"))
+           (clime-defcommand clime-test--defcmd-kw-show
+             :help "Show"
+             :options (list clime-test--defcmd-shared-opt)
+             (clime-opt color ("--color") :bool)
+             (clime-arg id :help "ID")
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr clime-test--defcmd-kw-show)))
+    (should (= 2 (length (clime-command-options cmd))))
+    (should (eq 'format (clime-option-name (car (clime-command-options cmd)))))
+    (should (eq 'color (clime-option-name (cadr (clime-command-options cmd)))))))
+
+(ert-deftest clime-test-dsl/kw-duplicate-flags-error ()
+  "Duplicate flags between keyword-merged options on same node error."
+  (should-error
+   (eval '(progn
+            (defvar clime-test--dup-opt-a
+              (clime-opt verbose ("-v" "--verbose") :count t))
+            (clime-app clime-test--dup-app
+              :version "1"
+              :options (list clime-test--dup-opt-a)
+              ;; Same flags on same node — duplicate flag error
+              (clime-opt verbose2 ("-v") :bool)
+              (clime-command ping
+                :help "Ping"
+                (clime-handler (ctx) nil))))
+         t)
+   :type 'error))
+
+;;; ─── :examples Keyword ──────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/examples-on-command ()
+  ":examples keyword passes through to command struct."
+  (eval '(clime-app clime-test--ex-cmd-app
+           :version "1"
+           (clime-command show
+             :help "Show"
+             :examples '(("app show 1" . "By ID")
+                         ("app show --all" . "All"))
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (assoc "show" (clime-group-children clime-test--ex-cmd-app)))))
+    (should (= 2 (length (clime-node-examples cmd))))
+    (should (equal (caar (clime-node-examples cmd)) "app show 1"))))
+
+(ert-deftest clime-test-dsl/examples-on-app ()
+  ":examples keyword works on app."
+  (eval '(clime-app clime-test--ex-app
+           :version "1"
+           :examples '(("myapp init" . "Init"))
+           (clime-command ping
+             :help "Ping"
+             (clime-handler (ctx) nil)))
+        t)
+  (should (= 1 (length (clime-node-examples clime-test--ex-app)))))
 
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

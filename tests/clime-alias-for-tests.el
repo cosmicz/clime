@@ -88,13 +88,12 @@
     (let ((sc (cdr (assoc "stop" (clime-group-children app)))))
       (should (equal "Stop an agent" (clime-node-help sc))))))
 
-(ert-deftest clime-test-alias-for/alias-is-node-before-resolve ()
-  "Before resolution, alias is a clime-alias node (includes clime-node)."
+(ert-deftest clime-test-alias-for/resolved-at-construction ()
+  "Aliases are resolved at construction time — no clime-alias nodes remain."
   (let* ((app (clime-test--alias-for-app))
          (child (cdr (assoc "start" (clime-group-children app)))))
-    (should (clime-alias-p child))
-    (should (clime-node-p child))
-    (should-not (clime-command-p child))
+    (should (clime-command-p child))
+    (should-not (clime-alias-p child))
     (should (equal "Start an agent (shortcut)" (clime-node-help child)))))
 
 (ert-deftest clime-test-alias-for/replaced-with-command-after-resolve ()
@@ -117,37 +116,37 @@
 
 (ert-deftest clime-test-alias-for/error-target-not-found ()
   "Error when alias target path does not resolve."
-  (let* ((alias (clime-alias--create
-                 :name "start"
-                 :target '("nonexistent" "start")))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "start" alias)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+  (let ((alias (clime-alias--create
+                :name "start"
+                :target '("nonexistent" "start"))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "start" alias)))
+                  :type 'error)))
 
 (ert-deftest clime-test-alias-for/error-target-is-group ()
   "Error when alias target resolves to a group, not a command."
-  (let* ((grp (clime-make-group :name "agents"
-                                :children nil))
-         (alias (clime-alias--create
-                 :name "agents-sc"
-                 :target '("agents")))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "agents" grp)
-                                              (cons "agents-sc" alias)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+  (let ((grp (clime-make-group :name "agents"
+                               :children nil))
+        (alias (clime-alias--create
+                :name "agents-sc"
+                :target '("agents"))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "agents" grp)
+                                                  (cons "agents-sc" alias)))
+                  :type 'error)))
 
 (ert-deftest clime-test-alias-for/error-circular ()
   "Error on circular alias chain."
-  (let* ((sc-a (clime-alias--create
-                :name "a"
-                :target '("b")))
-         (sc-b (clime-alias--create
-                :name "b"
-                :target '("a")))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "a" sc-a)
-                                              (cons "b" sc-b)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+  (let ((sc-a (clime-alias--create
+               :name "a"
+               :target '("b")))
+        (sc-b (clime-alias--create
+               :name "b"
+               :target '("a"))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "a" sc-a)
+                                                  (cons "b" sc-b)))
+                  :type 'error)))
 
 ;;; ─── Transitive Resolution ─────────────────────────────────────────────
 
@@ -340,11 +339,11 @@
          (alias (clime-alias--create
                  :name "bad"
                  :target '("report" "show")
-                 :defaults '((nonexistent . "x"))))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "report" grp)
-                                              (cons "bad" alias)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+                 :defaults '((nonexistent . "x")))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "report" grp)
+                                                  (cons "bad" alias)))
+                  :type 'error)))
 
 ;;; ─── :vals ─────────────────────────────────────────────────────────
 
@@ -435,11 +434,11 @@
          (alias (clime-alias--create
                  :name "bad"
                  :target '("report" "show")
-                 :vals '((nonexistent . "x"))))
-         (app (clime-make-app :name "myapp"
-                              :children (list (cons "report" grp)
-                                              (cons "bad" alias)))))
-    (should-error (clime--resolve-aliases app) :type 'error)))
+                 :vals '((nonexistent . "x")))))
+    (should-error (clime-make-app :name "myapp"
+                                  :children (list (cons "report" grp)
+                                                  (cons "bad" alias)))
+                  :type 'error)))
 
 ;;; ─── DSL :defaults / :vals ─────────────────────────────────────────
 
@@ -526,6 +525,99 @@
     (let* ((result (clime-parse app '("show-csv")))
            (params (clime-parse-result-params result)))
       (should (equal "csv" (plist-get params 'format))))))
+
+;;; ─── Parent Ref After Resolution ───────────────────────────────────────
+
+(ert-deftest clime-test-alias-for/resolved-alias-has-parent ()
+  "Resolved alias has non-nil parent pointing to its containing group."
+  (let* ((app (clime-make-app
+               :name "test"
+               :children
+               `(("show" . ,(clime-make-command :name "show"
+                              :handler #'ignore))
+                 ("s" . ,(clime-alias--create :name "s"
+                           :target '("show")))))))
+    (clime--set-parent-refs app)
+    (clime--resolve-aliases app)
+    (let ((resolved (cdr (assoc "s" (clime-group-children app)))))
+      (should (clime-command-p resolved))
+      (should (eq (clime-node-parent resolved) app)))))
+
+(ert-deftest clime-test-alias-for/resolved-alias-ancestor-walk ()
+  "Ancestor walk from resolved alias reaches root."
+  (let* ((app (clime-make-app
+               :name "test"
+               :children
+               `(("grp" . ,(clime-make-group
+                            :name "grp"
+                            :children
+                            `(("show" . ,(clime-make-command :name "show"
+                                           :handler #'ignore))
+                              ("s" . ,(clime-alias--create :name "s"
+                                        :target '("grp" "show"))))))))))
+    (clime--set-parent-refs app)
+    (clime--resolve-aliases app)
+    (let* ((grp (cdr (assoc "grp" (clime-group-children app))))
+           (resolved (cdr (assoc "s" (clime-group-children grp)))))
+      (should (eq (clime-node-parent resolved) grp))
+      (should (equal (mapcar #'clime-node-name (clime-node-ancestors resolved))
+                     '("grp" "test"))))))
+
+(ert-deftest clime-test-alias-for/resolved-alias-inherits-ancestor-options ()
+  "Resolved alias sees ancestor options during parse."
+  (let* ((app (clime-make-app
+               :name "test"
+               :options (list (clime-make-option :name 'verbose
+                                :flags '("--verbose") :nargs 0))
+               :children
+               `(("show" . ,(clime-make-command :name "show"
+                              :handler #'ignore))
+                 ("s" . ,(clime-alias--create :name "s"
+                           :target '("show")))))))
+    (let* ((result (clime-parse app '("s" "--verbose")))
+           (params (clime-parse-result-params result)))
+      (should (eq t (plist-get params 'verbose))))))
+
+;;; ─── Ancestor locked-vals inheritance ────────────────────────────────
+
+(ert-deftest clime-test-alias-for/ancestor-locked-vals-inherited ()
+  "locked-vals on ancestor group are injected into child command params."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore))
+         (grp (clime-make-group :name "report"
+                                :locked-vals '((format . "csv"))
+                                :children (list (cons "show" cmd))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)))))
+    (let* ((result (clime-parse app '("report" "show")))
+           (params (clime-parse-result-params result)))
+      (should (equal "csv" (plist-get params 'format))))))
+
+(ert-deftest clime-test-alias-for/leaf-locked-vals-override-ancestor ()
+  "Leaf locked-vals take priority over ancestor locked-vals for same key."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                    :locked-vals '((format . "json"))))
+         (grp (clime-make-group :name "report"
+                                :locked-vals '((format . "csv"))
+                                :children (list (cons "show" cmd))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)))))
+    (let* ((result (clime-parse app '("report" "show")))
+           (params (clime-parse-result-params result)))
+      (should (equal "json" (plist-get params 'format))))))
+
+(ert-deftest clime-test-alias-for/ancestor-locked-vals-merge-with-leaf ()
+  "Ancestor and leaf locked-vals for different keys both appear in params."
+  (let* ((cmd (clime-make-command :name "show" :handler #'ignore
+                                    :locked-vals '((limit . 10))))
+         (grp (clime-make-group :name "report"
+                                :locked-vals '((format . "csv"))
+                                :children (list (cons "show" cmd))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)))))
+    (let* ((result (clime-parse app '("report" "show")))
+           (params (clime-parse-result-params result)))
+      (should (equal "csv" (plist-get params 'format)))
+      (should (equal 10 (plist-get params 'limit))))))
 
 (provide 'clime-alias-for-tests)
 ;;; clime-alias-for-tests.el ends here

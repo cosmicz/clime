@@ -376,21 +376,6 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
                               env-var)))))))))
   params)
 
-(defun clime--mutex-sibling-set-p (opt nodes params)
-  "Return non-nil if a mutex sibling of OPT already has a value in PARAMS.
-Searches all options in NODES sharing the same :mutex group symbol."
-  (let ((mx (clime-option-mutex opt)))
-    (when mx
-      (cl-some
-       (lambda (node)
-         (cl-some
-          (lambda (o)
-            (and (not (eq o opt))
-                 (eq (clime-option-mutex o) mx)
-                 (plist-member params (clime-option-name o))))
-          (clime-node-options node)))
-       nodes))))
-
 (defun clime--apply-defaults (nodes params)
   "Apply default values for all options and args in NODES not already in PARAMS.
 NODES is a list of nodes whose params to process.  Returns updated PARAMS."
@@ -399,8 +384,7 @@ NODES is a list of nodes whose params to process.  Returns updated PARAMS."
       (let ((name (clime-option-name opt)))
         (unless (plist-member params name)
           (let ((default (clime-option-default opt)))
-            (when (and default
-                       (not (clime--mutex-sibling-set-p opt nodes params)))
+            (when default
               (setq params (plist-put params name
                                       (clime--resolve-value default))))))))
     (dolist (arg (clime-node-args node))
@@ -431,36 +415,12 @@ PATH is the command path for error messages.  Signals `clime-usage-error'."
                               (clime-arg-name arg)
                               (string-join path " "))))))))
 
-;;; ─── Mutex Validation ──────────────────────────────────────────────────
-
-(defun clime--check-mutex (nodes params)
-  "Check mutual exclusion constraints across NODES for PARAMS.
-Signal `clime-usage-error' if multiple options in the same mutex group are set."
-  (let ((groups (make-hash-table :test #'eq)))
-    ;; Collect options by mutex group
-    (dolist (node nodes)
-      (dolist (opt (clime-node-options node))
-        (when-let* ((mx (clime-option-mutex opt)))
-          (push opt (gethash mx groups)))))
-    ;; Check each group
-    (maphash
-     (lambda (_group opts)
-       (let ((set-opts (cl-remove-if-not
-                        (lambda (opt)
-                          (plist-member params (clime-option-name opt)))
-                        opts)))
-         (when (> (length set-opts) 1)
-           (signal 'clime-usage-error
-                   (list (format "Options %s are mutually exclusive"
-                                 (mapconcat (lambda (o) (car (clime-option-flags o)))
-                                            set-opts ", ")))))))
-     groups)))
-
-(defun clime--check-requires (nodes params)
-  "Check :requires constraints across NODES for PARAMS.
-Signal `clime-usage-error' if an option with :requires is set but any
-of its required options are absent from PARAMS."
-  (let ((all-opts '()))
+(defun clime--find-unsatisfied-requires (nodes params)
+  "Return list of error strings for unmet :requires constraints.
+Checks all options across NODES against PARAMS.  Returns nil when
+all constraints are satisfied."
+  (let ((all-opts '())
+        (errors '()))
     ;; Collect all options for flag lookup
     (dolist (node nodes)
       (dolist (opt (clime-node-options node))
@@ -486,71 +446,18 @@ of its required options are absent from PARAMS."
                                         (car (clime-option-flags req-opt))
                                       (format "--%s" name))))
                                 missing)))
-                  (signal 'clime-usage-error
-                          (list (format "%s requires %s"
-                                        flag
-                                        (mapconcat #'identity missing-flags ", ")))))))))))))
+                  (push (format "%s requires %s"
+                                flag
+                                (mapconcat #'identity missing-flags ", "))
+                        errors))))))))
+    (nreverse errors)))
 
-(defun clime--check-and-zip (nodes params)
-  "Check :zip constraints across NODES and build zipped alists in PARAMS.
-Signal `clime-usage-error' if zip group members have unequal cardinality
-or partial presence.  Returns updated PARAMS with zip group entries added."
-  (let ((groups (make-hash-table :test #'eq)))
-    ;; Collect options by zip group
-    (dolist (node nodes)
-      (dolist (opt (clime-node-options node))
-        (when-let* ((zg (clime-option-zip opt)))
-          (push opt (gethash zg groups)))))
-    ;; Validate and zip each group
-    (maphash
-     (lambda (group opts)
-       (let* ((opts (nreverse opts))
-              (counts (mapcar (lambda (opt)
-                                (let ((val (plist-get params (clime-option-name opt))))
-                                  (if (listp val) (length val) 0)))
-                              opts))
-              (set-opts (cl-remove-if-not
-                         (lambda (opt)
-                           (plist-member params (clime-option-name opt)))
-                         opts))
-              (any-set (> (length set-opts) 0))
-              (all-set (= (length set-opts) (length opts))))
-         ;; Partial presence check
-         (when (and any-set (not all-set))
-           (let ((missing (cl-remove-if
-                           (lambda (opt)
-                             (plist-member params (clime-option-name opt)))
-                           opts)))
-             (signal 'clime-usage-error
-                     (list (format "%s requires %s"
-                                   (car (clime-option-flags (car set-opts)))
-                                   (mapconcat (lambda (o) (car (clime-option-flags o)))
-                                              missing ", "))))))
-         ;; Cardinality check
-         (when (and all-set (not (apply #'= counts)))
-           (let ((parts (mapcar (lambda (opt)
-                                  (format "%s (%d)"
-                                          (car (clime-option-flags opt))
-                                          (let ((val (plist-get params (clime-option-name opt))))
-                                            (if (listp val) (length val) 0))))
-                                opts)))
-             (signal 'clime-usage-error
-                     (list (format "Zip group options must be used the same number of times: %s"
-                                   (mapconcat #'identity parts ", "))))))
-         ;; Build zipped alist
-         (when all-set
-           (let* ((n (car counts))
-                  (zipped '()))
-             (dotimes (i n)
-               (let ((row '()))
-                 (dolist (opt opts)
-                   (let* ((name (clime-option-name opt))
-                          (vals (plist-get params name)))
-                     (push (cons name (nth i vals)) row)))
-                 (push (nreverse row) zipped)))
-             (setq params (plist-put params group (nreverse zipped)))))))
-     groups)
-    params))
+(defun clime--check-requires (nodes params)
+  "Check :requires constraints across NODES for PARAMS.
+Signal `clime-usage-error' if an option with :requires is set but any
+of its required options are absent from PARAMS."
+  (when-let ((errors (clime--find-unsatisfied-requires nodes params)))
+    (signal 'clime-usage-error (list (car errors)))))
 
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
@@ -765,7 +672,7 @@ since static choices were already validated in pass 1."
   "Run :conform functions for options and args in NODES against PARAMS.
 Called in pass 2 after dynamic choices validation and env var application.
 Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
-the current value and returns the conformed value; signaled errors become
+\(value, param) and returns the conformed value; signaled errors become
 `clime-usage-error'."
   (dolist (node nodes)
     (dolist (opt (clime-node-options node))
@@ -775,7 +682,7 @@ the current value and returns the conformed value; signaled errors become
                  (val (plist-get params name)))
             (when val
               (condition-case err
-                  (let ((conformed (funcall cfn val)))
+                  (let ((conformed (funcall cfn val opt)))
                     (setq params (plist-put params name conformed)))
                 (error
                  (signal 'clime-usage-error
@@ -789,13 +696,56 @@ the current value and returns the conformed value; signaled errors become
                  (val (plist-get params name)))
             (when val
               (condition-case err
-                  (let ((conformed (funcall cfn val)))
+                  (let ((conformed (funcall cfn val arg)))
                     (setq params (plist-put params name conformed)))
                 (error
                  (signal 'clime-usage-error
                          (list (format "Invalid value for <%s>: %s"
                                        (clime-arg-name arg)
                                        (error-message-string err))))))))))))
+  params)
+
+(defun clime--apply-node-conform (node params)
+  "Run NODE's :conform functions on PARAMS, return updated PARAMS.
+:conform is a list of functions, each taking (params, node).
+Signaled errors become `clime-usage-error'."
+  (let ((fns (clime-node-conform node)))
+    (when fns
+      (when (functionp fns) (setq fns (list fns)))
+      (dolist (fn fns)
+        (condition-case err
+            (setq params (funcall fn params node))
+          (clime-usage-error (signal (car err) (cdr err)))
+          (error
+           (signal 'clime-usage-error
+                   (list (error-message-string err))))))))
+  params)
+
+(defun clime--conform-inline-children (node dispatch-nodes params)
+  "Postorder-conform inline group children of NODE not on DISPATCH-NODES.
+Recurses into nested inline groups before conforming each."
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (let ((child (cdr entry)))
+        (when (and (clime-group-p child)
+                   (clime-node-inline child)
+                   (not (memq child dispatch-nodes)))
+          ;; Recurse first (postorder: children before parent)
+          (setq params (clime--conform-inline-children child dispatch-nodes params))
+          ;; Then conform this inline child
+          (setq params (clime--apply-node-conform child params))))))
+  params)
+
+(defun clime--run-node-conformers (nodes params)
+  "Postorder-conform visited NODES, also descending into inline groups.
+NODES is the visited-nodes list (leaf first, from push during parse).
+At each node, inline group children not on the dispatch path are
+conformed first (recursively, postorder), then the node itself."
+  (dolist (node nodes)
+    ;; Conform inline group children not on the dispatch path
+    (setq params (clime--conform-inline-children node nodes params))
+    ;; Conform the node itself
+    (setq params (clime--apply-node-conform node params)))
   params)
 
 (defun clime-parse-finalize (result)
@@ -808,21 +758,24 @@ defaults, and checks required params.  Returns the updated RESULT."
          (params (clime-parse-result-params result))
          (display-path (clime-parse-result-display-path result))
          (root (cl-find-if #'clime-app-p visited-nodes)))
-    ;; Inject locked vals (from alias :vals resolution)
-    (dolist (entry (clime-node-locked-vals (clime-parse-result-node result)))
-      (setq params (plist-put params (car entry) (cdr entry))))
+    ;; Inject locked vals (from alias :vals resolution).
+    ;; Walk leaf→root; skip keys already set so leaf takes priority.
+    (dolist (node visited-nodes)
+      (dolist (entry (clime-node-locked-vals node))
+        (unless (plist-member params (car entry))
+          (setq params (plist-put params (car entry) (cdr entry))))))
     ;; Validate dynamic choices (functions resolved now, after setup)
     (clime--validate-dynamic-choices visited-nodes params)
     ;; Apply env vars (external input, needs conforming)
     (setq params (clime--apply-env visited-nodes params root))
-    ;; Run :conform functions (after env, before defaults — defaults
-    ;; are developer-authored and should already be valid)
+    ;; Run option/arg :conform functions (after env, before defaults —
+    ;; defaults are developer-authored and should already be valid)
     (setq params (clime--run-conformers visited-nodes params))
-    ;; Mutex check (after env+conform, before defaults)
-    (clime--check-mutex visited-nodes params)
+    ;; Run node-level :conform (leaf→root walk)
+    (setq params (clime--run-node-conformers visited-nodes params))
+    ;; Check :requires constraints
     (clime--check-requires visited-nodes params)
-    (setq params (clime--check-and-zip visited-nodes params))
-    ;; Apply defaults (mutex-aware: skips defaults when a sibling is set)
+    ;; Apply defaults
     (setq params (clime--apply-defaults visited-nodes params))
     (clime--check-required visited-nodes params display-path)
     ;; Update and mark finalized

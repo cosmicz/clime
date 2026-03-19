@@ -41,6 +41,40 @@
         (princ (clime-format-version node))
       (princ (clime-format-help node path)))))
 
+;;; ─── Handler Execution ────────────────────────────────────────────────
+
+(defun clime-run--execute (handler ctx)
+  "Call HANDLER with CTX, flushing output and returning exit code.
+Uses `clime--active-output-format' for output routing.
+Re-signals `clime-usage-error' and `clime-help-requested' to caller.
+Returns integer exit code: 0 success, 1 runtime error."
+  (let* ((fmt clime--active-output-format)
+         (streaming (clime-output-format-streaming fmt))
+         (clime--output-items nil)
+         (clime--output-errors nil)
+         (retval nil)
+         (exit-code
+          (condition-case err
+              (progn (setq retval (funcall handler ctx)) 0)
+            (clime-usage-error
+             (signal (car err) (cdr err)))
+            (clime-help-requested
+             (signal (car err) (cdr err)))
+            (error
+             (if debug-on-error
+                 (signal (car err) (cdr err))
+               (if streaming
+                   (funcall (clime-output-format-error-handler fmt)
+                            (error-message-string err))
+                 (push (error-message-string err) clime--output-errors))
+               1)))))
+    (let ((has-errors (or clime--output-errors (> exit-code 0))))
+      (if streaming
+          (when retval
+            (princ (funcall (clime-output-format-encoder fmt) retval)))
+        (clime--output-flush (clime-output-format-finalize fmt) retval))
+      (if has-errors 1 0))))
+
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
 (defun clime--detect-output-format (app argv)
@@ -81,39 +115,7 @@ the format and drives all output behavior through the format struct."
                          (if (stringp dep) (format ". %s" dep) ""))))
             (if (not handler)
                 0
-              (let* ((streaming (clime-output-format-streaming clime--active-output-format))
-                     (clime--output-items nil)
-                     (clime--output-errors nil)
-                     (retval nil)
-                     (exit-code
-                      (condition-case herr
-                          (progn (setq retval (funcall handler ctx)) 0)
-                        (clime-usage-error
-                         ;; Re-signal so outer handler returns exit code 2
-                         (signal (car herr) (cdr herr)))
-                        (clime-help-requested
-                         ;; Re-signal so outer handler prints help
-                         (signal (car herr) (cdr herr)))
-                        (error
-                         (if debug-on-error
-                             (signal (car herr) (cdr herr))
-                           (if streaming
-                               (funcall (clime-output-format-error-handler clime--active-output-format) (error-message-string herr))
-                             (setq clime--output-errors
-                                   (nconc clime--output-errors
-                                          (list (error-message-string herr)))))
-                           1)))))
-                (let ((has-errors (or clime--output-errors (> exit-code 0))))
-                  (if streaming
-                      ;; Streaming: print retval directly if non-nil
-                      (when retval
-                        (princ (funcall (clime-output-format-encoder clime--active-output-format)
-                                        retval)))
-                    ;; Buffered: flush items/errors through finalize
-                    (clime--output-flush
-                     (clime-output-format-finalize clime--active-output-format)
-                     retval))
-                  (if has-errors 1 0))))))
+              (clime-run--execute handler ctx))))
       (clime-help-requested
        (clime--print-help (cdr err))
        0)
@@ -151,8 +153,9 @@ When CLIME_ARGV0 is set (by the shebang), uses its basename
 as the program name in usage output instead of the DSL symbol.
 No-op when called from an interactive Emacs session."
   (unless noninteractive
-    (message "Warning: (clime-run-batch %s) ignored in interactive mode"
-             (clime-node-name app)))
+    (display-warning 'clime
+                     (format "(clime-run-batch %s) ignored in interactive mode"
+                             (clime-node-name app))))
   (when noninteractive
     ;; Copy args before clearing.  Use `args' not `argv' — the latter
     ;; is a defvaralias for `command-line-args-left' and would be

@@ -37,12 +37,12 @@
 (require 'clime-output)
 (require 'clime-run)
 
-(defconst clime-version "0.3.0"
+(defconst clime-version "0.4.0"
   "The clime package version string.")
 
 (defconst clime--modules
   '(clime-settings clime-core clime-parse clime-dsl
-    clime-help clime-output clime-run)
+                   clime-help clime-output clime-run)
   "Clime modules in dependency order.")
 
 (defconst clime--optional-modules
@@ -65,16 +65,19 @@ Reloads modules in dependency order to avoid stale definitions."
       (let ((file (locate-library (symbol-name mod))))
         (when file
           (load file nil t t))))
-    ;; Reload optional modules that were previously loaded
+    ;; Reload clime.el itself (picks up changes to reload logic, module lists)
+    (let ((self (locate-library "clime")))
+      (when self (load self nil t t)))
+    ;; Clear face-defface-spec before reload so defface applies new specs
+    (dolist (face (apropos-internal "\\`clime-" #'facep))
+      (put face 'face-defface-spec nil))
+    ;; Reload optional clime modules that were previously loaded
     (dolist (mod clime--optional-modules)
       (when (featurep mod)
         (let ((file (locate-library (symbol-name mod))))
           (when file
             (load file nil t t))))))
-  ;; Clear invoke cache so regenerated prefixes use fresh code
-  (when (boundp 'clime-invoke--cache)
-    (clrhash clime-invoke--cache))
-  (message "Reloaded %d clime modules" (length clime--modules)))
+  (message "Reloaded clime modules"))
 
 (provide 'clime)
 ;;; clime.el ends here

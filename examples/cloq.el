@@ -9,7 +9,7 @@
 
 ;;; Commentary:
 
-;; A concise demo app for clime v0.3 — wraps org-ql into a CLI tool.
+;; A concise demo app for clime — wraps org-ql into a CLI tool.
 ;;
 ;; Requires: org-ql
 
@@ -24,17 +24,16 @@
   :version "1.0"
   :help "Query org files from the command line."
   :env-prefix "CLOQ"
-  :epilog "Examples:
-  cloq query -f tasks.org --todo TODO
-  cloq query -f tasks.org --sexp '(deadline :to today)' --json
-  cloq waiting -f tasks.org"
+  :examples '(("cloq query -f tasks.org --todo TODO" . "Find TODOs")
+              ("cloq query -f tasks.org --sexp '(deadline :to today)' --json" . "Deadlines as JSON")
+              ("cloq waiting -f tasks.org" . "Show WAITING items"))
 
   (clime-output-format json ("--json") :help "Output as JSON")
 
-  (clime-option verbose ("-v" "--verbose") :count t
+  (clime-opt verbose ("-v" "--verbose") :count
                 :help "Increase verbosity")
 
-  (clime-option file ("--file" "-f") :multiple t :required t
+  (clime-opt file ("--file" "-f") :multiple :required
                 :coerce #'expand-file-name
                 :help "Org file(s) to query")
 
@@ -42,19 +41,20 @@
     :help "Run an org-ql query"
     :aliases (q)
 
-    (clime-option todo ("--todo" "-t") :mutex 'query
-                  :help "Match TODO keyword" :category "Query")
-    (clime-option sexp ("--sexp") :mutex 'query
-                  :help "S-expression query" :category "Query")
-    (clime-option search ("--search" "-s") :mutex 'query
-                  :help "Plain-text search query" :category "Query")
+    (clime-mutex query
+      (clime-opt todo ("--todo" "-t")
+                    :help "Match TODO keyword" :category "Query")
+      (clime-opt sexp ("--sexp")
+                    :help "S-expression query" :category "Query")
+      (clime-opt search ("--search" "-s")
+                    :help "Plain-text search query" :category "Query"))
 
-    (clime-option sort ("--sort")
+    (clime-opt sort ("--sort")
       :choices '("deadline" "priority" "todo")
       :help "Sort results" :category "Output")
-    (clime-option limit ("--limit" "-n") :type 'integer
+    (clime-opt limit ("--limit" "-n") :type 'integer
                   :help "Max results to return" :category "Output")
-    (clime-option tags ("--tags") :negatable t :default t
+    (clime-opt tags ("--tags") :negatable :default t
                   :help "Include tags in output" :category "Output")
 
     (clime-handler (ctx)
@@ -76,7 +76,7 @@
               (mapcar (lambda (h) `((heading . ,h))) results)
             (mapconcat #'identity results "\n"))))))
 
-  (clime-group shortcuts :inline t :category "Shortcuts"
+  (clime-group shortcuts :inline :category "Shortcuts"
                (clime-alias-for waiting (query)
                :help "Show WAITING items"
                :vals '((todo . "WAITING")))))

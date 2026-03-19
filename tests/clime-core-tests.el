@@ -565,16 +565,16 @@
     (should (eq (clime-node-parent grp) app))
     (should (eq (clime-node-parent cmd) grp))))
 
-(ert-deftest clime-test-set-parent-refs/runs-collision-check ()
-  "clime--set-parent-refs signals on ancestor flag collision."
+(ert-deftest clime-test-make-app/catches-ancestor-collision ()
+  "clime-make-app signals on ancestor flag collision at construction time."
   (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose")))
          (cmd-opt (clime-make-option :name 'verbose :flags '("--verbose")))
          (cmd (clime-make-command :name "show" :handler #'ignore
-                                  :options (list cmd-opt)))
-         (app (clime-make-app :name "t" :version "1"
-                              :options (list root-opt)
-                              :children (list (cons "show" cmd)))))
-    (should-error (clime--set-parent-refs app) :type 'error)))
+                                  :options (list cmd-opt))))
+    (should-error (clime-make-app :name "t" :version "1"
+                                  :options (list root-opt)
+                                  :children (list (cons "show" cmd)))
+                  :type 'error)))
 
 ;;; ─── Params Plist ──────────────────────────────────────────────────────
 
@@ -651,6 +651,92 @@
   (let ((tpl (list :type 'string :help "orig")))
     (clime--merge-template tpl :help "changed")
     (should (equal (plist-get tpl :help) "orig"))))
+
+;;; ─── Tree Validation ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-validate/duplicate-flag-error ()
+  "Error when two options on the same node share a flag."
+  (let ((opt-a (clime-make-option :name 'verbose :flags '("--verbose" "-v")))
+        (opt-b (clime-make-option :name 'debug :flags '("--verbose")))
+        (cmd (clime-make-command :name "run" :handler #'ignore)))
+    (should-error (clime-make-app :name "t"
+                                  :options (list opt-a opt-b)
+                                  :children (list (cons "run" cmd)))
+                  :type 'error)))
+
+(ert-deftest clime-test-validate/duplicate-option-name-error ()
+  "Error when two options on the same node share a name."
+  (let ((opt-a (clime-make-option :name 'out :flags '("--output")))
+        (opt-b (clime-make-option :name 'out :flags '("--out")))
+        (cmd (clime-make-command :name "run" :handler #'ignore)))
+    (should-error (clime-make-app :name "t"
+                                  :options (list opt-a opt-b)
+                                  :children (list (cons "run" cmd)))
+                  :type 'error)))
+
+(ert-deftest clime-test-validate/duplicate-child-name-error ()
+  "Error when a group has two children with the same name."
+  (let ((cmd-a (clime-make-command :name "run" :handler #'ignore))
+        (cmd-b (clime-make-command :name "run" :handler #'ignore)))
+    (should-error (clime-make-app :name "t"
+                                  :children (list (cons "run" cmd-a)
+                                                  (cons "run" cmd-b)))
+                  :type 'error)))
+
+(ert-deftest clime-test-validate/nested-group-duplicate-flag ()
+  "Validation catches duplicates in nested groups."
+  (let* ((opt-a (clime-make-option :name 'x :flags '("--xx")))
+         (opt-b (clime-make-option :name 'y :flags '("--xx")))
+         (cmd (clime-make-command :name "run" :handler #'ignore))
+         (grp (clime-make-group :name "sub"
+                                :options (list opt-a opt-b)
+                                :children (list (cons "run" cmd)))))
+    (should-error (clime-make-app :name "t"
+                                  :children (list (cons "sub" grp)))
+                  :type 'error)))
+
+(ert-deftest clime-test-validate/clean-tree-no-error ()
+  "No error on a well-formed tree with no structural issues."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose")))
+         (cmd-opt (clime-make-option :name 'json :flags '("--json")))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list cmd-opt))))
+    ;; Should not signal
+    (clime-make-app :name "t"
+                    :options (list root-opt)
+                    :children (list (cons "show" cmd)))))
+
+;;; ─── Required + Default Warning ─────────────────────────────────────
+
+(ert-deftest clime-test-validate/required-default-option-warns ()
+  "Warning when option has both :required t and :default."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-option :name 'fmt :flags '("--fmt")
+                                    :required t :default "json"))))
+    (should (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                     msgs))))
+
+(ert-deftest clime-test-validate/required-no-default-option-no-warn ()
+  "No warning when option has :required t without :default."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-option :name 'fmt :flags '("--fmt")
+                                    :required t))))
+    (should-not (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                         msgs))))
+
+(ert-deftest clime-test-validate/required-default-arg-warns ()
+  "Warning when arg has both :required t and :default."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-arg :name 'file :required t :default "out.txt"))))
+    (should (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                     msgs))))
+
+(ert-deftest clime-test-validate/required-no-default-arg-no-warn ()
+  "No warning when arg has :required t without :default."
+  (let ((msgs (clime-test-with-messages
+                (clime-make-arg :name 'file :required t))))
+    (should-not (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
+                         msgs))))
 
 (provide 'clime-core-tests)
 ;;; clime-core-tests.el ends here
