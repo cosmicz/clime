@@ -126,7 +126,7 @@ When WIDTH is non-nil, help text is wrapped to fit within WIDTH columns."
 (defun clime-help--format-usage (node path)
   "Build the usage line for NODE at PATH."
   (let* ((path-str (string-join path " "))
-         (has-options (not (null (clime-node-options node))))
+         (has-options (not (null (clime-node-all-options node))))
          (has-children (and (clime-branch-p node)
                             (clime-group-children node)))
          (args (clime-node-args node))
@@ -437,12 +437,12 @@ Returns a flat list of `clime-option' structs, deduped by flag set."
         (seen-flags (make-hash-table :test 'equal))
         (result '()))
     ;; Mark current node's flags as seen (so we don't duplicate)
-    (dolist (opt (clime-node-options node))
+    (dolist (opt (clime-node-all-options node))
       (dolist (flag (clime-option-flags opt))
         (puthash flag t seen-flags)))
     ;; Walk ancestors
     (while parent
-      (dolist (opt (clime-node-options parent))
+      (dolist (opt (clime-node-all-options parent))
         (unless (or (clime-option-hidden opt)
                     (cl-some (lambda (flag) (gethash flag seen-flags))
                              (clime-option-flags opt)))
@@ -496,7 +496,7 @@ or bare strings.  When WIDTH is non-nil, help text is wrapped to fit."
             (push unified sections)))
       ;; Leaf commands: options only, no children
       (let ((opts-section (clime-help--format-options
-                           (clime-node-options node) width)))
+                           (clime-node-all-options node) width)))
         (when opts-section
           (push opts-section sections))))
     ;; Global Options (inherited from ancestors)
