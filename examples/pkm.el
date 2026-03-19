@@ -364,7 +364,7 @@
 
       (clime-handler (ctx)
         (clime-let ctx (name)
-          (format "Dependencies for %s:\n  clime 0.3.0\n  dash 2.19.1" name)))
+          (format "Dependencies for %s:\n  clime 0.4.0\n  dash 2.19.1" name)))
 
       (clime-command add
         :help "Add a dependency"

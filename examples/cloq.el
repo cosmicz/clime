@@ -9,7 +9,7 @@
 
 ;;; Commentary:
 
-;; A concise demo app for clime v0.3 — wraps org-ql into a CLI tool.
+;; A concise demo app for clime — wraps org-ql into a CLI tool.
 ;;
 ;; Requires: org-ql
 

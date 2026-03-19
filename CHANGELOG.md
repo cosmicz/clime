@@ -1,19 +1,78 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-03-19
 
-### Added
+### Option groups
 
-- **Form composition**: container macros (`clime-app`, `clime-group`,
-  `clime-command`) now accept `:options`, `:args`, `:children`, and
-  `:output-formats` as keywords holding runtime list expressions.
-  Keyword-provided items are merged with inline DSL forms via `append`
-  (keyword items first, then inline).  Enables cross-file app
-  composition without dropping to raw constructors.
+- **`clime-mutex`**: declare mutually exclusive options as a named group.
+  At most one member can be set; the winner's name is injected as a
+  derived key in ctx.  Supports `:default` for a fallback when no member
+  is chosen.
 
-- **`clime-defcommand` and `clime-defgroup`**: `defvar` sugar for
-  defining composable command and group forms.  The stored value is
-  directly usable in a container's `:children` keyword:
+  ```elisp
+  (clime-mutex output-format
+    (clime-opt json ("--json") :bool)
+    (clime-opt csv  ("--csv")  :bool))
+
+  ;; In handler:
+  (clime-ctx-get ctx 'output-format) ;; => 'json, 'csv, or nil
+  ```
+
+- **`clime-zip`**: declare paired options that must be used the same
+  number of times.  Values are zipped into a list of alists in ctx.
+
+  ```elisp
+  (clime-zip mappings
+    (clime-opt from ("--from"))
+    (clime-opt to   ("--to")))
+  ;; --from a --to b --from c --to d
+  ;; => (((from . "a") (to . "b")) ((from . "c") (to . "d")))
+  ```
+
+- **`clime-check-exclusive` and `clime-check-paired`**: factory functions
+  for building node conformers programmatically.  Used internally by the
+  DSL forms above; available for direct use in dynamic app construction.
+
+### Conform system
+
+- **Node-level `:conform`**: commands, groups, and apps now accept a
+  `:conform` slot with signature `(params, node) → params`.  Runs
+  during finalization in leaf→root order, after individual option/arg
+  conformers.  Multiple conformers per node are supported (list of
+  functions, threaded).
+
+- **Option/arg `:conform` signature change**: updated from `(value)` to
+  `(value, param)`.  Conformers can now inspect the param struct
+  (name, flags, type, etc.).
+
+- The cohort system (`:mutex`/`:zip`/`:cohort` slots on options,
+  `clime-cohort` struct) has been replaced by the unified `:conform`
+  mechanism.  `clime-mutex` and `clime-zip` DSL forms are the
+  recommended migration path.
+
+### Interactive menu (`clime-invoke`)
+
+- **Rewritten as a lightweight `read-key` menu**, replacing the
+  `transient.el` dependency.  The app tree IS the menu — no separate
+  prefix/suffix definitions.  Groups become nested menus, options cycle
+  with `-X` or set directly with `=X`, `RET` runs, `q` returns.  Zero
+  external dependencies.
+
+- **Inline validation**: the validation pipeline runs after every
+  parameter mutation.  Per-param errors shown inline (`← error text`);
+  conformer and `:requires` errors shown in the header.
+
+- **`=` prefix for direct input**: `=` then an option key opens
+  `completing-read` (choices) or `read-string` (counts) instead of
+  cycling.
+
+- **Prefix state feedback**: pressing `-` or `=` highlights option keys
+  with the prefix (`-v`/`=v`) and dims non-option keys.
+
+### Form composition
+
+- **`clime-defcommand` and `clime-defgroup`**: define reusable command
+  and group forms as `defvar` values, composable across files:
 
   ```elisp
   (clime-defcommand my-show
@@ -27,156 +86,51 @@
     (clime-command add ...))
   ```
 
-- **`:examples` slot on commands, groups, and apps**: structured example
-  invocations rendered in help output as a two-column "Examples:" section
-  between Global Options and Epilog.  Each example can be a cons pair
-  `("invocation" . "description")`, a bare string `"invocation"`, or a
-  single-element list `("invocation")`:
+- **Keyword merge in containers**: `clime-app`, `clime-group`, and
+  `clime-command` accept `:options`, `:args`, `:children`, and
+  `:output-formats` keywords holding runtime list expressions.  Merged
+  with inline DSL forms (keyword items first, then inline).
 
-  ```elisp
-  (clime-command show
-    :help "Show a resource"
-    :examples '(("app show 123" . "Show by ID")
-                "app show --all")
-    ...)
-  ```
+### DSL improvements
 
-- **DSL macro aliases**: `clime-opt` is now the canonical short form for
-  defining options (matching `clime-arg`), with `clime-option` as a
-  long-form alias.  Similarly, `clime-argument` aliases `clime-arg`,
-  `clime-defoption` aliases `clime-defopt`, and `clime-defargument`
-  aliases `clime-defarg`.  All forms are interchangeable in DSL bodies.
+- **`clime-opt`** is now the canonical short form for options (matching
+  `clime-arg`).  `clime-option` remains as a long-form alias.
 
-- **Unified `:conform` system**: node-level `:conform` slot on
-  commands, groups, and apps with signature `(params, node) → params`.
-  Option/arg `:conform` signature updated to `(value, param) → value`.
-  Both levels share the same slot name and shape — different
-  granularity.  Finalization walks visited nodes leaf→root, running
-  option/arg conformers then node conformers at each level.  Multiple
-  conformers per node supported (list of functions, threaded).
+- **Bare boolean keywords**: write `:bool :hidden` instead of
+  `:bool t :hidden t`.  Works across all DSL forms.
 
-- **`clime-mutex` DSL form**: declares exclusive option groups
-  (at-most-one).  Injects the winner's option name as a derived key in
-  ctx.  Supports `:default` for a fallback when no member is chosen.
-  Truthy winners suppress defaults on siblings.  Negatable flags count
-  for conflict detection but don't become winners.
+- **`:examples` slot**: structured example invocations on commands,
+  groups, and apps.  Rendered as a two-column "Examples:" section in
+  `--help`.
 
-- **`clime-zip` DSL form**: declares paired option groups
-  (all-or-none with equal cardinality).  Values are zipped into a list
-  of alists available in ctx under the group name.  Implies `:multiple`.
+- **`clime-param` base struct**: `clime-option` and `clime-arg` now
+  share a common base with universal accessors (`clime-param-name`,
+  `clime-param-help`, etc.).
 
-- **`clime-check-exclusive` and `clime-check-paired`**: closure-returning
-  factory functions for building node conformers.  Used internally by
-  `clime-mutex`/`clime-zip` and available for direct use in
-  programmatic app construction.
-
-- **`clime-param` base struct**: abstract base for options and args.
-  Universal accessors `clime-param-name`, `clime-param-help`,
-  `clime-param-required`, `clime-param-default` work across both
-  types.  `clime-option` and `clime-arg` now inherit via `:include`.
-
-- **Bare boolean keywords in DSL**: boolean-valued keywords like `:bool`,
-  `:hidden`, `:count`, `:multiple`, `:negatable`, `:inline`, `:deprecated`
-  etc. can now be written without an explicit `t` value.  Write
-  `(clime-option verbose ("--verbose") :bool :hidden)` instead of
-  `(clime-option verbose ("--verbose") :bool t :hidden t)`.  Works in all
-  DSL forms: options, args, commands, groups, output formats, and templates.
-
-- **Construction-time tree validation**: `clime-make-app` now validates
-  the entire tree at definition time — duplicate flags, duplicate option
-  names, duplicate child names.  Ancestor flag collision checks
-  consolidated here too.  Bugs in app definitions are caught
-  immediately, not at first parse.
-
-- **Alias resolution at construction**: `clime--resolve-aliases` now
-  runs in `clime-make-app`.  The tree is fully resolved when
-  construction returns.  Parse-time calls remain as idempotent safety
-  nets.
-
-- **Inline validation in invoke menu**: validation pipeline runs after
-  every parameter mutation in the invoke event loop.  Per-param type and
-  choice errors shown inline (`← error text`) with `clime-invoke-invalid`
-  face.  Conformer and `:requires` errors shown in the header area.
-  Display-only — does not block input; full validation at RET via
-  `clime-parse-finalize`.
-
-- **`=` prefix for direct option input**: pressing `=` then an option
-  key opens `completing-read` (for choices) or `read-string` (for
-  counts) instead of cycling.  Boolean/negatable options fall through
-  to cycling.
-
-- **Prefix state visual feedback**: pressing `-` or `=` re-renders the
-  menu buffer with option keys showing the prefix (`-v`/`=v`), non-option
-  keys and headings dimmed via `clime-invoke-dimmed` face.  Hint shown
-  in echo area.
-
-- **Invoke keymap sub-builders**: `clime-invoke--build-key-map` refactored
-  into `build-child-actions`, `build-arg-actions`, `build-option-actions`
-  composable helpers.
+- **Construction-time validation**: `clime-make-app` validates the
+  entire tree at definition time — duplicate flags, option names, child
+  names, and ancestor collisions.  Errors caught immediately, not at
+  first parse.
 
 ### Changed
 
-- **`clime-invoke` rewritten as lightweight `read-key` menu**: replaced
-  the `transient.el` dependency with a custom event loop.  The app tree
-  IS the menu — no separate transient prefix/suffix definitions.  Groups
-  become nested menus, options cycle with `-X` or set directly with `=X`,
-  `RET` runs, `q` returns.  No external dependencies.
+- **`clime-app` macro** now expands to `(progn (defvar NAME) (setq
+  NAME ...))`.  Re-evaluating the form updates the variable in place.
 
-- **Option/arg `:conform` signature**: changed from `(value)` to
-  `(value, param)` where `param` is the option or arg struct.  Enables
-  conformers to inspect metadata (name, flags, type, etc.).
+- **`clime-reload`** self-reloads `clime.el` first and clears face specs
+  before reloading optional modules, so `defface` changes take effect.
 
-- **DSL builder refactor**: extracted `clime--emit-kw`, `clime--emit-body`,
-  and `clime--prepare-aliases` helpers to eliminate repeated keyword-emit
-  boilerplate across all DSL builders.  No behavior change.
-
-- **Invoke face palette**: option keys now inherit
-  `font-lock-variable-name-face` (blue in Gruvbox) instead of
-  `font-lock-keyword-face` (red in Gruvbox, clashing with error).
-  Headings use bold only (no color inherit).
-
-- **`:conform` slot always a list**: `clime-conform-append` and DSL emit
-  functions now always produce a list.  Read sites guard with `functionp`
-  for backwards compatibility with direct struct construction.
-
-- **`clime-app` macro uses `setq`**: expands to `(progn (defvar NAME)
-  (setq NAME ...))` instead of `(defvar NAME ...)`.  Re-evaluating the
-  form or reloading the file now updates the app variable.
-
-- **`clime-reload` self-reloads**: loads `clime.el` itself first so
-  changes to reload logic take effect immediately.  Clears
-  `face-defface-spec` on all clime faces before loading optional modules
-  so `defface` reapplies new specs on reload.
-
-- **Developer-facing deprecation warnings** now use `display-warning`
-  instead of bare `message`.  Affects the `:flag` → `:bool` DSL
-  deprecation and the `clime-run-batch` interactive-mode warning.
-  Runtime CLI-user-facing deprecation warnings are unchanged.
-
-### Removed
-
-- **Cohort system**: `clime-cohort` struct, `:cohorts` slot on nodes,
-  `:mutex`/`:zip`/`:cohort` slots on options, `clime--run-cohort-checks`,
-  `clime--collect-cohort-members`, `clime--cohort-sibling-set-p`.
-  Replaced by unified `:conform` on nodes with `clime-check-exclusive`
-  and `clime-check-paired` factory functions.
-
-- **Auto-mutex on output formats**: `clime-make-output-format` no longer
-  auto-assigns `:mutex 'clime--output-format`.  Use `clime-mutex` or
-  node `:conform` with `clime-check-exclusive` for output format
-  exclusivity.
+- **Auto-mutex on output formats removed**: use `clime-mutex` or node
+  `:conform` with `clime-check-exclusive` for output format exclusivity.
 
 ### Fixed
 
-- **Resolved aliases now have correct parent refs**: `clime--resolve-aliases`
-  was replacing alias nodes with new command structs without setting
-  `:parent`, breaking ancestor option inheritance through aliases.
-
-- **Invoke run-handler respects buffered errors**: exit code now reflects
-  errors accumulated during handler execution, not just the final return.
-
-- **Invoke run-handler handles `clime-help-requested`**: pressing `--help`
-  style keys in the invoke menu no longer signals an unhandled error.
+- Resolved aliases now have correct parent refs, fixing ancestor option
+  inheritance through aliases.
+- Invoke menu exit code now reflects errors accumulated during handler
+  execution.
+- `clime-help-requested` in invoke menu no longer signals an unhandled
+  error.
 
 ## 0.3.0 — 2026-03-13
 

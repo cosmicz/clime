@@ -222,12 +222,12 @@ Cycles: nil → last, first → nil."
    ((equal current pos-flag) neg-flag)
    (t nil)))
 
-(defun clime-invoke--read-count (n prefix-arg)
-  "Compute next count value from current N and PREFIX-ARG.
+(defun clime-invoke--read-count (n pfx)
+  "Compute next count value from current N and PFX (prefix arg).
 nil → increment (wraps at 5).  Integer → set directly.  Other → decrement."
   (cond
-   ((integerp prefix-arg) (max 0 prefix-arg))
-   (prefix-arg (max 0 (1- n)))
+   ((integerp pfx) (max 0 pfx))
+   (pfx (max 0 (1- n)))
    (t (if (>= n 5) 0 (1+ n)))))
 
 ;;; ─── Tree Helpers ───────────────────────────────────────────────────

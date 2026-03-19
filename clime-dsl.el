@@ -27,6 +27,49 @@
 (require 'cl-lib)
 (require 'clime-core)
 
+;;; ─── Bare Boolean Normalization ────────────────────────────────────────
+
+(defconst clime--boolean-keywords
+  '(:bool :flag :count :multiple :negatable :hidden :required
+    :optional :rest :inline :json-mode :streaming :deprecated)
+  "DSL keywords that accept bare form as shorthand for t.
+A bare boolean keyword (not followed by a non-keyword, non-cons value)
+is normalized to keyword t before further processing.")
+
+(defun clime--normalize-bare-booleans (items boolean-keys)
+  "Normalize bare boolean keywords in ITEMS.
+If a keyword in BOOLEAN-KEYS appears without a value (followed by
+another keyword, a cons, or end of list), insert t as its value.
+Non-boolean keywords consume the next item as their value (so e.g.
+`:nargs :rest' is not misinterpreted).
+Returns a new list; ITEMS is not modified."
+  (let (result)
+    (while items
+      (let ((item (car items)))
+        (cond
+         ;; Boolean keyword with bare usage (next is keyword/cons/end)
+         ((and (memq item boolean-keys)
+               (let ((next (cadr items)))
+                 (or (null (cdr items))
+                     (keywordp next)
+                     (consp next))))
+          (push item result)
+          (push t result)
+          (setq items (cdr items)))
+         ;; Any keyword (boolean with explicit value, or non-boolean):
+         ;; consume key + value as a pair
+         ((keywordp item)
+          (push item result)
+          (setq items (cdr items))
+          (when items
+            (push (car items) result)
+            (setq items (cdr items))))
+         ;; Non-keyword item (DSL form, etc.)
+         (t
+          (push item result)
+          (setq items (cdr items))))))
+    (nreverse result)))
+
 ;;; ─── Body Parser ────────────────────────────────────────────────────────
 
 (defun clime--extract-keywords (body valid-keys)
@@ -81,7 +124,7 @@ and `function' wrappers like #\\='(lambda ...)."
 Returns a plist (:options :args :children :handler).
 Resolves DSL aliases via `macroexpand' and classifies by the
 constructor symbol in the expanded form."
-  (let (options args children output-formats conform-fns handler)
+  (let (options args children output-formats (conform-fns nil) handler)
     (dolist (form forms)
       (when (consp form)
         (pcase (car form)
@@ -105,49 +148,6 @@ constructor symbol in the expanded form."
           :output-formats (nreverse output-formats)
           :conform (nreverse conform-fns)
           :handler handler)))
-
-;;; ─── Bare Boolean Normalization ────────────────────────────────────────
-
-(defconst clime--boolean-keywords
-  '(:bool :flag :count :multiple :negatable :hidden :required
-    :optional :rest :inline :json-mode :streaming :deprecated)
-  "DSL keywords that accept bare form as shorthand for t.
-A bare boolean keyword (not followed by a non-keyword, non-cons value)
-is normalized to keyword t before further processing.")
-
-(defun clime--normalize-bare-booleans (items boolean-keys)
-  "Normalize bare boolean keywords in ITEMS.
-If a keyword in BOOLEAN-KEYS appears without a value (followed by
-another keyword, a cons, or end of list), insert t as its value.
-Non-boolean keywords consume the next item as their value (so e.g.
-`:nargs :rest' is not misinterpreted).
-Returns a new list; ITEMS is not modified."
-  (let (result)
-    (while items
-      (let ((item (car items)))
-        (cond
-         ;; Boolean keyword with bare usage (next is keyword/cons/end)
-         ((and (memq item boolean-keys)
-               (let ((next (cadr items)))
-                 (or (null (cdr items))
-                     (keywordp next)
-                     (consp next))))
-          (push item result)
-          (push t result)
-          (setq items (cdr items)))
-         ;; Any keyword (boolean with explicit value, or non-boolean):
-         ;; consume key + value as a pair
-         ((keywordp item)
-          (push item result)
-          (setq items (cdr items))
-          (when items
-            (push (car items) result)
-            (setq items (cdr items))))
-         ;; Non-keyword item (DSL form, etc.)
-         (t
-          (push item result)
-          (setq items (cdr items))))))
-    (nreverse result)))
 
 ;;; ─── DSL Shorthands ────────────────────────────────────────────────────
 
