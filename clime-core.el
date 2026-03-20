@@ -155,7 +155,8 @@ The returned symbol is a named function for debugging convenience."
         (signal 'clime-usage-error
                 (list (format "Options %s are mutually exclusive"
                               (mapconcat (lambda (k) (format "%s" k))
-                                         set-names ", ")))))
+                                         set-names ", "))
+                      :params set-names)))
       (cond
        ((= (length set-names) 1)
         (let ((winner (car set-names)))
@@ -173,7 +174,8 @@ The returned symbol is a named function for debugging convenience."
         (signal 'clime-usage-error
                 (list (format "One of %s is required"
                               (mapconcat (lambda (k) (format "%s" k))
-                                         member-names ", ")))))
+                                         member-names ", "))
+                      :params member-names)))
        (default
         (plist-put params group-name default))
        (t params)))))
@@ -199,7 +201,8 @@ under GROUP-NAME."
         (signal 'clime-usage-error
                 (list (format "Options %s are required"
                               (mapconcat (lambda (k) (format "%s" k))
-                                         member-names ", ")))))
+                                         member-names ", "))
+                      :params member-names)))
       ;; Partial presence check
       (when (and any-set (not all-set))
         (let ((missing (cl-remove-if
@@ -209,7 +212,8 @@ under GROUP-NAME."
                   (list (format "%s requires %s"
                                 (car set-names)
                                 (mapconcat (lambda (k) (format "%s" k))
-                                           missing ", "))))))
+                                           missing ", "))
+                        :params member-names))))
       ;; Cardinality check
       (when all-set
         (let ((counts (mapcar (lambda (k)
@@ -224,7 +228,8 @@ under GROUP-NAME."
                                  member-names)))
               (signal 'clime-usage-error
                       (list (format "Paired options must be used the same number of times: %s"
-                                    (mapconcat #'identity parts ", "))))))
+                                    (mapconcat #'identity parts ", "))
+                            :params member-names))))
           ;; Build zipped alist
           (let* ((n (car counts))
                  (zipped '()))

@@ -1043,7 +1043,7 @@
   (let* ((conform (lambda (_params _node)
                     (signal 'clime-usage-error '("single fn error"))))
          (cmd (clime-make-command :name "test" :handler #'ignore :conform conform)))
-    (should (equal '("single fn error")
+    (should (equal '(("single fn error"))
                    (clime-invoke--run-conformer-checks cmd '())))))
 
 (ert-deftest clime-test-invoke/run-conformer-checks-fail ()
@@ -1051,7 +1051,7 @@
   (let* ((conform (lambda (_params _node)
                     (signal 'clime-usage-error '("mutex violated"))))
          (cmd (clime-make-command :name "test" :handler #'ignore :conform (list conform))))
-    (should (equal '("mutex violated")
+    (should (equal '(("mutex violated"))
                    (clime-invoke--run-conformer-checks cmd '())))))
 
 (ert-deftest clime-test-invoke/run-conformer-checks-copies-params ()
@@ -1317,7 +1317,7 @@
          (grp (clime-group--create :name "fmt" :inline t :conform (list conform)))
          (cmd (clime-make-command :name "test" :handler #'ignore
                                   :children (list (cons "fmt" grp)))))
-    (should (equal '("inline group error")
+    (should (equal '(("inline group error"))
                    (clime-invoke--run-conformer-checks cmd '())))))
 
 (ert-deftest clime-test-invoke/run-conformer-checks-inline-group-pass ()
@@ -1374,6 +1374,122 @@
           (let ((content (with-current-buffer buf (buffer-string))))
             (should (string-match-p "--json" content))))
       (kill-buffer buf))))
+
+;;; ─── Conformer Param Attribution (clime-r6q) ────────────────────────
+
+(ert-deftest clime-test-invoke/conformer-error-with-params ()
+  "Conformer signaling :params propagates to param-errors."
+  (let* ((conform (lambda (_params _node)
+                    (signal 'clime-usage-error
+                            '("Options a, b are mutually exclusive"
+                              :params (a b)))))
+         (opt-a (clime-make-option :name 'a :flags '("--a")))
+         (opt-b (clime-make-option :name 'b :flags '("--b")))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt-a opt-b)
+                                  :conform (list conform))))
+    (let ((result (clime-invoke--validate-all cmd '(a "1" b "2"))))
+      ;; Both params should have inline errors
+      (should (assq 'a (car result)))
+      (should (assq 'b (car result)))
+      ;; Attributed errors should NOT appear in general-errors
+      (should-not (cdr result)))))
+
+(ert-deftest clime-test-invoke/conformer-error-without-params ()
+  "Conformer without :params still works (general-errors only)."
+  (let* ((conform (lambda (_params _node)
+                    (signal 'clime-usage-error '("custom error"))))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :conform (list conform))))
+    (let ((result (clime-invoke--validate-all cmd '())))
+      ;; No param-errors
+      (should-not (car result))
+      ;; General error present
+      (should (member "custom error" (cdr result))))))
+
+(ert-deftest clime-test-invoke/run-conformer-returns-param-attribution ()
+  "run-conformer-checks returns (MESSAGE . PARAM-NAMES) pairs."
+  (let* ((conform (lambda (_params _node)
+                    (signal 'clime-usage-error
+                            '("bad combo" :params (x y)))))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :conform (list conform))))
+    (let ((errors (clime-invoke--run-conformer-checks cmd '())))
+      (should (= 1 (length errors)))
+      (should (equal (caar errors) "bad combo"))
+      (should (equal (cdar errors) '(x y))))))
+
+(ert-deftest clime-test-invoke/run-conformer-no-params-returns-nil-cdr ()
+  "Conformer without :params returns (MESSAGE . nil)."
+  (let* ((conform (lambda (_params _node)
+                    (signal 'clime-usage-error '("plain error"))))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :conform (list conform))))
+    (let ((errors (clime-invoke--run-conformer-checks cmd '())))
+      (should (= 1 (length errors)))
+      (should (equal (caar errors) "plain error"))
+      (should-not (cdar errors)))))
+
+(ert-deftest clime-test-invoke/mutex-conformer-attributes-params ()
+  "clime-check-exclusive signals :params with conflicting option names."
+  (let* ((exclusive (clime-check-exclusive 'mode '(a b)))
+         (opt-a (clime-make-option :name 'a :flags '("--a")))
+         (opt-b (clime-make-option :name 'b :flags '("--b")))
+         (grp (clime-group--create :name "mode" :inline t
+                                   :options (list opt-a opt-b)
+                                   :conform (list exclusive)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :children (list (cons "mode" grp)))))
+    (let ((result (clime-invoke--validate-all cmd '(a "1" b "2"))))
+      ;; Both conflicting params get inline markers
+      (should (assq 'a (car result)))
+      (should (assq 'b (car result)))
+      ;; Attributed: not in header
+      (should-not (cdr result)))))
+
+(ert-deftest clime-test-invoke/render-conformer-param-error-inline ()
+  "Conformer with :params shows inline markers on attributed options."
+  (let* ((opt-a (clime-make-option :name 'a :flags '("--a") :help "Option A"))
+         (opt-b (clime-make-option :name 'b :flags '("--b") :help "Option B"))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt-a opt-b)))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("test" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         ;; Simulate validation result: attributed errors go inline only
+         (validation '(((a . "mutually exclusive") (b . "mutually exclusive"))))
+         (content (clime-invoke--render-to-string
+                   cmd '(a "1" b "2") nil nil nil validation)))
+    ;; Both options should have inline error markers
+    (should (string-match-p "← mutually exclusive" content))
+    ;; No header error (attributed)
+    (should-not (string-match-p "Options a, b are mutually exclusive" content))))
+
+(ert-deftest clime-test-invoke/paired-conformer-attributes-params ()
+  "clime-check-paired signals :params on cardinality mismatch."
+  (let* ((paired (clime-check-paired 'mapping '(from to)))
+         (opt-from (clime-make-option :name 'from :flags '("--from") :multiple t))
+         (opt-to (clime-make-option :name 'to :flags '("--to") :multiple t))
+         (grp (clime-group--create :name "mapping" :inline t
+                                   :options (list opt-from opt-to)
+                                   :conform (list paired)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :children (list (cons "mapping" grp)))))
+    (let ((result (clime-invoke--validate-all
+                   cmd '(from ("a" "b") to ("x")))))
+      ;; Both paired params get inline markers
+      (should (assq 'from (car result)))
+      (should (assq 'to (car result)))
+      ;; Attributed: not in header
+      (should-not (cdr result)))))
+
+(ert-deftest clime-test-invoke/signal-params-backwards-compatible ()
+  "cadr on signal data still returns the message string (CLI path)."
+  (let ((err (condition-case e
+                 (signal 'clime-usage-error
+                         '("msg here" :params (a b)))
+               (clime-usage-error e))))
+    (should (equal "msg here" (cadr err)))))
 
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here

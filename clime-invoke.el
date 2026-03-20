@@ -495,9 +495,10 @@ Reuses `clime--transform-value' for type coercion and choices validation."
               (clime-usage-error (cadr err)))))))))
 
 (defun clime-invoke--run-conformer-checks (node params)
-  "Run NODE's conformers on a copy of PARAMS, returning error strings.
+  "Run NODE's conformers on a copy of PARAMS, returning attributed errors.
 Also walks inline group children (postorder) to collect their errors.
-Returns a list of error message strings, or nil if all pass."
+Returns a list of (MESSAGE . PARAM-NAMES) cons cells, where PARAM-NAMES
+is a list of symbols or nil if the conformer didn't attribute params."
   (let ((errors nil))
     ;; Walk inline group children first (postorder)
     (when (clime-group-p node)
@@ -513,7 +514,11 @@ Returns a list of error message strings, or nil if all pass."
         (condition-case err
             (funcall conform (copy-sequence params) node)
           (clime-usage-error
-           (push (cadr err) errors)))))
+           (let* ((data (cdr err))
+                  (msg (car data))
+                  (plist (cdr data))
+                  (params-attr (plist-get plist :params)))
+             (push (cons msg params-attr) errors))))))
     (nreverse errors)))
 
 (defun clime-invoke--validate-all (node params)
@@ -535,14 +540,19 @@ GENERAL-ERRORS is a list of strings from conformers and requires checks."
     ;; Requires checks
     (let* ((ancestors (clime-node-ancestors node))
            (visited (cons node (reverse ancestors))))
-      (setq general-errors
-            (append general-errors
-                    (clime--find-unsatisfied-requires visited params))))
-    ;; Conformer checks
-    (setq general-errors
-          (append general-errors
-                  (clime-invoke--run-conformer-checks node params)))
-    (cons (nreverse param-errors) general-errors)))
+      (dolist (err (clime--find-unsatisfied-requires visited params))
+        (push err general-errors)))
+    ;; Conformer checks — unpack (MESSAGE . PARAM-NAMES) pairs
+    (dolist (entry (clime-invoke--run-conformer-checks node params))
+      (let ((msg (car entry))
+            (attr-params (cdr entry)))
+        (if attr-params
+            ;; Attributed: inline only (like type errors)
+            (dolist (name attr-params)
+              (push (cons name msg) param-errors))
+          ;; Unattributed: header
+          (push msg general-errors))))
+    (cons (nreverse param-errors) (nreverse general-errors))))
 
 ;;; ─── Rendering ──────────────────────────────────────────────────────
 
