@@ -49,12 +49,14 @@
 
   (clime-output-format json ("--json") :help "Output as JSON")
 
-  (clime-opt verbose ("-v" "--verbose") :count
-    :help "Increase verbosity")
+  (clime-opt verbose ("-v" "--verbose")
+    :count :help "Increase verbosity")
 
-  (clime-opt file ("--file" "-f") :multiple :required
+  (clime-opt files ("--file" "-f")
+    :multiple :required
     :coerce #'expand-file-name
-    :help "Org file(s) to query (also CLOQ_FILE env, comma-separated)")
+    :env "CLOQ_FILES"
+    :help "Org file(s) to query")
 
   ;; ── query ─────────────────────────────────────────────────────────
 
@@ -85,21 +87,23 @@
       :help "Sort results"
       :category "Output")
 
-    (clime-opt limit ("--limit" "-n") :type 'integer
+    (clime-opt limit ("--limit" "-n")
+      :type 'integer
       :help "Max results to return"
       :category "Output")
 
-    (clime-opt tags ("--tags") :negatable :default t
+    (clime-opt tags ("--tags")
+      :negatable :default t
       :help "Include tags in output"
       :category "Output")
 
     (clime-handler (ctx)
-      (clime-let ctx (file todo sexp search sort limit verbose tags)
+      (clime-let ctx (files todo sexp search sort limit verbose tags)
         (let* ((q (cond (sexp (car (read-from-string sexp)))
                         (search (org-ql--query-string-to-sexp search))
                         (todo `(todo ,todo))
                         (t '(todo))))
-               (results (org-ql-select file q
+               (results (org-ql-select files q
                           :action (if tags
                                       '(org-get-heading t nil t t)
                                     '(org-get-heading t t t t))
@@ -120,9 +124,9 @@
                 ("cloq tags -f proj.org -f side.org --json" . "Tags as JSON"))
 
     (clime-handler (ctx)
-      (clime-let ctx (file)
+      (clime-let ctx (files)
         (let ((all-tags '()))
-          (dolist (f (if (listp file) file (list file)))
+          (dolist (f (if (listp files) files (list files)))
             (with-current-buffer (find-file-noselect f)
               (org-with-wide-buffer
                (goto-char (point-min))
@@ -139,17 +143,17 @@
   ;; ── Shortcuts ─────────────────────────────────────────────────────
 
   (clime-group shortcuts :inline :category "Shortcuts"
-    (clime-alias-for waiting (query)
-      :help "Show WAITING items"
-      :vals '((todo . "WAITING")))
+               (clime-alias-for waiting (query)
+                 :help "Show WAITING items"
+                 :vals '((todo . "WAITING")))
 
-    (clime-alias-for overdue (query)
-      :help "Show items past their deadline"
-      :vals '((sexp . "(deadline :to today)")))
+               (clime-alias-for overdue (query)
+                 :help "Show items past their deadline"
+                 :vals '((sexp . "(deadline :to today)")))
 
-    (clime-alias-for today (query)
-      :help "Show items scheduled for today"
-      :vals '((sexp . "(scheduled :on today)")))))
+               (clime-alias-for today (query)
+                 :help "Show items scheduled for today"
+                 :vals '((sexp . "(scheduled :on today)")))))
 
 (provide 'cloq)
 ;;; Entrypoint:
