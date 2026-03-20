@@ -83,6 +83,11 @@
   "Face for inline validation error text."
   :group 'clime)
 
+(defface clime-invoke-locked
+  '((t :inherit warning))
+  "Face for locked option values (from alias :vals)."
+  :group 'clime)
+
 (defface clime-invoke-dimmed
   '((t :inherit shadow))
   "Face for inactive elements during prefix key input."
@@ -289,7 +294,9 @@ SHARED-USED is a hash table of taken keys.  Returns alist of (KEY . ACTION)."
 (defun clime-invoke--build-option-actions (node)
   "Build (:option OPTION) actions for own + ancestor options of NODE.
 Options use the \"- X\" two-key namespace.  Returns alist of (KEY . ACTION)."
-  (let* ((own (cl-remove-if #'clime-option-hidden (clime-node-all-options node)))
+  (let* ((own (cl-remove-if (lambda (o) (or (clime-option-hidden o)
+                                            (clime-option-locked o)))
+                            (clime-node-all-options node)))
          (ancestor (clime-help--collect-ancestor-options node))
          (opts (append own ancestor))
          (opt-used (make-hash-table :test #'equal))
@@ -528,9 +535,11 @@ GENERAL-ERRORS is a list of strings from conformers and requires checks."
   (let ((param-errors nil)
         (general-errors nil))
     ;; Per-param validation: own options (including inline groups) + ancestor options + args
+    ;; Skip locked options — their values are not user-settable
     (dolist (opt (clime-node-all-options node))
-      (when-let ((err (clime-invoke--validate-param opt params)))
-        (push (cons (clime-option-name opt) err) param-errors)))
+      (unless (clime-option-locked opt)
+        (when-let ((err (clime-invoke--validate-param opt params)))
+          (push (cons (clime-option-name opt) err) param-errors))))
     (dolist (opt (clime-help--collect-ancestor-options node))
       (when-let ((err (clime-invoke--validate-param opt params)))
         (push (cons (clime-option-name opt) err) param-errors)))
@@ -542,16 +551,24 @@ GENERAL-ERRORS is a list of strings from conformers and requires checks."
            (visited (cons node (reverse ancestors))))
       (dolist (err (clime--find-unsatisfied-requires visited params))
         (push err general-errors)))
-    ;; Conformer checks — unpack (MESSAGE . PARAM-NAMES) pairs
-    (dolist (entry (clime-invoke--run-conformer-checks node params))
-      (let ((msg (car entry))
-            (attr-params (cdr entry)))
-        (if attr-params
-            ;; Attributed: inline only (like type errors)
-            (dolist (name attr-params)
-              (push (cons name msg) param-errors))
-          ;; Unattributed: header
-          (push msg general-errors))))
+    ;; Conformer checks — inject locked vals so mutex/zip checks see them
+    (let ((check-params (copy-sequence params)))
+      (dolist (opt (clime-node-all-options node))
+        (when (clime-option-locked opt)
+          (let ((name (clime-option-name opt)))
+            (unless (plist-member check-params name)
+              (setq check-params (plist-put check-params name
+                                            (clime-option-default opt)))))))
+      ;; Unpack (MESSAGE . PARAM-NAMES) pairs
+      (dolist (entry (clime-invoke--run-conformer-checks node check-params))
+        (let ((msg (car entry))
+              (attr-params (cdr entry)))
+          (if attr-params
+              ;; Attributed: inline only (like type errors)
+              (dolist (name attr-params)
+                (push (cons name msg) param-errors))
+            ;; Unattributed: header
+            (push msg general-errors)))))
     (cons (nreverse param-errors) (nreverse general-errors))))
 
 ;;; ─── Rendering ──────────────────────────────────────────────────────
@@ -582,7 +599,7 @@ At root, shows appname vVERSION."
             (push (concat (propertize root-name 'face 'clime-invoke-heading)
                           sep
                           (propertize (string-join chain (concat sep))
-                                     'face 'clime-invoke-heading))
+                                      'face 'clime-invoke-heading))
                   parts))
         ;; Root: appname vVERSION
         (let ((version (and (clime-app-p root) (clime-app-version root))))
@@ -608,8 +625,8 @@ At root, shows appname vVERSION."
     (string-join (nreverse parts))))
 
 (defun clime-invoke--render-to-string (node params key-map error-msg
-                                      &optional at-root validation-result
-                                      prefix-state)
+                                            &optional at-root validation-result
+                                            prefix-state)
   "Render the menu for NODE with PARAMS, KEY-MAP, and ERROR-MSG.
 When KEY-MAP is nil, builds one automatically from NODE.
 AT-ROOT non-nil means this is the entry-point node (q exits entirely).
@@ -647,32 +664,45 @@ Uses 4-column layout: Key | Desc | Value | Env."
               (opts (cdr cat-entry)))
           (push (propertize cat 'face 'clime-invoke-heading) lines)
           (dolist (opt opts)
-            (let* ((name (clime-option-name opt))
-                   (key (car (cl-find-if
-                              (lambda (entry)
-                                (and (eq (cadr entry) :option)
-                                     (eq (clime-option-name (caddr entry)) name)))
-                              key-map)))
-                   (desc (clime-invoke--format-desc opt params))
-                   (val-str (clime-invoke--format-value opt params))
-                   (env-str (clime-invoke--format-env opt params))
-                   (param-err (cdr (assq name param-errors))))
-              (when key
-                (let ((display-key (if prefix-state
-                                       (clime-invoke--prefix-display-key key prefix-state)
-                                     (clime-invoke--display-key key))))
-                  (push (concat
-                         (format " %s %s  %s"
-                                 (propertize (format "%3s" display-key)
-                                             'face 'clime-invoke-option-key)
-                                 (clime-invoke--pad-to desc 30)
-                                 val-str)
-                         (when param-err
-                           (concat "  " (propertize (concat "← " param-err)
-                                                    'face 'clime-invoke-invalid)))
-                         (when env-str (concat "  " env-str)))
-                        lines)))))
-          (push "" lines))))
+            (if (clime-option-locked opt)
+                ;; Locked option: show full flags dimmed, value in locked face
+                (let* ((desc (clime-invoke--format-desc opt params))
+                       (val-str (propertize (format "%s" (clime-option-default opt))
+                                            'face 'clime-invoke-locked)))
+                  (push (format "     %s  %s  %s"
+                                (clime-invoke--pad-to
+                                 (propertize desc 'face 'clime-invoke-dimmed)
+                                 30)
+                                val-str
+                                (propertize "(locked)" 'face 'clime-invoke-dimmed))
+                        lines))
+              ;; Normal option: interactive with key binding
+              (let* ((name (clime-option-name opt))
+                     (key (car (cl-find-if
+                                (lambda (entry)
+                                  (and (eq (cadr entry) :option)
+                                       (eq (clime-option-name (caddr entry)) name)))
+                                key-map)))
+                     (desc (clime-invoke--format-desc opt params))
+                     (val-str (clime-invoke--format-value opt params))
+                     (env-str (clime-invoke--format-env opt params))
+                     (param-err (cdr (assq name param-errors))))
+                (when key
+                  (let ((display-key (if prefix-state
+                                         (clime-invoke--prefix-display-key key prefix-state)
+                                       (clime-invoke--display-key key))))
+                    (push (concat
+                           (format " %s %s  %s"
+                                   (propertize (format "%3s" display-key)
+                                               'face 'clime-invoke-option-key)
+                                   (clime-invoke--pad-to desc 30)
+                                   val-str)
+                           (when param-err
+                             (concat "  " (propertize (concat "← " param-err)
+                                                      'face 'clime-invoke-invalid)))
+                           (when env-str (concat "  " env-str)))
+                          lines)))))))
+        (push "" lines)))
     ;; Positional args
     (let ((args (clime-node-args node)))
       (when args
@@ -747,6 +777,7 @@ Uses 4-column layout: Key | Desc | Value | Env."
       (push (concat " " (string-join (nreverse actions) "    ")) lines))
     (string-join (nreverse lines) "\n")))
 
+
 (defun clime-invoke--display-key (key)
   "Format KEY for display.  Converts \"- v\" to \"-v\"."
   (if (string-match "\\`- \\(.\\)\\'" key)
@@ -767,8 +798,8 @@ Extracts the letter from \"- v\" and prepends PREFIX (e.g. \"=v\")."
     (concat str (make-string (- width (length str)) ?\s))))
 
 (defun clime-invoke--render (node params key-map error-msg buffer
-                            &optional at-root validation-result
-                            prefix-state)
+                                  &optional at-root validation-result
+                                  prefix-state)
   "Render menu for NODE into BUFFER.
 VALIDATION-RESULT is (PARAM-ERRORS . GENERAL-ERRORS) or nil.
 PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active."
@@ -1014,7 +1045,7 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
          ;; Help
          ((equal key "?")
           (let ((has-options (cl-some (lambda (e) (eq (cadr e) :option))
-                                     key-map)))
+                                      key-map)))
             (setq error-msg
                   (format "Keys: %s%s"
                           (mapconcat (lambda (e) (car e)) key-map ", ")

@@ -221,7 +221,9 @@ Appends repeat indicator for :count and :multiple options."
   "Format the Options section for OPTIONS list.
 Respects :category labels and :hidden flags.
 When WIDTH is non-nil, help text is wrapped to fit."
-  (let ((visible (cl-remove-if #'clime-option-hidden options)))
+  (let ((visible (cl-remove-if (lambda (o) (or (clime-option-hidden o)
+                                               (clime-option-locked o)))
+                               options)))
     (when visible
       (let ((grouped (make-hash-table :test 'equal))
             (group-order '()))
@@ -444,6 +446,7 @@ Returns a flat list of `clime-option' structs, deduped by flag set."
     (while parent
       (dolist (opt (clime-node-all-options parent))
         (unless (or (clime-option-hidden opt)
+                    (clime-option-locked opt)
                     (cl-some (lambda (flag) (gethash flag seen-flags))
                              (clime-option-flags opt)))
           (dolist (flag (clime-option-flags opt))

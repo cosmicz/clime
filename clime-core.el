@@ -49,7 +49,8 @@
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
   (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0).")
-  (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used."))
+  (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used.")
+  (locked nil :type boolean :documentation "When non-nil, option is locked (from alias :vals).  Locked options are hidden from CLI/help and rendered as read-only in invoke.  The locked value is stored in :default."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.
@@ -381,17 +382,6 @@ mutating the original target command."
                 entry)))
           children))
 
-(defun clime--remove-option-from-tree (node name)
-  "Remove option NAME from NODE's options or its inline children's."
-  (setf (clime-node-options node)
-        (cl-remove-if (lambda (o) (eq (clime-option-name o) name))
-                      (clime-node-options node)))
-  (when (clime-group-p node)
-    (dolist (entry (clime-group-children node))
-      (let ((child (cdr entry)))
-        (when (and (clime-group-p child) (clime-node-inline child))
-          (clime--remove-option-from-tree child name))))))
-
 (defun clime--resolve-aliases-walk (node app)
   "Walk NODE's subtree resolving aliases against APP root.
 Alias nodes are replaced in-place in the children alist with
@@ -432,15 +422,17 @@ resolved command copies."
                   (error "Alias %s: :defaults names unknown option `%s'"
                          (clime-node-name child) name))
                 (setf (clime-option-default opt) val)))
-            ;; Apply :vals — remove options from tree (hidden from CLI/help)
+            ;; Apply :vals — lock options with their values
             (dolist (val-entry vals)
               (let* ((name (car val-entry))
+                     (val (cdr val-entry))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
                                       (clime-node-all-options resolved))))
                 (unless opt
                   (error "Alias %s: :vals names unknown option `%s'"
                          (clime-node-name child) name))
-                (clime--remove-option-from-tree resolved name)))
+                (setf (clime-option-locked opt) t
+                      (clime-option-default opt) val)))
             ;; Store vals for injection during finalize
             (when vals
               (setf (clime-node-locked-vals resolved) vals))

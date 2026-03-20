@@ -68,13 +68,16 @@ Only applies to long flags.  Does not double-negate --no-no-X."
 Walk the parent chain from CURRENT-NODE upward.
 For --no-X flags, checks if the positive --X option is negatable.
 Return (OPTION . SCOPE) where SCOPE is \\='current, \\='ancestor,
-\\='negated-current, or \\='negated-ancestor.  Returns nil if not found."
+\\='negated-current, or \\='negated-ancestor.  Returns nil if not found.
+Locked options (from alias :vals) are skipped."
   (let ((opt (clime-node-find-option current-node flag)))
+    (when (and opt (clime-option-locked opt)) (setq opt nil))
     (if opt
         (cons opt 'current)
       (let ((node (clime-node-parent current-node)))
         (while (and node (not opt))
           (setq opt (clime-node-find-option node flag))
+          (when (and opt (clime-option-locked opt)) (setq opt nil))
           (unless opt (setq node (clime-node-parent node))))
         (if opt
             (cons opt 'ancestor)
@@ -83,10 +86,12 @@ Return (OPTION . SCOPE) where SCOPE is \\='current, \\='ancestor,
             (when pos-flag
               (let ((pos-opt (clime-node-find-option current-node pos-flag))
                     (pos-node nil))
+                (when (and pos-opt (clime-option-locked pos-opt)) (setq pos-opt nil))
                 (unless pos-opt
                   (setq pos-node (clime-node-parent current-node))
                   (while (and pos-node (not pos-opt))
                     (setq pos-opt (clime-node-find-option pos-node pos-flag))
+                    (when (and pos-opt (clime-option-locked pos-opt)) (setq pos-opt nil))
                     (unless pos-opt (setq pos-node (clime-node-parent pos-node)))))
                 (when (and pos-opt (clime-option-negatable pos-opt))
                   (cons pos-opt (if pos-node 'negated-ancestor 'negated-current)))))))))))

@@ -114,6 +114,18 @@
     (should (string-match-p "--out" help))
     (should-not (string-match-p "--secret" help))))
 
+(ert-deftest clime-test-help/locked-option-omitted ()
+  "Locked options are not shown in help."
+  (let* ((opt-visible (clime-make-option :name 'out :flags '("--out")
+                                          :help "Output file"))
+         (opt-locked (clime-make-option :name 'fmt :flags '("--format")
+                                        :help "Format" :locked t :default "csv"))
+         (cmd (clime-make-command :name "x" :handler #'ignore
+                                  :options (list opt-visible opt-locked)))
+         (help (clime-format-help cmd '("app" "x"))))
+    (should (string-match-p "--out" help))
+    (should-not (string-match-p "--format" help))))
+
 ;;; ─── Option Flag Formatting ────────────────────────────────────────────
 
 (ert-deftest clime-test-help/short-flag-first ()

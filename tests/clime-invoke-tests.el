@@ -1491,5 +1491,82 @@
                (clime-usage-error e))))
     (should (equal "msg here" (cadr err)))))
 
+;;; ─── Locked Options Display (clime-99u) ─────────────────────────────
+
+(ert-deftest clime-test-invoke/render-shows-locked-vals ()
+  "Locked options from alias :vals appear in the menu as read-only rows."
+  (let* ((opt (clime-make-option :name 'todo :flags '("--todo" "-t")
+                                 :help "TODO keyword"
+                                 :locked t :default "WAITING"))
+         (cmd (clime-make-command :name "waiting" :handler #'ignore
+                                  :options (list opt)
+                                  :locked-vals '((todo . "WAITING"))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("waiting" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         (key-map (clime-invoke--build-key-map cmd))
+         (buf (generate-new-buffer " *test-render*")))
+    (unwind-protect
+        (progn
+          (clime-invoke--render cmd '() key-map nil buf nil nil)
+          (let ((content (with-current-buffer buf (buffer-string))))
+            (should (string-match-p "todo" content))
+            (should (string-match-p "WAITING" content))
+            (should (string-match-p "(locked)" content))
+            ;; Locked option has no key binding
+            (should-not (string-match-p " -t " content))))
+      (kill-buffer buf))))
+
+(ert-deftest clime-test-invoke/render-no-locked-vals ()
+  "Commands without locked-vals show no locked rows."
+  (let* ((cmd (clime-make-command :name "query" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("query" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         (key-map (clime-invoke--build-key-map cmd))
+         (buf (generate-new-buffer " *test-render*")))
+    (unwind-protect
+        (progn
+          (clime-invoke--render cmd '() key-map nil buf nil nil)
+          (let ((content (with-current-buffer buf (buffer-string))))
+            (should-not (string-match-p "(locked)" content))))
+      (kill-buffer buf))))
+
+(ert-deftest clime-test-invoke/locked-option-mutex-validation ()
+  "Setting a mutex sibling of a locked option triggers a validation error."
+  (let* ((exclusive (clime-check-exclusive 'query-mode '(todo sexp)))
+         (opt-todo (clime-make-option :name 'todo :flags '("--todo")
+                                      :locked t :default "WAITING"))
+         (opt-sexp (clime-make-option :name 'sexp :flags '("--sexp")))
+         (mutex (clime-group--create :name "query-mode" :inline t
+                                     :options (list opt-todo opt-sexp)
+                                     :conform (list exclusive)))
+         (cmd (clime-make-command :name "waiting" :handler #'ignore
+                                  :children (list (cons "query-mode" mutex)))))
+    ;; User sets sexp — mutex conformer should see locked todo + user sexp
+    (let ((result (clime-invoke--validate-all cmd '(sexp "(todo)"))))
+      ;; Both params get inline error markers
+      (should (assq 'todo (car result)))
+      (should (assq 'sexp (car result))))))
+
+(ert-deftest clime-test-invoke/locked-option-no-key-binding ()
+  "Locked options get no key binding in the key map."
+  (let* ((opt (clime-make-option :name 'todo :flags '("--todo" "-t")
+                                 :locked t :default "WAITING"))
+         (opt2 (clime-make-option :name 'sort :flags '("--sort")))
+         (cmd (clime-make-command :name "waiting" :handler #'ignore
+                                  :options (list opt opt2)))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("waiting" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         (key-map (clime-invoke--build-key-map cmd)))
+    ;; sort gets a key binding, todo does not
+    (should (cl-find-if (lambda (e) (and (eq (cadr e) :option)
+                                         (eq (clime-option-name (caddr e)) 'sort)))
+                        key-map))
+    (should-not (cl-find-if (lambda (e) (and (eq (cadr e) :option)
+                                              (eq (clime-option-name (caddr e)) 'todo)))
+                            key-map))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here

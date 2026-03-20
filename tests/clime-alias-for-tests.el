@@ -345,6 +345,28 @@
                                                   (cons "bad" alias)))
                   :type 'error)))
 
+(ert-deftest clime-test-alias-for/defaults-does-not-lock ()
+  "alias :defaults sets :default but NOT :locked."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :default "text"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                   :options (list opt)))
+         (grp (clime-make-group :name "report"
+                                :children (list (cons "show" cmd))))
+         (alias (clime-alias--create
+                 :name "show-csv"
+                 :target '("report" "show")
+                 :defaults '((format . "csv"))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)
+                                              (cons "show-csv" alias)))))
+    (clime--resolve-aliases app)
+    (let* ((resolved (cdr (assoc "show-csv" (clime-group-children app))))
+           (fmt-opt (cl-find-if (lambda (o) (eq (clime-option-name o) 'format))
+                                (clime-node-options resolved))))
+      (should (equal "csv" (clime-option-default fmt-opt)))
+      (should-not (clime-option-locked fmt-opt)))))
+
 ;;; ─── :vals ─────────────────────────────────────────────────────────
 
 (ert-deftest clime-test-alias-for/vals-struct-slot ()
@@ -352,8 +374,8 @@
   (let ((alias (clime-alias--create :target '("x"))))
     (should-not (clime-alias-vals alias))))
 
-(ert-deftest clime-test-alias-for/vals-removes-option-from-list ()
-  "alias :vals removes the option from the command's options list."
+(ert-deftest clime-test-alias-for/vals-locks-option ()
+  "alias :vals sets :locked on the option and value in :default."
   (let* ((opt-a (clime-make-option :name 'format :flags '("--format")))
          (opt-b (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
          (cmd (clime-make-command :name "show" :handler #'ignore
@@ -368,10 +390,19 @@
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
     (clime--resolve-aliases app)
-    (let ((resolved (cdr (assoc "show-csv" (clime-group-children app)))))
-      ;; Only --verbose remains
-      (should (= 1 (length (clime-node-options resolved))))
-      (should (eq 'verbose (clime-option-name (car (clime-node-options resolved))))))))
+    (let* ((resolved (cdr (assoc "show-csv" (clime-group-children app))))
+           (fmt-opt (cl-find-if (lambda (o) (eq (clime-option-name o) 'format))
+                                (clime-node-options resolved))))
+      ;; Both options remain
+      (should (= 2 (length (clime-node-options resolved))))
+      ;; format is locked
+      (should fmt-opt)
+      (should (clime-option-locked fmt-opt))
+      (should (equal "csv" (clime-option-default fmt-opt)))
+      ;; verbose is not locked
+      (should-not (clime-option-locked
+                   (cl-find-if (lambda (o) (eq (clime-option-name o) 'verbose))
+                               (clime-node-options resolved)))))))
 
 (ert-deftest clime-test-alias-for/vals-stored-as-locked-vals ()
   "alias :vals are stored as locked-vals on the resolved command."
@@ -410,7 +441,7 @@
       (should (equal "csv" (plist-get params 'format))))))
 
 (ert-deftest clime-test-alias-for/vals-not-overridable ()
-  "alias :vals option is removed from CLI — passing the flag is an error."
+  "alias :vals option is locked — passing the flag from CLI is an error."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                    :options (list opt)))
@@ -646,8 +677,11 @@
                                 (clime-group-children shortcuts))))
          (all-opt-names (mapcar #'clime-option-name
                                 (clime-node-all-options resolved))))
-    ;; todo removed by :vals, sexp remains in mutex group
-    (should-not (memq 'todo all-opt-names))
+    ;; todo locked by :vals but still in options list, sexp remains
+    (should (memq 'todo all-opt-names))
+    (should (clime-option-locked
+             (cl-find-if (lambda (o) (eq (clime-option-name o) 'todo))
+                          (clime-node-all-options resolved))))
     (should (memq 'sexp all-opt-names))
     ;; locked-vals stored
     (should (equal '((todo . "WAITING")) (clime-node-locked-vals resolved))))
