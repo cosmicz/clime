@@ -318,7 +318,6 @@ Returns an alist of (KEY . ACTION) where ACTION is one of:
   (:child NAME NODE) — enter child node
   (:run NODE)        — run handler"
   (let ((shared-used (make-hash-table :test #'equal)))
-    (puthash "q" t shared-used)
     (puthash "?" t shared-used)
     (append (clime-invoke--build-child-actions node shared-used)
             (clime-invoke--build-arg-actions node shared-used)
@@ -770,9 +769,14 @@ Uses 4-column layout: Key | Desc | Value | Env."
                       (propertize "RET" 'face act-face)
                       "Run")
               actions))
+      (unless at-root
+        (push (format "%s %s"
+                      (propertize "DEL" 'face act-face)
+                      "Back")
+              actions))
       (push (format "%s %s"
-                    (propertize "q" 'face act-face)
-                    (if at-root "Quit" "Return"))
+                    (propertize "ESC" 'face act-face)
+                    "Quit")
             actions)
       (push (concat " " (string-join (nreverse actions) "    ")) lines))
     (string-join (nreverse lines) "\n")))
@@ -1005,12 +1009,14 @@ Returns the full key string (e.g. \"- v\") or nil on timeout/C-g."
 APP is the root app.  PATH is the current command path.
 PARAMS is the shared params plist.
 AT-ROOT non-nil means this is the entry-point node.
-Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
+Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
+\(EXIT-CODE . STRING) or nil, and QUIT-ALL non-nil means ESC was pressed."
   (let ((buf (get-buffer-create clime-invoke--buffer-name))
         (key-map (clime-invoke--build-key-map node))
         (error-msg nil)
         (last-output nil)
         (validation-result nil)
+        (quit-all nil)
         (running t))
     (display-buffer buf clime-invoke-display-buffer-action)
     ;; Initial validation
@@ -1039,8 +1045,10 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
         (cond
          ;; Prefix cancelled (timeout or C-g during prefix read)
          ((null key) nil)
-         ;; Quit
-         ((or (equal key "q") (equal key "C-g"))
+         ;; Quit (ESC = quit all, DEL/C-g = back one level)
+         ((equal key "ESC")
+          (setq running nil quit-all t))
+         ((or (equal key "DEL") (equal key "C-g"))
           (setq running nil))
          ;; Help
          ((equal key "?")
@@ -1103,6 +1111,9 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
                      (setq params (car child-result))
                      (setq validation-result
                            (clime-invoke--validate-all node params))
+                     (when (caddr child-result)
+                       ;; Propagate quit-all from child
+                       (setq running nil quit-all t))
                      (when-let ((child-output (cadr child-result)))
                        ;; Propagate: close parent loop too, show output
                        (setq last-output child-output
@@ -1122,7 +1133,7 @@ Returns (PARAMS LAST-OUTPUT) where LAST-OUTPUT is (EXIT-CODE . STRING) or nil."
     ;; Re-display parent after returning from child
     (when (buffer-live-p buf)
       (display-buffer buf clime-invoke-display-buffer-action))
-    (list params last-output)))
+    (list params last-output quit-all)))
 
 ;;; ─── Public API ─────────────────────────────────────────────────────
 

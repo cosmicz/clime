@@ -828,10 +828,14 @@
                   (get-text-property pos 'face content))))))
 
 (ert-deftest clime-test-invoke/render-action-key-face ()
-  "Action keys (RET, q) use clime-invoke-action-key face."
+  "Action keys (RET, ESC) use clime-invoke-action-key face."
   (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
          (content (clime-invoke--render-to-string cmd nil nil nil t)))
     (let ((pos (string-match "RET" content)))
+      (should pos)
+      (should (eq 'clime-invoke-action-key
+                  (get-text-property pos 'face content))))
+    (let ((pos (string-match "ESC" content)))
       (should pos)
       (should (eq 'clime-invoke-action-key
                   (get-text-property pos 'face content))))))
@@ -884,12 +888,16 @@
       (should (eq 'shadow (get-text-property pos 'face content))))))
 
 (ert-deftest clime-test-invoke/render-quit-at-root ()
-  "Root shows 'Quit', non-root shows 'Return'."
+  "Root shows 'ESC Quit', non-root shows 'ESC Quit' and 'DEL Back'."
   (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
          (at-root (clime-invoke--render-to-string cmd nil nil nil t))
          (not-root (clime-invoke--render-to-string cmd nil nil nil nil)))
+    (should (string-match-p "ESC" at-root))
     (should (string-match-p "Quit" at-root))
-    (should (string-match-p "Return" not-root))))
+    (should-not (string-match-p "\\bq\\b" at-root))
+    (should (string-match-p "ESC" not-root))
+    (should (string-match-p "DEL" not-root))
+    (should (string-match-p "Back" not-root))))
 
 (ert-deftest clime-test-invoke/render-shows-run ()
   "RET → Run shown for commands with handlers."
@@ -1246,17 +1254,17 @@
                   (get-text-property pos 'face content))))))
 
 (ert-deftest clime-test-invoke/render-prefix-dims-action-keys ()
-  "During prefix state, action keys (RET, q) are dimmed."
+  "During prefix state, action keys (RET, ESC) are dimmed."
   (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
          (content (clime-invoke--render-to-string cmd nil nil nil t nil "-")))
     (let ((ret-pos (string-match "RET" content)))
       (should ret-pos)
       (should (eq 'clime-invoke-dimmed
                   (get-text-property ret-pos 'face content))))
-    (let ((q-pos (string-match "\\bq\\b" content)))
-      (should q-pos)
+    (let ((esc-pos (string-match "ESC" content)))
+      (should esc-pos)
       (should (eq 'clime-invoke-dimmed
-                  (get-text-property q-pos 'face content))))))
+                  (get-text-property esc-pos 'face content))))))
 
 (ert-deftest clime-test-invoke/render-prefix-option-keys-not-dimmed ()
   "During prefix state, option keys keep their option-key face."
@@ -1567,6 +1575,36 @@
     (should-not (cl-find-if (lambda (e) (and (eq (cadr e) :option)
                                               (eq (clime-option-name (caddr e)) 'todo)))
                             key-map))))
+
+;;; ─── Key Rework (clime-cos) ─────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/q-available-for-children ()
+  "Letter q is not reserved — child commands starting with q get it."
+  (let* ((cmd (clime-make-command :name "query" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("query" . ,cmd))))
+         (km (clime-invoke--build-key-map app)))
+    (should (equal "q" (car (cl-find-if
+                             (lambda (e) (and (eq (cadr e) :child)
+                                              (equal (caddr e) "query")))
+                             km))))))
+
+(ert-deftest clime-test-invoke/render-no-q-action ()
+  "Action bar does not show q as a key."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (at-root (clime-invoke--render-to-string cmd nil nil nil t))
+         (not-root (clime-invoke--render-to-string cmd nil nil nil nil)))
+    (should-not (string-match-p "\\bq\\b" at-root))
+    (should-not (string-match-p "\\bq\\b" not-root))))
+
+(ert-deftest clime-test-invoke/render-del-back-only-at-child ()
+  "DEL Back shown at child nodes, not at root."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (at-root (clime-invoke--render-to-string cmd nil nil nil t))
+         (not-root (clime-invoke--render-to-string cmd nil nil nil nil)))
+    (should-not (string-match-p "DEL" at-root))
+    (should (string-match-p "DEL" not-root))
+    (should (string-match-p "Back" not-root))))
 
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here
