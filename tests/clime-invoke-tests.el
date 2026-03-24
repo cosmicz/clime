@@ -1606,5 +1606,59 @@
     (should (string-match-p "DEL" not-root))
     (should (string-match-p "Back" not-root))))
 
+;;; ─── Group Lock Propagation Rendering (clime-di0) ───────────────────
+
+(ert-deftest clime-test-invoke/render-locked-mutex-sibling-excluded ()
+  "Locked mutex sibling (nil value) renders as (excluded) not nil."
+  (let* ((exclusive (clime-check-exclusive 'qm '(todo sexp)))
+         (opt-todo (clime-make-option :name 'todo :flags '("--todo")
+                                      :locked t :default "WAITING"))
+         (opt-sexp (clime-make-option :name 'sexp :flags '("--sexp")
+                                      :locked t :default nil))
+         (mutex (clime-group--create :name "qm" :inline t
+                                     :options (list opt-todo opt-sexp)
+                                     :conform (list exclusive)))
+         (cmd (clime-make-command :name "waiting" :handler #'ignore
+                                  :children (list (cons "qm" mutex))
+                                  :locked-vals '((todo . "WAITING"))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("waiting" . ,cmd))))
+         (_ (setf (clime-node-parent cmd) app))
+         (key-map (clime-invoke--build-key-map cmd))
+         (buf (generate-new-buffer " *test-render*")))
+    (unwind-protect
+        (progn
+          (clime-invoke--render cmd '() key-map nil buf nil nil)
+          (let ((content (with-current-buffer buf (buffer-string))))
+            ;; todo shows its locked value
+            (should (string-match-p "WAITING" content))
+            (should (string-match-p "(locked)" content))
+            ;; sexp shows (excluded), not "nil"
+            (should (string-match-p "(excluded)" content))
+            (should-not (string-match-p "\\bnil\\b" content))
+            ;; Neither has a key binding
+            (should-not (cl-find-if
+                         (lambda (e) (and (eq (cadr e) :option)
+                                          (memq (clime-option-name (caddr e))
+                                                '(todo sexp))))
+                         key-map))))
+      (kill-buffer buf))))
+
+(ert-deftest clime-test-invoke/locked-mutex-sibling-no-validation ()
+  "Locked mutex siblings are skipped in per-param validation."
+  (let* ((exclusive (clime-check-exclusive 'qm '(todo sexp)))
+         (opt-todo (clime-make-option :name 'todo :flags '("--todo")
+                                      :locked t :default "WAITING"))
+         (opt-sexp (clime-make-option :name 'sexp :flags '("--sexp")
+                                      :locked t :default nil :required t))
+         (mutex (clime-group--create :name "qm" :inline t
+                                     :options (list opt-todo opt-sexp)
+                                     :conform (list exclusive)))
+         (cmd (clime-make-command :name "waiting" :handler #'ignore
+                                  :children (list (cons "qm" mutex)))))
+    ;; sexp is :required but locked — should not produce a validation error
+    (let ((result (clime-invoke--validate-all cmd '())))
+      (should-not (assq 'sexp (car result))))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here

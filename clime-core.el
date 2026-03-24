@@ -444,6 +444,30 @@ resolved command copies."
          ((clime-group-p child)
           (clime--resolve-aliases-walk child app)))))))
 
+(defun clime--propagate-group-locks (node)
+  "Walk NODE's tree propagating locks through conformer groups.
+When an option inside an inline group with a :conform list is locked,
+lock all non-locked siblings in that group.  This prevents users from
+interacting with siblings that would always violate group constraints."
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (let ((child (cdr entry)))
+        (when (and (clime-group-p child) (clime-node-inline child)
+                   (clime-node-conform child))
+          ;; Inline conformer group — check for locked members
+          (let ((opts (clime-node-options child))
+                (has-locked nil))
+            (dolist (o opts)
+              (when (clime-option-locked o)
+                (setq has-locked t)))
+            (when has-locked
+              (dolist (o opts)
+                (unless (clime-option-locked o)
+                  (setf (clime-option-locked o) t))))))
+        ;; Recurse into all group children
+        (when (clime-group-p child)
+          (clime--propagate-group-locks child))))))
+
 (defun clime-make-group (&rest args)
   "Create a `clime-group' with validation.
 Required keyword arg: :name (string).
@@ -553,6 +577,7 @@ ARGS is a plist of slot values."
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
     (clime--resolve-aliases app)
+    (clime--propagate-group-locks app)
     (clime--validate-tree app)
     app))
 

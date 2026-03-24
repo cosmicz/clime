@@ -552,9 +552,11 @@ GENERAL-ERRORS is a list of strings from conformers and requires checks."
       (dolist (err (clime--find-unsatisfied-requires visited params))
         (push err general-errors)))
     ;; Conformer checks — inject locked vals so mutex/zip checks see them
+    ;; Skip locked options with nil default (excluded siblings, not set values)
     (let ((check-params (copy-sequence params)))
       (dolist (opt (clime-node-all-options node))
-        (when (clime-option-locked opt)
+        (when (and (clime-option-locked opt)
+                   (not (null (clime-option-default opt))))
           (let ((name (clime-option-name opt)))
             (unless (plist-member check-params name)
               (setq check-params (plist-put check-params name
@@ -668,14 +670,20 @@ Uses 4-column layout: Key | Desc | Value | Env."
             (if (clime-option-locked opt)
                 ;; Locked option: show full flags dimmed, value in locked face
                 (let* ((desc (clime-invoke--format-desc opt params))
-                       (val-str (propertize (format "%s" (clime-option-default opt))
-                                            'face 'clime-invoke-locked)))
+                       (default (clime-option-default opt))
+                       (has-val (not (null default)))
+                       (val-str (if has-val
+                                    (propertize (format "%s" default)
+                                                'face 'clime-invoke-locked)
+                                  (propertize "(excluded)" 'face 'clime-invoke-dimmed))))
                   (push (format "     %s  %s  %s"
                                 (clime-invoke--pad-to
                                  (propertize desc 'face 'clime-invoke-dimmed)
                                  30)
                                 val-str
-                                (propertize "(locked)" 'face 'clime-invoke-dimmed))
+                                (if has-val
+                                    (propertize "(locked)" 'face 'clime-invoke-dimmed)
+                                  ""))
                         lines))
               ;; Normal option: interactive with key binding
               (let* ((name (clime-option-name opt))
