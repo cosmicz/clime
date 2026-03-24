@@ -101,12 +101,12 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
            (result (clime-parse app '("cmd"))))
       (should (eq (plist-get (clime-parse-result-params result) 'dry-run) t)))))
 
-(ert-deftest clime-test-env/explicit-env-overrides-prefix ()
-  "Explicit :env takes priority over auto-derivation."
-  (clime-test-with-env (("CUSTOM_VAR" "custom")
+(ert-deftest clime-test-env/explicit-env-suffix-with-prefix ()
+  "Explicit :env string is a suffix — prefix is prepended."
+  (clime-test-with-env (("MYAPP_CUSTOM" "custom")
                         ("MYAPP_VAL" "derived"))
     (let* ((opt (clime-make-option :name 'val :flags '("--val")
-                                   :env "CUSTOM_VAR"))
+                                   :env "CUSTOM"))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -262,6 +262,88 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
            (result (clime-parse app '("cmd"))))
       (should (equal (plist-get (clime-parse-result-params result) 'verbose)
                      3)))))
+
+;;; ─── :env t opt-in ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-env/env-t-with-prefix ()
+  ":env t with :env-prefix auto-derives PREFIX_OPTNAME."
+  (clime-test-with-env (("MYAPP_DEBUG" "true"))
+    (let* ((opt (clime-make-option :name 'debug :flags '("--debug")
+                                   :nargs 0 :env t))
+           (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                    :options (list opt)))
+           (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
+                                :children (list (cons "cmd" cmd))))
+           (result (clime-parse app '("cmd"))))
+      (should (eq (plist-get (clime-parse-result-params result) 'debug) t)))))
+
+(ert-deftest clime-test-env/env-t-without-prefix ()
+  ":env t without :env-prefix auto-derives OPTNAME (no prefix)."
+  (clime-test-with-env (("REVERSE" "from-env"))
+    (let* ((opt (clime-make-option :name 'reverse :flags '("--reverse")
+                                   :env t))
+           (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                    :options (list opt)))
+           (app (clime-make-app :name "t" :version "1"
+                                :children (list (cons "cmd" cmd))))
+           (result (clime-parse app '("cmd"))))
+      (should (equal (plist-get (clime-parse-result-params result) 'reverse)
+                     "from-env")))))
+
+(ert-deftest clime-test-env/explicit-suffix-no-prefix ()
+  ":env STRING without :env-prefix uses the string as-is."
+  (clime-test-with-env (("FILES" "a.org"))
+    (let* ((opt (clime-make-option :name 'files :flags '("--file")
+                                   :env "FILES"))
+           (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                    :options (list opt)))
+           (app (clime-make-app :name "t" :version "1"
+                                :children (list (cons "cmd" cmd))))
+           (result (clime-parse app '("cmd"))))
+      (should (equal (plist-get (clime-parse-result-params result) 'files)
+                     "a.org")))))
+
+;;; ─── clime--env-var-for-option unit tests ──────────────────────────────
+
+(ert-deftest clime-test-env/var-for-option-suffix-with-prefix ()
+  "String :env + prefix → PREFIX_SUFFIX."
+  (let* ((opt (clime-make-option :name 'files :flags '("--file")
+                                 :env "FILES"))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "APP")))
+    (should (equal (clime--env-var-for-option opt app) "APP_FILES"))))
+
+(ert-deftest clime-test-env/var-for-option-suffix-no-prefix ()
+  "String :env without prefix → string as-is."
+  (let* ((opt (clime-make-option :name 'files :flags '("--file")
+                                 :env "FILES"))
+         (app (clime-make-app :name "t" :version "1")))
+    (should (equal (clime--env-var-for-option opt app) "FILES"))))
+
+(ert-deftest clime-test-env/var-for-option-t-with-prefix ()
+  ":env t + prefix → PREFIX_OPTNAME."
+  (let* ((opt (clime-make-option :name 'debug :flags '("--debug")
+                                 :env t :nargs 0))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "APP")))
+    (should (equal (clime--env-var-for-option opt app) "APP_DEBUG"))))
+
+(ert-deftest clime-test-env/var-for-option-t-no-prefix ()
+  ":env t without prefix → OPTNAME."
+  (let* ((opt (clime-make-option :name 'reverse :flags '("--reverse")
+                                 :env t))
+         (app (clime-make-app :name "t" :version "1")))
+    (should (equal (clime--env-var-for-option opt app) "REVERSE"))))
+
+(ert-deftest clime-test-env/var-for-option-nil-with-prefix ()
+  "No :env + prefix → auto-derive PREFIX_OPTNAME (backward compat)."
+  (let* ((opt (clime-make-option :name 'registry :flags '("--registry")))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "APP")))
+    (should (equal (clime--env-var-for-option opt app) "APP_REGISTRY"))))
+
+(ert-deftest clime-test-env/var-for-option-nil-no-prefix ()
+  "No :env + no prefix → nil."
+  (let* ((opt (clime-make-option :name 'val :flags '("--val")))
+         (app (clime-make-app :name "t" :version "1")))
+    (should-not (clime--env-var-for-option opt app))))
 
 (provide 'clime-env-tests)
 ;;; clime-env-tests.el ends here

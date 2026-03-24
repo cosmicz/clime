@@ -38,7 +38,7 @@
   (flags nil :type list :documentation "List of flag strings, e.g. (\"--verbose\" \"-v\").")
   (type 'string :type symbol :documentation "Type converter symbol.")
   (nargs nil :type (or integer null) :documentation "Arg count: nil=1, 0=boolean, N=fixed.")
-  (env nil :type (or string null) :documentation "Env var name override.")
+  (env nil :type (or string boolean null) :documentation "Env var name: string suffix (prefixed by app :env-prefix), t for auto-derive, or nil.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")

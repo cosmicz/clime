@@ -1661,5 +1661,20 @@
         t)
   (should (= 1 (length (clime-node-examples clime-test--ex-app)))))
 
+;;; ─── Bare :env normalization ─────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/bare-env-normalizes-to-t ()
+  "Bare :env (no value) in DSL normalizes to :env t."
+  (eval '(clime-app clime-test--dsl-bare-env
+           :version "1"
+           (clime-command run
+             :help "Run"
+             (clime-opt reverse ("--reverse") :env :help "Reverse output")
+             (clime-handler (ctx) nil)))
+        t)
+  (let* ((cmd (cdr (car (clime-group-children clime-test--dsl-bare-env))))
+         (opt (car (clime-node-options cmd))))
+    (should (eq (clime-option-env opt) t))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here

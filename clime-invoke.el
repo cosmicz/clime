@@ -451,11 +451,12 @@ Returns help text with long flag in parens and annotations."
         (setq parts (append parts (nreverse annotations)))))
     (string-join (nreverse parts) " ")))
 
-(defun clime-invoke--format-env (option params)
+(defun clime-invoke--format-env (option params &optional app)
   "Format the env column for OPTION given PARAMS, or return nil.
+APP is the root app (for :env-prefix resolution).
 Shows [$VAR=resolved] with active face on value when env is source."
   (when (clime-option-p option)
-    (let ((env-name (clime-option-env option)))
+    (let ((env-name (clime--env-var-for-option option app)))
       (when env-name
         (let* ((env-val (getenv env-name))
                (explicit (plist-member params (clime-option-name option)))
@@ -637,7 +638,8 @@ Uses 4-column layout: Key | Desc | Value | Env."
   (let ((lines '())
         (param-errors (car validation-result))
         (general-errors (cdr validation-result))
-        (dimmed prefix-state))
+        (dimmed prefix-state)
+        (root (let ((n node)) (while (clime-node-parent n) (setq n (clime-node-parent n))) n)))
     ;; Header (breadcrumb)
     (let ((header (clime-invoke--format-header node)))
       (unless (string-empty-p header)
@@ -684,7 +686,7 @@ Uses 4-column layout: Key | Desc | Value | Env."
                                 key-map)))
                      (desc (clime-invoke--format-desc opt params))
                      (val-str (clime-invoke--format-value opt params))
-                     (env-str (clime-invoke--format-env opt params))
+                     (env-str (clime-invoke--format-env opt params root))
                      (param-err (cdr (assq name param-errors))))
                 (when key
                   (let ((display-key (if prefix-state

@@ -55,7 +55,7 @@
   (clime-opt files ("--file" "-f")
     :multiple :required
     :coerce #'expand-file-name
-    :env "CLOQ_FILES"
+    :env "FILES"
     :help "Org file(s) to query")
 
   ;; ── query ─────────────────────────────────────────────────────────
