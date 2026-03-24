@@ -683,12 +683,21 @@ since static choices were already validated in pass 1."
                                     (mapconcat (lambda (c) (format "%s" c))
                                                resolved ", ")))))))))))
 
+(defun clime--call-conform (cfn val param)
+  "Call conform function CFN with VAL and optionally PARAM.
+If CFN accepts exactly 1 argument, call (CFN VAL).
+Otherwise call (CFN VAL PARAM) for backward compatibility."
+  (let ((max-args (cdr (func-arity cfn))))
+    (if (and (numberp max-args) (= max-args 1))
+        (funcall cfn val)
+      (funcall cfn val param))))
+
 (defun clime--run-conformers (nodes params)
   "Run :conform functions for options and args in NODES against PARAMS.
 Called in pass 2 after dynamic choices validation and env var application.
 Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
-\(value, param) and returns the conformed value; signaled errors become
-`clime-usage-error'."
+\(value) or (value, param) depending on arity, and returns the conformed
+value; signaled errors become `clime-usage-error'."
   (dolist (node nodes)
     (dolist (opt (clime-node-options node))
       (let ((cfn (clime-option-conform opt)))
@@ -697,7 +706,7 @@ Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
                  (val (plist-get params name)))
             (when val
               (condition-case err
-                  (let ((conformed (funcall cfn val opt)))
+                  (let ((conformed (clime--call-conform cfn val opt)))
                     (setq params (plist-put params name conformed)))
                 (error
                  (signal 'clime-usage-error
@@ -711,7 +720,7 @@ Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
                  (val (plist-get params name)))
             (when val
               (condition-case err
-                  (let ((conformed (funcall cfn val arg)))
+                  (let ((conformed (clime--call-conform cfn val arg)))
                     (setq params (plist-put params name conformed)))
                 (error
                  (signal 'clime-usage-error

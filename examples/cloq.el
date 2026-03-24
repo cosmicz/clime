@@ -74,7 +74,7 @@
       (clime-opt sexp ("--sexp")
         :help "S-expression org-ql query"
         :category "Query"
-        :conform (lambda (val _param)
+        :conform (lambda (val)
                    (condition-case err
                        (progn (car (read-from-string val)) val)
                      (error (error "Invalid sexp: %s" (error-message-string err))))))

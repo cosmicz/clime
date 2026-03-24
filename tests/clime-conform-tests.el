@@ -1302,5 +1302,86 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                   :options (list opt))))
     (should (equal (list opt) (clime-node-all-options cmd)))))
 
+;;; ─── Arity-1 Conform (clime-yo0) ─────────────────────────────────────
+
+(ert-deftest clime-test-conform/option-1-arg-lambda ()
+  "Option :conform with 1-arg lambda works without param."
+  (let* ((opt (clime-make-option :name 'status :flags '("--status")
+                                  :conform (lambda (v) (upcase v))))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "list" cmd))))
+         (result (clime-parse app '("list" "--status" "todo"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'status)
+                   "TODO"))))
+
+(ert-deftest clime-test-conform/option-1-arg-builtin ()
+  "Option :conform with arity-1 builtin function works."
+  (let* ((opt (clime-make-option :name 'name :flags '("--name")
+                                  :conform #'upcase))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "run" cmd))))
+         (result (clime-parse app '("run" "--name" "hello"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name)
+                   "HELLO"))))
+
+(ert-deftest clime-test-conform/option-identity-through-parse ()
+  "Option :conform #'identity works through full parse (1-arg fn)."
+  (let* ((opt (clime-make-option :name 'val :flags '("--val")
+                                  :conform #'identity))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "run" cmd))))
+         (result (clime-parse app '("run" "--val" "keep"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'val)
+                   "keep"))))
+
+(ert-deftest clime-test-conform/arg-1-arg-lambda ()
+  "Arg :conform with 1-arg lambda works."
+  (let* ((arg (clime-make-arg :name 'name :required t
+                               :conform (lambda (v) (downcase v))))
+         (cmd (clime-make-command :name "greet" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "greet" cmd))))
+         (result (clime-parse app '("greet" "WORLD"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'name)
+                   "world"))))
+
+(ert-deftest clime-test-conform/option-1-arg-error-signals-usage-error ()
+  "1-arg conformer that signals error produces clime-usage-error."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :conform (lambda (v)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "show" cmd)))))
+    (should-error (clime-parse app '("show" "--id" "abc"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-conform/option-rest-arg-receives-2-args ()
+  "Conform fn with &rest receives both value and param."
+  (let* ((received-args nil)
+         (opt (clime-make-option :name 'x :flags '("--xx")
+                                  :conform (lambda (&rest args)
+                                             (setq received-args args)
+                                             (car args))))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "run" cmd)))))
+    (clime-parse app '("run" "--xx" "val"))
+    ;; &rest fn gets 2 args (value + param)
+    (should (= 2 (length received-args)))
+    (should (equal "val" (car received-args)))
+    (should (clime-option-p (cadr received-args)))))
+
 (provide 'clime-conform-tests)
 ;;; clime-conform-tests.el ends here
