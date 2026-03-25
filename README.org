@@ -675,17 +675,23 @@ cross-source validation.
 
 ** Environment Variables
 
-Set ~:env-prefix~ on the app to auto-derive env var names from options:
+Options opt in to env var resolution with ~:env~ (or ~:env t~) for an
+auto-derived name, or ~:env "SUFFIX"~ for an explicit suffix.  Set
+~:env-prefix~ on the app to
+provide the prefix:
 
 #+begin_src emacs-lisp
 (clime-app greet
   :version "1.0.0"
   :help "A friendly greeter."
   :env-prefix "GREET"
-  ...)
+
+  (clime-opt shout ("--shout") :bool :env
+    :help "SHOUT THE GREETING"))
 #+end_src
 
-Now ~--shout~ can also be set via ~GREET_SHOUT=1~.
+Now ~--shout~ can also be set via ~GREET_SHOUT=1~.  Options without
+~:env~ are not affected by ~:env-prefix~.
 
 For individual options, override the env var name with ~:env~:
 
@@ -722,6 +728,13 @@ listings, and shown in full in detailed command help.
 Help text wraps to the terminal width, auto-detected from the
 ~COLUMNS~ environment variable (fallback 80, minimum 40).  Override
 with the ~clime-help-width~ variable.
+
+Option help lines include inline annotations:
+- ~[$VAR]~ for options with env var resolution (or ~[$VAR=value]~ when
+  the variable is set)
+- ~(required)~ for required options with no default
+- ~(choices: a|b|c)~ for options with ~:choices~
+- ~(DEPRECATED)~ for deprecated options
 
 *** Examples
 
@@ -1097,6 +1110,15 @@ values, calls ~clime-run~, and displays output.
 Inline validation highlights invalid parameters as you set them.
 Prefix keys (~-~ / ~=~) re-render the buffer with dimmed non-option
 keys for visual feedback.  No external dependencies.
+
+~clime-invoke~ returns a structured plist:
+
+#+begin_src emacs-lisp
+(let ((result (clime-invoke my-app)))
+  (plist-get result :params)  ;; final parameter values
+  (plist-get result :exit)    ;; handler exit code (nil if user quit)
+  (plist-get result :output)) ;; handler output string (nil if user quit)
+#+end_src
 
 *** Hot-reload (~clime-reload~)
 
