@@ -1,5 +1,3 @@
-#!/bin/sh
-":"; S="$(realpath "$0")";D="$(dirname "$S")"; CLIME_ARGV0="$0" CLIME_MAIN_APP=clime-make exec emacs --batch -Q -L "$D" --eval "(setq load-file-name \"$S\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -388,6 +386,27 @@ CTX is the clime context."
         (let ((init-result (clime-make--init-handler ctx)))
           (format "%s\n%s" scaffold-result init-result))))))
 
+(defun clime-make--strip-handler (ctx)
+  "Handle the `strip' command: remove a clime shebang from an Elisp file.
+CTX is the clime context."
+  (clime-let ctx (file)
+    (let ((target (expand-file-name file)))
+      (unless (file-exists-p target)
+        (signal 'clime-usage-error
+                (list (format "%s does not exist" file))))
+      (unless (clime-make--clime-shebang-p target)
+        (signal 'clime-usage-error
+                (list (format "%s has no clime shebang to strip"
+                              (file-name-nondirectory file)))))
+      (with-temp-buffer
+        (insert-file-contents target)
+        (goto-char (point-min))
+        (forward-line 2)
+        (delete-region (point-min) (point))
+        (write-region nil nil target))
+      (set-file-modes target (logand (file-modes target) #o666))
+      (format "done: stripped shebang from %s" target))))
+
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
 (clime-app clime-make
@@ -474,7 +493,15 @@ CTX is the clime context."
    (clime-opt env ("--env" "-e") :multiple
                  :help "Set environment variable in shebang (NAME=VALUE)")
 
-   (clime-handler (ctx) (clime-make--quickstart-handler ctx))))
+   (clime-handler (ctx) (clime-make--quickstart-handler ctx)))
+
+  ;; ── strip ────────────────────────────────────────────────────────
+  (clime-command strip
+    :help "Remove the clime shebang header from an Elisp file"
+
+    (clime-arg file :help "The .el file to strip")
+
+    (clime-handler (ctx) (clime-make--strip-handler ctx))))
 
 (provide 'clime-make)
 ;;; Entrypoint:

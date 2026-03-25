@@ -1,5 +1,3 @@
-#!/bin/sh
-":"; S="$(realpath "$0")";D="$(dirname "$S")"; CLIME_ARGV0="$0" CLIME_MAIN_APP=cloq exec emacs --batch -Q -L "$D/.." -L "/Users/cosmic/dev/clime/" -L "/Users/cosmic/.emacs.d/.local/straight/repos/org-ql" -L "/Users/cosmic/.emacs.d/.local/straight/repos/dash.el" -L "/Users/cosmic/.emacs.d/.local/straight/repos/ts.el" -L "/Users/cosmic/.emacs.d/.local/straight/repos/s.el" --eval "(setq load-file-name \"$S\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; cloq.el --- Query org files from the command line  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
