@@ -316,24 +316,6 @@ Signals `clime-usage-error' if no content is available."
 
 ;;; ─── Env Var Provider ──────────────────────────────────────────────────
 
-(defun clime--env-var-for-option (opt app)
-  "Return the env var name for OPT, or nil if none applies.
-:env STRING is a suffix (APP's :env-prefix prepended when present).
-:env t opts in to auto-derivation from option name.
-When :env is nil, no env var is derived."
-  (let ((env (clime-option-env opt))
-        (prefix (and (clime-app-p app) (clime-app-env-prefix app))))
-    (cond
-     ;; Explicit suffix string
-     ((stringp env)
-      (if prefix (concat prefix "_" env) env))
-     ;; Explicit opt-in (t)
-     (env
-      (let ((derived (upcase (replace-regexp-in-string
-                              "-" "_" (symbol-name (clime-option-name opt))))))
-        (if prefix (concat prefix "_" derived) derived)))
-     (t nil))))
-
 (defun clime--parse-boolean-env (value flag-or-name)
   "Parse VALUE as a boolean env var string.
 Return t for truthy values, nil for falsy.

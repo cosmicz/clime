@@ -860,5 +860,25 @@ Sibling collisions are allowed."
         (dolist (entry (clime-group-children node))
           (clime-check-ancestor-collisions (cdr entry) merged path))))))
 
+;;; ─── Env var derivation ─────────────────────────────────────────────
+
+(defun clime--env-var-for-option (opt app)
+  "Return the env var name for OPT, or nil if none applies.
+:env STRING is a suffix (APP's :env-prefix prepended when present).
+:env t opts in to auto-derivation from option name.
+When :env is nil, no env var is derived."
+  (let ((env (clime-option-env opt))
+        (prefix (and (clime-app-p app) (clime-app-env-prefix app))))
+    (cond
+     ;; Explicit suffix string
+     ((stringp env)
+      (if prefix (concat prefix "_" env) env))
+     ;; Explicit opt-in (t)
+     (env
+      (let ((derived (upcase (replace-regexp-in-string
+                              "-" "_" (symbol-name (clime-option-name opt))))))
+        (if prefix (concat prefix "_" derived) derived)))
+     (t nil))))
+
 (provide 'clime-core)
 ;;; clime-core.el ends here
