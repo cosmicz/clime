@@ -1164,7 +1164,12 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
   "Open an interactive menu for clime APP.
 APP is a `clime-app' struct, or nil to select from registered apps.
 PATH is an optional list of strings naming a node to navigate to.
-PARAMS is an optional plist of initial param values."
+PARAMS is an optional plist of initial param values.
+
+Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
+  :params  — final parameter values
+  :exit    — handler exit code (integer), or nil if user quit
+  :output  — handler output (string), or nil if user quit"
   (interactive (list nil))
   (when app
     (clime-register-app (clime-node-name app) app))
@@ -1208,7 +1213,9 @@ PARAMS is an optional plist of initial param values."
             (last-output (cadr loop-result)))
         (when last-output
           (clime-invoke--display-output (cdr last-output) (car last-output)))
-        final-params))))
+        (list :params final-params
+              :exit (and last-output (car last-output))
+              :output (and last-output (cdr last-output)))))))
 
 ;;;###autoload
 (defun clime-invoke-command (app command-path)

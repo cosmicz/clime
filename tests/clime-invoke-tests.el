@@ -1729,5 +1729,67 @@
     (let ((result (clime-invoke--validate-all cmd '())))
       (should-not (assq 'sexp (car result))))))
 
+;;; ─── Structured Return Value ────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/returns-structured-result-with-output ()
+  "clime-invoke returns (:params :exit :output) when handler ran."
+  (let* ((app (clime-make-app :name "test" :version "1"))
+         (params '(verbose t))
+         (output '(0 . "hello")))
+    (cl-letf (((symbol-function 'clime-invoke--loop)
+               (lambda (_app _node _path _params _top)
+                 (list params output nil)))
+              ((symbol-function 'clime-invoke--display-output)
+               #'ignore))
+      (let ((result (clime-invoke app)))
+        (should (plistp result))
+        (should (equal params (plist-get result :params)))
+        (should (= 0 (plist-get result :exit)))
+        (should (equal "hello" (plist-get result :output)))))))
+
+(ert-deftest clime-test-invoke/returns-nil-exit-output-on-quit ()
+  "clime-invoke returns nil :exit and :output when user quit without running."
+  (let* ((app (clime-make-app :name "test" :version "1"))
+         (params '(verbose nil)))
+    (cl-letf (((symbol-function 'clime-invoke--loop)
+               (lambda (_app _node _path _params _top)
+                 (list params nil nil)))
+              ((symbol-function 'clime-invoke--display-output)
+               #'ignore))
+      (let ((result (clime-invoke app)))
+        (should (plistp result))
+        (should (equal params (plist-get result :params)))
+        (should-not (plist-get result :exit))
+        (should-not (plist-get result :output))))))
+
+(ert-deftest clime-test-invoke/returns-nonzero-exit-on-error ()
+  "clime-invoke returns nonzero :exit when handler errored."
+  (let* ((app (clime-make-app :name "test" :version "1"))
+         (params '())
+         (output '(1 . "boom")))
+    (cl-letf (((symbol-function 'clime-invoke--loop)
+               (lambda (_app _node _path _params _top)
+                 (list params output nil)))
+              ((symbol-function 'clime-invoke--display-output)
+               #'ignore))
+      (let ((result (clime-invoke app)))
+        (should (= 1 (plist-get result :exit)))
+        (should (equal "boom" (plist-get result :output)))))))
+
+(ert-deftest clime-test-invoke/still-displays-output-buffer ()
+  "clime-invoke still calls display-output as a side effect."
+  (let* ((app (clime-make-app :name "test" :version "1"))
+         (displayed nil))
+    (cl-letf (((symbol-function 'clime-invoke--loop)
+               (lambda (_app _node _path _params _top)
+                 (list '() '(0 . "shown") nil)))
+              ((symbol-function 'clime-invoke--display-output)
+               (lambda (output &optional exit-code)
+                 (setq displayed (cons exit-code output)))))
+      (clime-invoke app)
+      (should displayed)
+      (should (= 0 (car displayed)))
+      (should (equal "shown" (cdr displayed))))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here
