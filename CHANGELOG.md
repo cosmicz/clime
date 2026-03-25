@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 — 2026-03-25
+
 ### Breaking changes
 
 - **`:env` opt-in required**: options no longer auto-derive env var
@@ -39,6 +41,11 @@
 
 - **Invoke: locked option metadata**: locked options display their full
   metadata (value, source) in the invoke menu instead of being hidden.
+
+- **Invoke: visibility toggle**: `?` key cycles through three display
+  modes — `normal` (default), `all` (reveals hidden items with
+  annotation), `clean` (also hides deprecated).  Current mode shown in
+  footer.
 
 - **`make strip` command**: strips shebangs from tracked `.el` files
   before commits.  `CLIME_MAKE` env var available in batch mode.
