@@ -163,6 +163,33 @@ CHOICES may be a list or a function returning a list."
           suffix)
       (or help-text ""))))
 
+(defun clime-help--append-env (help-text opt app)
+  "Append env var annotation to HELP-TEXT for OPT given APP.
+Resolves the env var name via `clime--env-var-for-option'.
+Shows [$VAR] or [$VAR=value] when the var is set in the environment."
+  (let ((env-name (and app (clime--env-var-for-option opt app))))
+    (if env-name
+        (let* ((env-val (getenv env-name))
+               (has-val (and env-val (not (string-empty-p env-val))))
+               (suffix (if has-val
+                           (format "[$%s=%s]" env-name env-val)
+                         (format "[$%s]" env-name))))
+          (if (and help-text (not (string-empty-p help-text)))
+              (concat help-text " " suffix)
+            suffix))
+      (or help-text ""))))
+
+(defun clime-help--append-required (help-text opt)
+  "Append (required) annotation to HELP-TEXT for OPT when applicable.
+Shows (required) when option is required and has no default."
+  (if (and (clime-option-required opt)
+           (not (clime-option-default opt)))
+      (let ((suffix "(required)"))
+        (if (and help-text (not (string-empty-p help-text)))
+            (concat help-text " " suffix)
+          suffix))
+    (or help-text "")))
+
 (defun clime-help--append-deprecated (help-text deprecated)
   "Append deprecation annotation to HELP-TEXT if DEPRECATED is non-nil.
 DEPRECATED is a string (migration hint) or t (generic)."
@@ -217,10 +244,11 @@ Appends repeat indicator for :count and :multiple options."
              ((clime-option-multiple opt) " ...")
              (t "")))))
 
-(defun clime-help--format-options (options &optional width)
+(defun clime-help--format-options (options &optional width app)
   "Format the Options section for OPTIONS list.
 Respects :category labels and :hidden flags.
-When WIDTH is non-nil, help text is wrapped to fit."
+When WIDTH is non-nil, help text is wrapped to fit.
+APP is the root app, used to resolve env var names."
   (let ((visible (cl-remove-if (lambda (o) (or (clime-option-hidden o)
                                                (clime-option-locked o)))
                                options)))
@@ -240,12 +268,7 @@ When WIDTH is non-nil, help text is wrapped to fit."
             (let* ((opts (nreverse (gethash grp grouped)))
                    (rows (mapcar
                           (lambda (opt)
-                            (cons (clime-help--format-option-flags opt)
-                                  (clime-help--append-deprecated
-                                   (clime-help--append-choices
-                                    (clime-option-help opt)
-                                    (clime-option-choices opt))
-                                   (clime-option-deprecated opt))))
+                            (clime-help--option-row opt app))
                           opts))
                    (header (if (string-empty-p grp) "Options:" (format "%s:" grp))))
               (push (concat header "\n" (clime-help--format-table rows width)) sections)))
@@ -310,13 +333,19 @@ options apply to."
              (push (list full-path :command item nil) items))))))
     (nreverse items)))
 
-(defun clime-help--option-row (opt)
-  "Format OPT as a (left . help) table row."
+(defun clime-help--option-row (opt &optional app)
+  "Format OPT as a (left . help) table row.
+APP is the root app, used to resolve env var names.
+Pipeline: help → choices → required → env → deprecated."
   (cons (clime-help--format-option-flags opt)
         (clime-help--append-deprecated
-         (clime-help--append-choices
-          (clime-option-help opt)
-          (clime-option-choices opt))
+         (clime-help--append-env
+          (clime-help--append-required
+           (clime-help--append-choices
+            (clime-option-help opt)
+            (clime-option-choices opt))
+           opt)
+          opt app)
          (clime-option-deprecated opt))))
 
 (defun clime-help--indent-lines (str prefix)
@@ -332,7 +361,7 @@ options apply to."
          (clime-help--first-line (or (clime-node-help cmd) ""))
          (clime-node-deprecated cmd))))
 
-(defun clime-help--format-sections (items &optional width)
+(defun clime-help--format-sections (items &optional width app)
   "Format ITEMS into nested category sections.
 ITEMS is a flat list of (CATEGORY-PATH TYPE ITEM SCOPE) from
 `clime-help--collect-items'.  Groups by top-level category (first
@@ -340,7 +369,8 @@ path element), then by sub-category (remaining path).  Uncategorized
 options use \"Options:\", uncategorized commands use \"Commands:\".
 Sub-categories render as indented sub-headings with scope annotations
 when SCOPE is present.
-When WIDTH is non-nil, help text is wrapped to fit."
+When WIDTH is non-nil, help text is wrapped to fit.
+APP is the root app, used to resolve env var names."
   (let ((top-groups (make-hash-table :test 'equal))
         (top-order '()))
     ;; ── Partition into two-level groups ──────────────────────────────
@@ -402,7 +432,9 @@ When WIDTH is non-nil, help text is wrapped to fit."
                    (opts (nreverse (cadr bucket)))
                    (cmds (nreverse (caddr bucket)))
                    (scope (cadddr bucket))
-                   (rows (append (mapcar #'clime-help--option-row opts)
+                   (rows (append (mapcar (lambda (opt)
+                                          (clime-help--option-row opt app))
+                                        opts)
                                  (mapcar #'clime-help--command-row cmds))))
               (if (null sub-key)
                   ;; Root items: standard indent
@@ -479,11 +511,19 @@ or bare strings.  When WIDTH is non-nil, help text is wrapped to fit."
 
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
+(defun clime-help--find-app (node)
+  "Walk up from NODE to find the root `clime-app', or nil."
+  (let ((n node))
+    (while (clime-node-parent n)
+      (setq n (clime-node-parent n)))
+    (and (clime-app-p n) n)))
+
 (defun clime-format-help (node path)
   "Return formatted help string for NODE at PATH."
   (let ((sections (list (clime-help--format-usage node path)))
         (help-text (clime-node-help node))
-        (width (clime-help--terminal-width)))
+        (width (clime-help--terminal-width))
+        (app (clime-help--find-app node)))
     ;; Description (wrapped)
     (when (and help-text (not (string-empty-p help-text)))
       (push (clime-help--wrap-text help-text width) sections))
@@ -494,12 +534,12 @@ or bare strings.  When WIDTH is non-nil, help text is wrapped to fit."
     ;; Options + Commands (unified sections with interleaved categories)
     (if (clime-branch-p node)
         (let ((unified (clime-help--format-sections
-                        (clime-help--collect-items node) width)))
+                        (clime-help--collect-items node) width app)))
           (when unified
             (push unified sections)))
       ;; Leaf commands: options only, no children
       (let ((opts-section (clime-help--format-options
-                           (clime-node-all-options node) width)))
+                           (clime-node-all-options node) width app)))
         (when opts-section
           (push opts-section sections))))
     ;; Global Options (inherited from ancestors)
@@ -507,12 +547,7 @@ or bare strings.  When WIDTH is non-nil, help text is wrapped to fit."
            (global-section (when ancestor-opts
                              (let ((rows (mapcar
                                           (lambda (opt)
-                                            (cons (clime-help--format-option-flags opt)
-                                                  (clime-help--append-deprecated
-                                                   (clime-help--append-choices
-                                                    (clime-option-help opt)
-                                                    (clime-option-choices opt))
-                                                   (clime-option-deprecated opt))))
+                                            (clime-help--option-row opt app))
                                           ancestor-opts)))
                                (concat "Global Options:\n"
                                        (clime-help--format-table rows width))))))
