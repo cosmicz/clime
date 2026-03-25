@@ -1,14 +1,27 @@
 #+title: clime
 #+options: toc:nil num:nil
 
-*clime* is an application interface framework for Emacs Lisp.
-Declare your commands, options, and arguments once in a ~clime-app~
-form --- with types, validation, env vars, and structured output ---
-then run the same definition through multiple frontends: as a *CLI*
-from the shell (~clime-run-batch~), as an *interactive menu* inside
-Emacs (~clime-invoke~), or (planned) as an *HTTP API*
-(~clime-serve~).  The app tree /is/ the schema: one definition,
-multiple interfaces.
+*clime* is a declarative CLI framework for Emacs Lisp.  Write your
+app's commands, options, and arguments once with a structured DSL ---
+run it from the shell as an executable script or interactively from
+Emacs via =clime-invoke=.
+
+clime handles the plumbing: a polyglot shebang for direct shell
+execution, two-pass argument parsing with type coercion, env var
+resolution, and validation, auto-generated help, structured output
+formats, and a bundler that produces single-file distributions usable
+as both standalone CLIs and Emacs libraries.
+
+Here's ~clime-make~ (clime's own build tool, built with clime)
+running interactively:
+[[file:img/invoke-menu.png]]
+
+And from the command line:
+#+begin_src bash
+./clime-make.el quickstart greet.el        # scaffold + shebang
+./clime-make.el init --self-dir myapp.el   # just the shebang
+./clime-make.el bundle -o dist/app.el ...  # single-file distribution
+#+end_src
 
 * Getting Started
 
@@ -58,6 +71,67 @@ path/to/clime-make.el quickstart greet.el
 ./greet.el hello --help
 #+end_src
 
+Or invoke it interactively from Emacs:
+
+#+begin_src emacs-lisp
+(require 'clime-invoke)
+(clime-invoke greet)
+#+end_src
+
+* Installation
+
+** Git clone / submodule
+
+#+begin_src bash
+# Clone directly
+git clone https://github.com/cosmicz/clime lib/clime
+
+# Or as a submodule
+git submodule add https://github.com/cosmicz/clime lib/clime
+#+end_src
+
+Then set up your app file:
+
+#+begin_src bash
+lib/clime/clime-make.el quickstart myapp.el
+#+end_src
+
+This inserts the entrypoint boilerplate, prepends a polyglot shebang,
+and makes the file executable.
+
+** package-vc (Emacs 29+)
+
+#+begin_src emacs-lisp
+(package-vc-install "https://github.com/cosmicz/clime")
+#+end_src
+
+** Download release (single file)
+
+Download ~clime.el~ from the [[https://github.com/cosmicz/clime/releases/latest][latest release]].  The dist is
+self-executable --- it includes ~clime-make~:
+
+#+begin_src bash
+curl -Lo clime.el https://github.com/cosmicz/clime/releases/latest/download/clime.el
+chmod +x clime.el
+./clime.el quickstart myapp.el
+#+end_src
+
+Or use it as a library from Emacs:
+
+#+begin_src emacs-lisp
+(require 'clime)
+#+end_src
+
+** Vendoring (build from source)
+
+Build a single-file bundle from a clone:
+
+#+begin_src bash
+cd clime/
+make dist
+cp dist/clime.el /path/to/myapp/
+#+end_src
+
 * Concepts
 
 ** App tree
@@ -85,7 +159,7 @@ Options declared at any level are available to all descendants.  A
 ~--verbose~ flag on the app can be accessed from any child command.
 In ~--help~, inherited options appear in a "Global Options:" section.
 
-** Two-pass parse
+** Two-pass parameter parse
 
 Parsing happens in two passes with an optional ~:setup~ hook between
 them.  Pass 1 extracts values from argv (type coercion, static
@@ -94,36 +168,244 @@ them.  Pass 1 extracts values from argv (type coercion, static
 passes, letting apps load configuration that influences pass-2
 behavior.
 
+* Interactive (~clime-invoke~)
+
+Any ~clime-app~ can be invoked interactively from Emacs via
+~clime-invoke~, which auto-generates a lightweight ~read-key~ menu
+from the app tree.  No external dependencies.
+
+#+begin_src emacs-lisp
+(require 'clime-invoke)
+(clime-invoke my-app)
+#+end_src
+
+Groups become nested menus (press a key to drill down, ~DEL~ to go
+back).  Options are cycled with ~-X~ (prefix dash + key) or set
+directly with ~=X~ (completing-read for choices, read-string for
+counts).  Leaf commands show a "Run" action (~RET~) that collects
+values, calls ~clime-run~, and displays output.
+
+Inline validation highlights invalid parameters as you set them.
+Prefix keys (~-~ / ~=~) re-render the buffer with dimmed non-option
+keys for visual feedback.
+
+~clime-invoke~ returns a structured plist for programmatic use:
+
+#+begin_src emacs-lisp
+(let ((result (clime-invoke my-app)))
+  (plist-get result :params)  ;; final parameter values
+  (plist-get result :exit)    ;; handler exit code (nil if user quit)
+  (plist-get result :output)) ;; handler output string (nil if user quit)
+#+end_src
+
+** Hot-reload (~clime-reload~)
+
+~clime-reload~ force-reloads all clime modules in dependency order,
+including ~clime.el~ itself and optional modules (~clime-invoke~,
+~clime-make~) if already loaded.  Clears and reapplies face specs so
+~defface~ changes take effect.  Useful during development to pick up
+changes without restarting Emacs.
+
 * Features
 
-*Declaring commands:*
-subcommands and nested groups, command aliases, aliases for nested
-paths (~clime-alias-for~), inline groups (~:inline~), invocable
-groups, hidden commands, deprecation warnings with migration hints,
-category sections in help, epilog text, structured examples in help.
+** Commands & Groups
 
-*Declaring options:*
-boolean flags, count flags (~-vvv~), repeatable options
-(~--tag a --tag b~), negatable flags (~--color / --no-color~), mutual
-exclusion (~clime-mutex~), option dependencies (~:requires~), paired
-groups (~clime-zip~), value separator (~:separator ","~), choices
-validation (static and lazy), custom transforms (~:coerce~,
-~:conform~), type coercion, defaults, hidden options, parameter
-templates (~:from~).
+*** Subcommands
 
-*Parsing:*
-collapsed short flags (~-abc~), ~--flag=value~ syntax, ~--~ stop
-marker, rest args (~:nargs :rest~), stdin via ~-~ sentinel, env vars
-with auto-derived or per-option names.
+Define subcommands with ~clime-command~:
 
-*Output:*
-auto-generated ~--help~ and ~--version~, terminal-width-aware
-wrapping, output formats with accumulation / custom envelopes /
-streaming (~clime-output-format~).
+#+begin_src emacs-lisp
+(clime-command install
+  :help "Install a package"
+  (clime-arg name :help "Package name")
+  (clime-handler (ctx)
+    (clime-let ctx (name) (format "Installing %s" name))))
+#+end_src
 
-*Tooling:*
-interactive menu UI (~clime-invoke~), hot-reload (~clime-reload~),
-single-file distribution via ~bundle~.
+*** Aliases
+
+Commands can have aliases:
+
+#+begin_src emacs-lisp
+(clime-command install
+  :help "Install a package"
+  :aliases (i)
+  ...)
+#+end_src
+
+Now both ~myapp install foo~ and ~myapp i foo~ work.  Aliases are
+symbols or strings.
+
+*** Command aliases for nested paths
+
+Use ~clime-alias-for~ to expose a nested command at a higher level
+without duplicating its definition:
+
+#+begin_src emacs-lisp
+(clime-group agents
+  :help "Manage agents"
+  (clime-command start
+    :help "Start an agent"
+    (clime-arg name :help "Agent name")
+    (clime-opt prompt ("--prompt") :help "Initial prompt")
+    (clime-handler (ctx) (do-start ctx))))
+
+(clime-group shortcuts :inline :category "Shortcuts"
+  (clime-alias-for start (agents start)
+    :help "Start an agent (shortcut)"))
+#+end_src
+
+Now ~myapp start foo~ works identically to ~myapp agents start foo~.
+The alias copies args, options, and handler from the target at init
+time.  You can override ~:help~, ~:aliases~, ~:hidden~, and
+~:category~ on the alias.  When ~:help~ is omitted, it inherits from
+the target.
+
+Use ~:defaults~ to preset option values (user can still override):
+
+#+begin_src emacs-lisp
+(clime-alias-for show-csv (report show)
+  :help "Show report as CSV"
+  :defaults '((format . "csv")))
+#+end_src
+
+Use ~:vals~ to lock option values (removed from CLI and help):
+
+#+begin_src emacs-lisp
+(clime-alias-for deploy-ci (deploy run)
+  :help "Deploy to CI"
+  :vals '((target . "ci")))
+#+end_src
+
+*** Nested groups
+
+Organize related commands under a group:
+
+#+begin_src emacs-lisp
+(clime-group repo
+  :help "Manage repositories"
+
+  (clime-command add
+    :help "Add a repository"
+    (clime-arg name :help "Repository name")
+    (clime-arg url :help "Repository URL")
+    (clime-handler (ctx)
+      (clime-let ctx (name url)
+        (format "Added %s → %s" name url))))
+
+  (clime-command remove
+    :help "Remove a repository"
+    :aliases (rm)
+    (clime-arg name :help "Repository name")
+    (clime-handler (ctx)
+      (clime-let ctx (name) (format "Removed %s" name)))))
+#+end_src
+
+*** Inline groups
+
+Mark a group with ~:inline~ to promote its children to the parent
+level.  Both the group prefix and the short form work:
+
+#+begin_src emacs-lisp
+(clime-group repo
+  :inline
+  :help "Manage repositories"
+
+  (clime-command add
+    :help "Add a repository"
+    (clime-arg name :help "Repository name")
+    (clime-handler (ctx)
+      (clime-let ctx (name) (format "Added %s" name))))
+
+  (clime-command remove
+    :help "Remove a repository"
+    (clime-arg name :help "Repository name")
+    (clime-handler (ctx)
+      (clime-let ctx (name) (format "Removed %s" name)))))
+#+end_src
+
+#+begin_src bash
+./myapp.el add foo       # works (promoted)
+./myapp.el repo add foo  # also works (direct)
+#+end_src
+
+In ~--help~, inline group children appear at the parent level.  The
+group name itself is hidden from the command listing.  If a parent has
+its own child with the same name, the parent's child takes priority.
+
+*** Invocable groups
+
+A group can have its own ~:handler~ that runs when no subcommand is
+given:
+
+#+begin_src emacs-lisp
+(clime-group config
+  :help "View or modify configuration"
+
+  (clime-handler (_ctx)
+    "Configuration:\n  registry = default\n  timeout = 30s")
+
+  (clime-command set
+    :help "Set a config value"
+    (clime-arg key :help "Config key")
+    (clime-arg value :help "New value")
+    (clime-handler (ctx)
+      (clime-let ctx (key value)
+        (format "Set %s = %s" key value)))))
+#+end_src
+
+~myapp config~ shows the overview; ~myapp config set key val~ sets a value.
+
+*** Hidden commands and options
+
+Mark a command or option as ~:hidden~ to omit it from ~--help~ while
+keeping it callable:
+
+#+begin_src emacs-lisp
+(clime-command debug
+  :help "Dump internal state"
+  :hidden
+  (clime-handler (ctx) ...))
+
+(clime-opt trace ("--internal-trace") :bool :hidden
+  :help "Enable tracing")
+#+end_src
+
+*** Deprecation warnings
+
+Mark commands or options as ~:deprecated~ to emit a warning when used.
+The value can be ~t~ (generic) or a string (migration hint):
+
+#+begin_src emacs-lisp
+(clime-opt old-flag ("--old") :bool
+  :deprecated "Use --new instead"
+  :help "Legacy option")
+
+(clime-command migrate
+  :deprecated "Use 'upgrade' instead"
+  :help "Old migration path"
+  (clime-handler (ctx) ...))
+#+end_src
+
+Help output shows the deprecation annotation:
+
+#+begin_example
+Options:
+  --old             Legacy option (deprecated: Use --new instead)
+
+Commands:
+  migrate           Old migration path (deprecated: Use 'upgrade' instead)
+#+end_example
+
+At runtime, using a deprecated item prints a warning to stderr:
+
+#+begin_example
+Warning: --old is deprecated. Use --new instead
+Warning: migrate is deprecated. Use 'upgrade' instead
+#+end_example
+
+Combine ~:hidden~ with ~:deprecated~ for silent deprecation: hidden
+from help but still warns when used.
 
 ** Options
 
@@ -369,206 +651,7 @@ Use ~-~ as an argument value to read from stdin:
 echo "World" | ./greet.el hello -
 #+end_src
 
-** Commands & Groups
-
-*** Subcommands
-
-Define subcommands with ~clime-command~:
-
-#+begin_src emacs-lisp
-(clime-command install
-  :help "Install a package"
-  (clime-arg name :help "Package name")
-  (clime-handler (ctx)
-    (clime-let ctx (name) (format "Installing %s" name))))
-#+end_src
-
-*** Aliases
-
-Commands can have aliases:
-
-#+begin_src emacs-lisp
-(clime-command install
-  :help "Install a package"
-  :aliases (i)
-  ...)
-#+end_src
-
-Now both ~myapp install foo~ and ~myapp i foo~ work.  Aliases are
-symbols or strings.
-
-*** Command aliases for nested paths
-
-Use ~clime-alias-for~ to expose a nested command at a higher level
-without duplicating its definition:
-
-#+begin_src emacs-lisp
-(clime-group agents
-  :help "Manage agents"
-  (clime-command start
-    :help "Start an agent"
-    (clime-arg name :help "Agent name")
-    (clime-opt prompt ("--prompt") :help "Initial prompt")
-    (clime-handler (ctx) (do-start ctx))))
-
-(clime-group shortcuts :inline :category "Shortcuts"
-  (clime-alias-for start (agents start)
-    :help "Start an agent (shortcut)"))
-#+end_src
-
-Now ~myapp start foo~ works identically to ~myapp agents start foo~.
-The alias copies args, options, and handler from the target at init
-time.  You can override ~:help~, ~:aliases~, ~:hidden~, and
-~:category~ on the alias.  When ~:help~ is omitted, it inherits from
-the target.
-
-Use ~:defaults~ to preset option values (user can still override):
-
-#+begin_src emacs-lisp
-(clime-alias-for show-csv (report show)
-  :help "Show report as CSV"
-  :defaults '((format . "csv")))
-#+end_src
-
-Use ~:vals~ to lock option values (removed from CLI and help):
-
-#+begin_src emacs-lisp
-(clime-alias-for deploy-ci (deploy run)
-  :help "Deploy to CI"
-  :vals '((target . "ci")))
-#+end_src
-
-*** Nested groups
-
-Organize related commands under a group:
-
-#+begin_src emacs-lisp
-(clime-group repo
-  :help "Manage repositories"
-
-  (clime-command add
-    :help "Add a repository"
-    (clime-arg name :help "Repository name")
-    (clime-arg url :help "Repository URL")
-    (clime-handler (ctx)
-      (clime-let ctx (name url)
-        (format "Added %s → %s" name url))))
-
-  (clime-command remove
-    :help "Remove a repository"
-    :aliases (rm)
-    (clime-arg name :help "Repository name")
-    (clime-handler (ctx)
-      (clime-let ctx (name) (format "Removed %s" name)))))
-#+end_src
-
-*** Inline groups
-
-Mark a group with ~:inline~ to promote its children to the parent
-level.  Both the group prefix and the short form work:
-
-#+begin_src emacs-lisp
-(clime-group repo
-  :inline
-  :help "Manage repositories"
-
-  (clime-command add
-    :help "Add a repository"
-    (clime-arg name :help "Repository name")
-    (clime-handler (ctx)
-      (clime-let ctx (name) (format "Added %s" name))))
-
-  (clime-command remove
-    :help "Remove a repository"
-    (clime-arg name :help "Repository name")
-    (clime-handler (ctx)
-      (clime-let ctx (name) (format "Removed %s" name)))))
-#+end_src
-
-#+begin_src bash
-./myapp.el add foo       # works (promoted)
-./myapp.el repo add foo  # also works (direct)
-#+end_src
-
-In ~--help~, inline group children appear at the parent level.  The
-group name itself is hidden from the command listing.  If a parent has
-its own child with the same name, the parent's child takes priority.
-
-*** Invocable groups
-
-A group can have its own ~:handler~ that runs when no subcommand is
-given:
-
-#+begin_src emacs-lisp
-(clime-group config
-  :help "View or modify configuration"
-
-  (clime-handler (_ctx)
-    "Configuration:\n  registry = default\n  timeout = 30s")
-
-  (clime-command set
-    :help "Set a config value"
-    (clime-arg key :help "Config key")
-    (clime-arg value :help "New value")
-    (clime-handler (ctx)
-      (clime-let ctx (key value)
-        (format "Set %s = %s" key value)))))
-#+end_src
-
-~myapp config~ shows the overview; ~myapp config set key val~ sets a value.
-
-*** Hidden commands and options
-
-Mark a command or option as ~:hidden~ to omit it from ~--help~ while
-keeping it callable:
-
-#+begin_src emacs-lisp
-(clime-command debug
-  :help "Dump internal state"
-  :hidden
-  (clime-handler (ctx) ...))
-
-(clime-opt trace ("--internal-trace") :bool :hidden
-  :help "Enable tracing")
-#+end_src
-
-*** Deprecation warnings
-
-Mark commands or options as ~:deprecated~ to emit a warning when used.
-The value can be ~t~ (generic) or a string (migration hint):
-
-#+begin_src emacs-lisp
-(clime-opt old-flag ("--old") :bool
-  :deprecated "Use --new instead"
-  :help "Legacy option")
-
-(clime-command migrate
-  :deprecated "Use 'upgrade' instead"
-  :help "Old migration path"
-  (clime-handler (ctx) ...))
-#+end_src
-
-Help output shows the deprecation annotation:
-
-#+begin_example
-Options:
-  --old             Legacy option (deprecated: Use --new instead)
-
-Commands:
-  migrate           Old migration path (deprecated: Use 'upgrade' instead)
-#+end_example
-
-At runtime, using a deprecated item prints a warning to stderr:
-
-#+begin_example
-Warning: --old is deprecated. Use --new instead
-Warning: migrate is deprecated. Use 'upgrade' instead
-#+end_example
-
-Combine ~:hidden~ with ~:deprecated~ for silent deprecation: hidden
-from help but still warns when used.
-
-** Parsing
+** Parsing & Validation
 
 *** Collapsed short flags
 
@@ -650,9 +733,9 @@ raw string → :type → :choices → :coerce → env vars → :conform → node
 - *:conform* --- pass-2 validation and normalization.  Runs after env
   vars are applied, so it catches values from both CLI and environment.
   Defaults skip conforming --- they're developer-authored and should
-  already be valid.  Receives ~(value, param)~ where ~param~ is the
-  option or arg struct.  Must return the conformed value or signal an
-  error:
+  already be valid.  Receives ~(value, param)~ or just ~(value)~ ---
+  arity is detected automatically.  Must return the conformed value or
+  signal an error:
 
   #+begin_src emacs-lisp
   (clime-opt id ("--id")
@@ -673,12 +756,11 @@ run: ~:coerce~ runs immediately in pass 1 (CLI input only), while
 hook).  Use ~:coerce~ for simple transforms, ~:conform~ for
 cross-source validation.
 
-** Environment Variables
+*** Environment variables
 
 Options opt in to env var resolution with ~:env~ (or ~:env t~) for an
 auto-derived name, or ~:env "SUFFIX"~ for an explicit suffix.  Set
-~:env-prefix~ on the app to
-provide the prefix:
+~:env-prefix~ on the app to provide the prefix:
 
 #+begin_src emacs-lisp
 (clime-app greet
@@ -702,6 +784,37 @@ For individual options, override the env var name with ~:env~:
 
 Boolean flags accept ~1~/~true~/~yes~ and ~0~/~false~/~no~.  Multiple
 options split on comma: ~MYAPP_TAGS=dev,ci~ becomes ~("dev" "ci")~.
+
+*** Setup hook
+
+The ~:setup~ hook runs after pass-1 parsing (all values extracted from
+argv) but before pass-2 finalization (dynamic ~:choices~ validation,
+env vars, defaults).  This lets apps load configuration that influences
+dynamic option values:
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+  :env-prefix "MYAPP"
+  :setup (lambda (app result)
+           (let ((dir (plist-get (clime-parse-result-params result) 'config-dir)))
+             (my-load-config (or dir "~/.myapp"))))
+
+  (clime-opt config-dir ("--config-dir")
+    :help "Config directory")
+
+  (clime-opt level ("--level")
+    :help "Log level"
+    :choices #'my-configured-levels)  ; resolved after setup
+
+  (clime-command run
+    :help "Run the app"
+    (clime-handler (ctx) "running")))
+#+end_src
+
+Static ~:choices~ (literal lists) are validated immediately in pass 1.
+Dynamic ~:choices~ (functions) are deferred to pass 2 after the setup
+hook has run.
 
 ** Help & Output
 
@@ -960,7 +1073,9 @@ absent --- useful for negatable flags:
   (my-other-function (clime-params-plist ctx 'package 'force)))
 #+end_src
 
-** Parameter Templates
+** Reusable Definitions
+
+*** Parameter templates
 
 Define reusable option or arg specs with ~clime-defopt~ and
 ~clime-defarg~, then reference them with ~:from~:
@@ -1007,9 +1122,7 @@ All DSL shorthands (~:bool~, ~:separator~) work in templates.
   (clime-handler (ctx) ...))
 #+end_src
 
-** Form Composition
-
-*** ~clime-defcommand~ and ~clime-defgroup~
+*** Form composition
 
 Define reusable command and group forms that can be composed into an
 app from separate files or modules:
@@ -1030,8 +1143,6 @@ app from separate files or modules:
 #+end_src
 
 The macros expand to ~defvar~ forms holding the struct value.
-
-*** Keyword-merge in containers
 
 Container macros (~clime-app~, ~clime-group~, ~clime-command~) accept
 keyword arguments ~:options~, ~:args~, ~:children~, and
@@ -1055,78 +1166,6 @@ items merge with inline DSL forms (keyword items first, then inline):
 
 This enables cross-file app composition without dropping to raw
 struct constructors.
-
-** Advanced
-
-*** Setup hook
-
-The ~:setup~ hook runs after pass-1 parsing (all values extracted from
-argv) but before pass-2 finalization (dynamic ~:choices~ validation,
-env vars, defaults).  This lets apps load configuration that influences
-dynamic option values:
-
-#+begin_src emacs-lisp
-(clime-app myapp
-  :version "1.0"
-  :env-prefix "MYAPP"
-  :setup (lambda (app result)
-           (let ((dir (plist-get (clime-parse-result-params result) 'config-dir)))
-             (my-load-config (or dir "~/.myapp"))))
-
-  (clime-opt config-dir ("--config-dir")
-    :help "Config directory")
-
-  (clime-opt level ("--level")
-    :help "Log level"
-    :choices #'my-configured-levels)  ; resolved after setup
-
-  (clime-command run
-    :help "Run the app"
-    (clime-handler (ctx) "running")))
-#+end_src
-
-Static ~:choices~ (literal lists) are validated immediately in pass 1.
-Dynamic ~:choices~ (functions) are deferred to pass 2 after the setup
-hook has run.
-
-** Interactive
-
-*** Interactive UI (~clime-invoke~)
-
-Any ~clime-app~ can be invoked interactively from Emacs via
-~clime-invoke~, which auto-generates a lightweight ~read-key~ menu:
-
-#+begin_src emacs-lisp
-(require 'clime-invoke)
-(clime-invoke my-app)
-#+end_src
-
-Groups become nested menus (press a key to drill down, ~q~ to go
-back).  Options are cycled with ~-X~ (prefix dash + key) or set
-directly with ~=X~ (completing-read for choices, read-string for
-counts).  Leaf commands show a "Run" action (~RET~) that collects
-values, calls ~clime-run~, and displays output.
-
-Inline validation highlights invalid parameters as you set them.
-Prefix keys (~-~ / ~=~) re-render the buffer with dimmed non-option
-keys for visual feedback.  No external dependencies.
-
-~clime-invoke~ returns a structured plist:
-
-#+begin_src emacs-lisp
-(let ((result (clime-invoke my-app)))
-  (plist-get result :params)  ;; final parameter values
-  (plist-get result :exit)    ;; handler exit code (nil if user quit)
-  (plist-get result :output)) ;; handler output string (nil if user quit)
-#+end_src
-
-*** Hot-reload (~clime-reload~)
-
-~clime-reload~ force-reloads all clime modules in dependency order,
-including ~clime.el~ itself and optional modules (~clime-invoke~,
-~clime-make~) if already loaded.  Clears and reapplies face specs so
-~defface~ changes take effect.  Useful during development to pick up
-changes without restarting Emacs.
 
 * DSL Reference
 
@@ -1387,46 +1426,6 @@ shebangs without clobbering newer formats.  ~CLIME_ARGV0~ preserves
 the original script name for usage output.
 
 So ~./myapp.el hello world~ just works from your shell.
-
-* Installation
-
-** Git clone / submodule
-
-#+begin_src bash
-# Clone directly
-git clone https://github.com/cosmicz/clime lib/clime
-
-# Or as a submodule
-git submodule add https://github.com/cosmicz/clime lib/clime
-#+end_src
-
-Then set up your app file:
-
-#+begin_src bash
-lib/clime/clime-make.el quickstart myapp.el
-#+end_src
-
-This inserts the entrypoint boilerplate, prepends a polyglot shebang,
-and makes the file executable.
-
-** package-vc (Emacs 29+)
-
-#+begin_src emacs-lisp
-(package-vc-install "https://github.com/cosmicz/clime")
-#+end_src
-
-** Vendoring (single file)
-
-Build a single-file bundle and copy it into your project:
-
-#+begin_src bash
-cd clime/
-make dist
-cp dist/clime.el /path/to/myapp/
-#+end_src
-
-Your app just needs ~(require 'clime)~ and ~-L~ pointing to the
-directory containing the bundled file.
 
 * Prior Art
 
