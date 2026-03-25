@@ -775,8 +775,8 @@ satisfy the at-least-one requirement — user must explicitly choose."
 
 (ert-deftest clime-test-conform/exclusive-env-var-conflict ()
   "Exclusive violation via env vars signals usage error."
-  (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0))
-         (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+  (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0 :env t))
+         (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0 :env t))
          (cmd (clime-make-command :name "run" :handler (lambda (_ctx) nil)
                                   :options (list opt-json opt-csv)
                                   :conform (clime-check-exclusive 'fmt '(json csv))))
@@ -790,8 +790,8 @@ satisfy the at-least-one requirement — user must explicitly choose."
 
 (ert-deftest clime-test-conform/exclusive-cli-plus-env-conflict ()
   "Exclusive violation from CLI + env var combination signals error."
-  (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0))
-         (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+  (let* ((opt-json (clime-make-option :name 'json :flags '("--json") :nargs 0 :env t))
+         (opt-csv (clime-make-option :name 'csv :flags '("--csv") :nargs 0 :env t))
          (cmd (clime-make-command :name "run" :handler (lambda (_ctx) nil)
                                   :options (list opt-json opt-csv)
                                   :conform (clime-check-exclusive 'fmt '(json csv))))
@@ -881,8 +881,8 @@ satisfy the at-least-one requirement — user must explicitly choose."
 
 (ert-deftest clime-test-conform/paired-env-var-participates ()
   "Env vars contribute to paired groups."
-  (let* ((opt-skip (clime-make-option :name 'skip :flags '("--skip") :multiple t))
-         (opt-reason (clime-make-option :name 'reason :flags '("--reason") :multiple t))
+  (let* ((opt-skip (clime-make-option :name 'skip :flags '("--skip") :multiple t :env t))
+         (opt-reason (clime-make-option :name 'reason :flags '("--reason") :multiple t :env t))
          (cmd (clime-make-command :name "run"
                                   :handler (lambda (ctx)
                                              (format "%S" (clime-ctx-get ctx 'sr)))

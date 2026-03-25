@@ -123,7 +123,7 @@
 
 (ert-deftest clime-test-negatable/no-flag-overrides-env ()
   "--no-X on CLI overrides truthy env var."
-  (let* ((opt (clime-make-option :name 'color :flags '("--color") :negatable t))
+  (let* ((opt (clime-make-option :name 'color :flags '("--color") :negatable t :env t))
          (cmd (clime-make-command :name "run"
                                   :handler (lambda (ctx)
                                              (format "%s" (plist-get (clime-context-params ctx) 'color)))

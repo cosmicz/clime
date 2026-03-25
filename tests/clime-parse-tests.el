@@ -454,7 +454,7 @@
 (ert-deftest clime-test-parse/required-option-satisfied-by-env ()
   "Required option satisfied via env var succeeds."
   (let* ((opt (clime-make-option :name 'token :flags '("--token")
-                                 :required t))
+                                 :required t :env t))
          (cmd (clime-make-command :name "deploy"
                                   :handler (lambda (ctx)
                                              (clime-ctx-get ctx 'token))
