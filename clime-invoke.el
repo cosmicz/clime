@@ -93,7 +93,10 @@
   "Face for inactive elements during prefix key input."
   :group 'clime)
 
-
+(defface clime-invoke-hidden
+  '((t :inherit (shadow italic)))
+  "Face for hidden items when revealed via visibility toggle."
+  :group 'clime)
 
 ;;; ─── Customization ──────────────────────────────────────────────────
 
@@ -110,6 +113,10 @@
   :group 'clime)
 
 ;;; ─── Internal State ─────────────────────────────────────────────────
+
+(defvar clime-invoke--show-mode 'normal
+  "Visibility mode for the invoke menu.
+One of `normal' (default), `all' (show hidden), or `clean' (hide deprecated).")
 
 (defvar clime-invoke--registry (make-hash-table :test #'equal)
   "Registry of named clime apps, keyed by name string.")
@@ -239,7 +246,11 @@ nil → increment (wraps at 5).  Integer → set directly.  Other → decrement.
 
 (defun clime-invoke--visible-children (group)
   "Return visible children of GROUP as an alist.
-Excludes hidden nodes.  Promotes inline group children."
+Filters based on `clime-invoke--show-mode':
+  normal — excludes hidden, shows deprecated
+  all    — shows everything including hidden
+  clean  — excludes hidden and deprecated
+Promotes inline group children."
   (let ((result '()))
     (dolist (entry (clime-group-children group))
       (let ((name (car entry))
@@ -248,7 +259,12 @@ Excludes hidden nodes.  Promotes inline group children."
          ((and (clime-group-p child) (clime-node-inline child))
           (dolist (sub-entry (clime-invoke--visible-children child))
             (push sub-entry result)))
-         ((clime-node-hidden child) nil)
+         ((and (not (eq clime-invoke--show-mode 'all))
+               (clime-node-hidden child))
+          nil)
+         ((and (eq clime-invoke--show-mode 'clean)
+               (clime-node-deprecated child))
+          nil)
          (t (push (cons name child) result)))))
     (nreverse result)))
 
@@ -294,8 +310,11 @@ SHARED-USED is a hash table of taken keys.  Returns alist of (KEY . ACTION)."
 (defun clime-invoke--build-option-actions (node)
   "Build (:option OPTION) actions for own + ancestor options of NODE.
 Options use the \"- X\" two-key namespace.  Returns alist of (KEY . ACTION)."
-  (let* ((own (cl-remove-if (lambda (o) (or (clime-option-hidden o)
-                                            (clime-option-locked o)))
+  (let* ((own (cl-remove-if (lambda (o) (or (and (clime-option-hidden o)
+                                                (not (eq clime-invoke--show-mode 'all)))
+                                            (clime-option-locked o)
+                                            (and (eq clime-invoke--show-mode 'clean)
+                                                 (clime-option-deprecated o))))
                             (clime-node-all-options node)))
          (ancestor (clime-help--collect-ancestor-options node))
          (opts (append own ancestor))
@@ -438,6 +457,10 @@ Returns help text with long flag in parens and annotations."
       (when (and (clime-option-p option-or-arg)
                  (clime-option-deprecated option-or-arg))
         (push (propertize "(deprecated)" 'face 'warning) annotations))
+      ;; Hidden (only visible in all mode)
+      (when (and (clime-option-p option-or-arg)
+                 (clime-option-hidden option-or-arg))
+        (push (propertize "(hidden)" 'face 'clime-invoke-hidden) annotations))
       ;; Type hint (non-string)
       (when (clime-option-p option-or-arg)
         (let ((type (clime-option-type option-or-arg)))
@@ -669,7 +692,12 @@ Uses 4-column layout: Key | Desc | Value | Env."
               lines)
         (push "" lines)))
     ;; Options grouped: own options by category, then ancestor as "Global Options"
-    (let* ((own (cl-remove-if #'clime-option-hidden (clime-node-all-options node)))
+    (let* ((own (cl-remove-if (lambda (o)
+                                (or (and (clime-option-hidden o)
+                                         (not (eq clime-invoke--show-mode 'all)))
+                                    (and (eq clime-invoke--show-mode 'clean)
+                                         (clime-option-deprecated o))))
+                              (clime-node-all-options node)))
            (ancestor (clime-help--collect-ancestor-options node))
            (grouped (append
                      (when own (list (cons nil own)))
@@ -771,13 +799,22 @@ Uses 4-column layout: Key | Desc | Value | Env."
                                 (and (eq (cadr e) :child)
                                      (equal (caddr e) name)))
                               key-map)))
-                   (help (or (clime-node-help child) name)))
+                   (help (or (clime-node-help child) name))
+                   (ann (concat
+                         (if (clime-node-hidden child)
+                             (concat " " (propertize "(hidden)"
+                                                     'face 'clime-invoke-hidden))
+                           "")
+                         (if (clime-node-deprecated child)
+                             (concat " " (propertize "(deprecated)"
+                                                     'face 'warning))
+                           ""))))
               (when key
-                (push (format " %s %s"
+                (push (format " %s %s%s"
                               (propertize (format "%3s" key)
                                           'face (if dimmed 'clime-invoke-dimmed
                                                   'clime-invoke-command-key))
-                              help)
+                              help ann)
                       lines))))
           (push "" lines))))
     ;; Actions footer
@@ -799,6 +836,10 @@ Uses 4-column layout: Key | Desc | Value | Env."
       (push (format "%s %s"
                     (propertize "ESC" 'face act-face)
                     "Quit")
+            actions)
+      (push (format "%s %s"
+                    (propertize "?" 'face act-face)
+                    (symbol-name clime-invoke--show-mode))
             actions)
       (push (concat " " (string-join (nreverse actions) "    ")) lines))
     (string-join (nreverse lines) "\n")))
@@ -1072,16 +1113,14 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
           (setq running nil quit-all t))
          ((or (equal key "DEL") (equal key "C-g"))
           (setq running nil))
-         ;; Help
+         ;; Visibility toggle
          ((equal key "?")
-          (let ((has-options (cl-some (lambda (e) (eq (cadr e) :option))
-                                      key-map)))
-            (setq error-msg
-                  (format "Keys: %s%s"
-                          (mapconcat (lambda (e) (car e)) key-map ", ")
-                          (if has-options
-                              "  (=X for direct input)"
-                            "")))))
+          (setq clime-invoke--show-mode
+                (pcase clime-invoke--show-mode
+                  ('normal 'all)
+                  ('all 'clean)
+                  (_ 'normal)))
+          (setq key-map (clime-invoke--build-key-map node)))
          ;; Dispatch from key-map
          (t
           (let ((action (cdr (assoc key key-map))))
@@ -1198,7 +1237,8 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
           (push step nav-path)))
       (setq nav-path (nreverse nav-path)))
     ;; Enter the loop
-    (let (loop-result)
+    (let ((clime-invoke--show-mode 'normal)
+          loop-result)
       (unwind-protect
           (setq loop-result
                 (clime-invoke--loop app node (or nav-path '())

@@ -1729,6 +1729,98 @@
     (let ((result (clime-invoke--validate-all cmd '())))
       (should-not (assq 'sexp (car result))))))
 
+;;; ─── Visibility Toggle ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/visible-children-normal-hides-hidden ()
+  "In normal mode, hidden commands are excluded from visible children."
+  (let* ((cmd-a (clime-make-command :name "visible" :handler #'ignore))
+         (cmd-b (clime-make-command :name "secret" :handler #'ignore :hidden t))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("visible" . ,cmd-a)
+                                           ("secret" . ,cmd-b))))
+         (clime-invoke--show-mode 'normal))
+    (let ((children (clime-invoke--visible-children app)))
+      (should (= 1 (length children)))
+      (should (equal "visible" (caar children))))))
+
+(ert-deftest clime-test-invoke/visible-children-all-shows-hidden ()
+  "In all mode, hidden commands are included in visible children."
+  (let* ((cmd-a (clime-make-command :name "visible" :handler #'ignore))
+         (cmd-b (clime-make-command :name "secret" :handler #'ignore :hidden t))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("visible" . ,cmd-a)
+                                           ("secret" . ,cmd-b))))
+         (clime-invoke--show-mode 'all))
+    (let ((children (clime-invoke--visible-children app)))
+      (should (= 2 (length children)))
+      (should (assoc "secret" children)))))
+
+(ert-deftest clime-test-invoke/visible-children-clean-hides-deprecated ()
+  "In clean mode, deprecated commands are filtered out."
+  (let* ((cmd-a (clime-make-command :name "current" :handler #'ignore))
+         (cmd-b (clime-make-command :name "old" :handler #'ignore
+                                     :deprecated "use current"))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("current" . ,cmd-a)
+                                           ("old" . ,cmd-b))))
+         (clime-invoke--show-mode 'clean))
+    (let ((children (clime-invoke--visible-children app)))
+      (should (= 1 (length children)))
+      (should (equal "current" (caar children))))))
+
+(ert-deftest clime-test-invoke/option-actions-all-includes-hidden ()
+  "In all mode, hidden options get key bindings."
+  (let* ((opt-v (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (opt-h (clime-make-option :name 'debug :flags '("--debug") :nargs 0
+                                    :hidden t))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt-v opt-h)))
+         (clime-invoke--show-mode 'all))
+    (let ((actions (clime-invoke--build-option-actions cmd)))
+      (should (cl-some (lambda (a) (eq 'debug (clime-option-name (caddr a))))
+                       actions)))))
+
+(ert-deftest clime-test-invoke/option-actions-normal-excludes-hidden ()
+  "In normal mode, hidden options have no key bindings."
+  (let* ((opt-v (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (opt-h (clime-make-option :name 'debug :flags '("--debug") :nargs 0
+                                    :hidden t))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt-v opt-h)))
+         (clime-invoke--show-mode 'normal))
+    (let ((actions (clime-invoke--build-option-actions cmd)))
+      (should-not (cl-some (lambda (a) (eq 'debug (clime-option-name (caddr a))))
+                           actions)))))
+
+(ert-deftest clime-test-invoke/render-all-shows-hidden-annotation ()
+  "In all mode, hidden options render with (hidden) annotation."
+  (let* ((opt (clime-make-option :name 'debug :flags '("--debug") :nargs 0
+                                  :hidden t :help "Debug mode"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("run" . ,cmd))))
+         (clime-invoke--show-mode 'all))
+    (setf (clime-node-parent cmd) app)
+    (let ((output (clime-invoke--render-to-string cmd '() nil nil)))
+      (should (string-match-p "hidden" output)))))
+
+(ert-deftest clime-test-invoke/render-clean-hides-deprecated-options ()
+  "In clean mode, deprecated options are excluded from render."
+  (let* ((opt-a (clime-make-option :name 'verbose :flags '("-v") :nargs 0
+                                    :help "Verbosity"))
+         (opt-b (clime-make-option :name 'old-flag :flags '("--old") :nargs 0
+                                    :deprecated t :help "Old flag"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt-a opt-b)))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("run" . ,cmd))))
+         (clime-invoke--show-mode 'clean))
+    (setf (clime-node-parent cmd) app)
+    (let ((output (clime-invoke--render-to-string cmd '() nil nil)))
+      (should (string-match-p "Verbosity" output))
+      (should-not (string-match-p "Old flag" output)))))
+
 ;;; ─── Structured Return Value ────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/returns-structured-result-with-output ()
