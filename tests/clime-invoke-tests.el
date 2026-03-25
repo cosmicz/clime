@@ -1168,6 +1168,75 @@
     (should-not (clime-invoke--validate-param arg '(env "dev")))
     (should (stringp (clime-invoke--validate-param arg '(env "staging"))))))
 
+(ert-deftest clime-test-invoke/validate-param-conform-string-pass ()
+  "String value passing conformer returns nil."
+  (let ((opt (clime-make-option :name 'sexp :flags '("--sexp")
+                                :conform (lambda (v) (read v)))))
+    (should-not (clime-invoke--validate-param opt '(sexp "(+ 1 2)")))))
+
+(ert-deftest clime-test-invoke/validate-param-conform-string-fail ()
+  "String value failing conformer returns error string."
+  (let ((opt (clime-make-option :name 'sexp :flags '("--sexp")
+                                :conform (lambda (v) (read v)))))
+    (should (stringp (clime-invoke--validate-param opt '(sexp "(bad sexp"))))))
+
+(ert-deftest clime-test-invoke/validate-param-conform-non-string ()
+  "Non-string pre-filled value also runs through conformer."
+  (let ((opt (clime-make-option :name 'val :flags '("--val")
+                                :conform (lambda (v)
+                                           (unless (> v 0)
+                                             (error "Must be positive"))
+                                           v))))
+    (should-not (clime-invoke--validate-param opt '(val 5)))
+    (should (stringp (clime-invoke--validate-param opt '(val -1))))))
+
+(ert-deftest clime-test-invoke/validate-param-conform-after-coercion ()
+  "Conformer receives the coerced value, not the raw string."
+  (let* ((received nil)
+         (opt (clime-make-option :name 'count :flags '("--count")
+                                 :type 'integer
+                                 :conform (lambda (v)
+                                            (setq received v)
+                                            v))))
+    (clime-invoke--validate-param opt '(count "42"))
+    (should (equal received 42))))
+
+(ert-deftest clime-test-invoke/validate-param-conform-arg ()
+  "Arg conformer validates pre-filled value."
+  (let ((arg (clime-make-arg :name 'file
+                             :conform (lambda (v)
+                                        (unless (string-suffix-p ".org" v)
+                                          (error "Must be .org file"))
+                                        v))))
+    (should-not (clime-invoke--validate-param arg '(file "test.org")))
+    (should (stringp (clime-invoke--validate-param arg '(file "test.txt"))))))
+
+(ert-deftest clime-test-invoke/validate-param-no-conform-non-string ()
+  "Non-string value without conformer still returns nil."
+  (let ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0)))
+    (should-not (clime-invoke--validate-param opt '(verbose t)))))
+
+(ert-deftest clime-test-invoke/validate-param-conform-2-arg ()
+  "Two-arg conformer receives both value and param."
+  (let* ((received-param nil)
+         (opt (clime-make-option :name 'val :flags '("--val")
+                                 :conform (lambda (v param)
+                                            (setq received-param param)
+                                            v))))
+    (clime-invoke--validate-param opt '(val "hello"))
+    (should (clime-option-p received-param))))
+
+(ert-deftest clime-test-invoke/validate-all-locked-skips-conform ()
+  "Locked option with conformer is not validated."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--fmt")
+                                 :locked t
+                                 :conform (lambda (_v)
+                                            (error "Should not be called"))))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt))))
+    (let ((result (clime-invoke--validate-all cmd '(fmt "json"))))
+      (should-not (car result)))))
+
 (ert-deftest clime-test-invoke/validate-all-ancestor-options ()
   "Ancestor option errors are included in param-errors."
   (let* ((parent-opt (clime-make-option :name 'port :flags '("--port")

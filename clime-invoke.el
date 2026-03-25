@@ -475,7 +475,8 @@ Shows [$VAR=resolved] with active face on value when env is source."
 (defun clime-invoke--validate-param (param params)
   "Validate a single PARAM against PARAMS, returning nil or error string.
 PARAM is a `clime-option' or `clime-arg'.  Skips unset values.
-Reuses `clime--transform-value' for type coercion and choices validation."
+Reuses `clime--transform-value' for type coercion and choices validation,
+then runs the param's `:conform' function (if any) on the coerced value."
   (let* ((name (clime-param-name param))
          (val (plist-get params name)))
     (when (and val (plist-member params name))
@@ -488,18 +489,29 @@ Reuses `clime--transform-value' for type coercion and choices validation."
              (coerce (if (clime-option-p param)
                          (clime-option-coerce param)
                        (clime-arg-coerce param)))
+             (cfn (if (clime-option-p param)
+                      (clime-option-conform param)
+                    (clime-arg-conform param)))
              (flag-or-name (if (clime-option-p param)
                                (car (clime-option-flags param))
                              (symbol-name name))))
-        ;; Only validate string values (pre-coercion)
         ;; Resolve dynamic choices eagerly (safe in invoke context)
         (let ((resolved-choices (and choices (clime--resolve-value choices))))
-          (when (stringp val)
-            (condition-case err
-                (progn
-                  (clime--transform-value val type resolved-choices coerce flag-or-name)
-                  nil)
-              (clime-usage-error (cadr err)))))))))
+          (if (stringp val)
+              ;; String values: type-coerce first, then conform
+              (condition-case err
+                  (let ((coerced (clime--transform-value
+                                  val type resolved-choices coerce flag-or-name)))
+                    (when cfn
+                      (condition-case err
+                          (progn (clime--call-conform cfn coerced param) nil)
+                        (error (error-message-string err)))))
+                (clime-usage-error (cadr err)))
+            ;; Non-string values (pre-filled already coerced): run conform only
+            (when cfn
+              (condition-case err
+                  (progn (clime--call-conform cfn val param) nil)
+                (error (error-message-string err))))))))))
 
 (defun clime-invoke--run-conformer-checks (node params)
   "Run NODE's conformers on a copy of PARAMS, returning attributed errors.
