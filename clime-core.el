@@ -494,9 +494,9 @@ ARGS is a plist of slot values."
 Declares an output mode (e.g. JSON, YAML) as a CLI flag with
 per-format finalize and streaming behavior."
   (finalize nil :type (or function null) :documentation "Envelope function: (items retval errors) → data | nil.")
-  (streaming nil :type boolean :documentation "When non-nil, `clime-output' emits immediately (no accumulator).")
+  (streaming nil :type boolean :documentation "When non-nil, `clime-out' emits immediately (no accumulator).")
   (encoder nil :type (or function null) :documentation "Encoder function: data → string.")
-  (error-handler nil :type (or function null) :documentation "Error handler: (msg) → side effect.  Called by `clime-output-error'."))
+  (error-handler nil :type (or function null) :documentation "Error handler: (msg) → side effect.  Called by `clime-out-error'."))
 
 (defun clime-make-output-format (&rest args)
   "Create a `clime-output-format' with defaults.

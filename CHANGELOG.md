@@ -211,10 +211,10 @@
   enables future group aliasing.
 
 - **Format-driven output**: replaced `clime-output-mode` symbol variable
-  with `clime--active-output-format` (always a `clime-output-format` struct).
+  with `clime-out--active-format` (always a `clime-output-format` struct).
   Every output mode — including default text — is a format struct with
   `:encoder`, `:error-handler`, `:finalize`, and `:streaming` slots.  No if/else
-  branching in output functions.  Handlers query the active format via `(clime-output-name)`.
+  branching in output functions.  Handlers query the active format via `(clime-out-format)`.
   The `:json-mode` DSL keyword is unchanged (deprecated).
 
 - **DSL forms are real macros**: `clime-option`, `clime-arg`,
@@ -223,13 +223,13 @@
   when evaluated standalone (REPL-friendly).  Standard `emacs-lisp-mode`
   keyword completion works inside any DSL form — no custom capf needed.
 
-- **JSON output accumulation**: in JSON mode, `clime-output` calls are
+- **JSON output accumulation**: in JSON mode, `clime-out` calls are
   buffered and flushed as a single JSON array (2+ items) or bare object
   (1 item) after the handler returns.  Replaces the previous NDJSON
-  behavior.  Use `clime-output-stream` for explicit NDJSON when needed.
+  behavior.  Use `clime-out-emit` for explicit NDJSON when needed.
   Handler return-value wrapping in `{success, data}` envelope is
-  preserved when no `clime-output` calls are made.  Errors accumulate
-  via `clime-output-error` and are passed to finalize — errors take
+  preserved when no `clime-out` calls are made.  Errors accumulate
+  via `clime-out-error` and are passed to finalize — errors take
   priority over items and retval in the default envelope.
 
 - **`clime-output-format` DSL form**: declares output modes as first-class
@@ -297,18 +297,17 @@
   from `clime-option` — supports `:finalize` (custom envelope function),
   `:streaming` (bypass accumulator for NDJSON), and all standard option
   keywords (`:mutex`, `:hidden`, `:category`, etc.).
-- `clime-output-stream`: emit NDJSON immediately, bypassing the output
+- `clime-out-emit`: emit NDJSON immediately, bypassing the output
   accumulator.  For streaming use cases where per-call emission is
-  desired.
-- `clime-output-name`: return the active output format's name symbol
-  (e.g. `text`, `json`).  Replaces `clime-output-mode-json-p` with
-  a general-purpose query: `(eq (clime-output-name) 'json)`.
-- `clime--output-finalize-default`: named default finalize function.
+  desired.  (Renamed from `clime-output-stream`.)
+- `clime-out-format`: return the active output format's name symbol
+  (e.g. `text`, `json`).  (Renamed from `clime-output-name`.)
+- `clime-out--finalize-default`: named default finalize function.
   Signature: `(items retval errors)`.  Priority: errors → `{error}`
   envelope, items → array/bare, retval → `{success, data}`, nil → nil.
-- `clime-output-error`: report errors via the active format.  Streaming
+- `clime-out-error`: report errors via the active format.  Streaming
   formats dispatch immediately; buffered formats accumulate errors for
-  finalize.
+  finalize.  (Renamed from `clime-output-error`.)
 - `examples/cloq.el`: demo app wrapping org-ql into a CLI tool,
   showcasing output formats, aliases, and JSON mode.
 
@@ -318,7 +317,7 @@
   formatting is now handled by the `:error-handler` slot on each
   `clime-output-format` struct.
 - `clime-output-mode-json-p` (deprecated): use
-  `(eq (clime-output-name) 'json)` instead.
+  `(eq (clime-out-format) 'json)` instead.
 
 ### Fixed
 

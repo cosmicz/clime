@@ -984,12 +984,12 @@
 (ert-deftest clime-test-invoke/run-buffered-errors-exit-1 ()
   "Handler that emits buffered errors returns exit code 1."
   (let* ((handler (lambda (_ctx)
-                    (clime-output-error "something went wrong")))
+                    (clime-out-error "something went wrong")))
          (cmd (clime-make-command :name "run" :handler handler))
          (app (clime-make-app :name "test" :version "1" :json-mode t
                                :children `(("run" . ,cmd))))
          ;; Bind a buffered (non-streaming) format so errors accumulate
-         (clime--active-output-format
+         (clime-out--active-format
           (car (clime-app-output-formats app)))
          (result (clime-invoke--run-handler app cmd '("run") nil)))
     (should (= 1 (car result)))))

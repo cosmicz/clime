@@ -150,7 +150,7 @@
 (ert-deftest clime-test-run/error-formatter-slot ()
   "Custom error-handler on active format changes error output."
   (let* ((captured '())
-         (clime--active-output-format
+         (clime-out--active-format
           (clime-make-output-format
            :name 'text :flags '("--text") :streaming t
            :encoder (lambda (data) (format "%s" data))
@@ -214,7 +214,7 @@
   "Custom error-handler on active format handles runtime errors too."
   (let* ((debug-on-error nil)
          (captured nil)
-         (clime--active-output-format
+         (clime-out--active-format
           (clime-make-output-format
            :name 'text :flags '("--text") :streaming t
            :encoder (lambda (data) (format "%s" data))

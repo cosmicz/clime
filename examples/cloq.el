@@ -111,7 +111,7 @@
             (message "cloq: %d hit%s" (length results)
                      (if (= 1 (length results)) "" "s")))
           (dolist (h results)
-            (clime-output `((heading . ,h)) :text h))))))
+            (clime-out `((heading . ,h)) :text h))))))
 
   ;; ── tags ──────────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@
                        (cl-pushnew tag all-tags :test #'string=))))))))
           (setq all-tags (sort all-tags #'string<))
           (dolist (tag all-tags)
-            (clime-output `((tag . ,tag)) :text tag))))))
+            (clime-out `((tag . ,tag)) :text tag))))))
 
   ;; ── Shortcuts ─────────────────────────────────────────────────────
 

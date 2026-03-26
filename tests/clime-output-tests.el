@@ -104,189 +104,181 @@
 ;;; ─── Active Format Binding ──────────────────────────────────────────
 
 (ert-deftest clime-test-output/active-format-defaults-to-text ()
-  "clime--active-output-format defaults to clime-output-default-format."
-  (should (eq clime--active-output-format clime-output-default-format)))
+  "clime-out--active-format defaults to clime-output-default-format."
+  (should (eq clime-out--active-format clime-output-default-format)))
 
 (ert-deftest clime-test-output/output-name-returns-format-name ()
-  "clime-output-name returns the active format's name symbol."
-  (let ((clime--active-output-format
+  "clime-out-format returns the active format's name symbol."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json"))))
-    (should (eq (clime-output-name) 'json)))
-  (let ((clime--active-output-format clime-output-default-format))
-    (should (eq (clime-output-name) 'text)))
-  (let ((clime--active-output-format
+    (should (eq (clime-out-format) 'json)))
+  (let ((clime-out--active-format clime-output-default-format))
+    (should (eq (clime-out-format) 'text)))
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'yaml :flags '("--yaml"))))
-    (should (eq (clime-output-name) 'yaml))))
-
-(ert-deftest clime-test-output/deprecated-mode-json-p-still-works ()
-  "Deprecated clime-output-mode-json-p still works as compat shim."
-  (let ((clime--active-output-format
-         (clime-make-output-format :name 'json :flags '("--json"))))
-    (should (clime-output-mode-json-p)))
-  (let ((clime--active-output-format clime-output-default-format))
-    (should-not (clime-output-mode-json-p))))
+    (should (eq (clime-out-format) 'yaml))))
 
 ;;; ─── Output Dispatch (Text Mode) ───────────────────────────────────
 
 (ert-deftest clime-test-output/text-output ()
-  "clime-output in text mode princ's via encoder."
-  (let ((clime--active-output-format clime-output-default-format))
-    (let ((output (with-output-to-string (clime-output "hello"))))
+  "clime-out in text mode princ's via encoder."
+  (let ((clime-out--active-format clime-output-default-format))
+    (let ((output (with-output-to-string (clime-out "hello"))))
       (should (equal output "hello")))))
 
 (ert-deftest clime-test-output/text-error ()
-  "clime-output-error in text mode uses format's error-handler (stderr)."
-  (let ((clime--active-output-format clime-output-default-format))
+  "clime-out-error in text mode uses format's error-handler (stderr)."
+  (let ((clime-out--active-format clime-output-default-format))
     (let ((msgs (clime-test-with-messages
-                  (clime-output-error "bad input"))))
+                  (clime-out-error "bad input"))))
       (should (cl-some (lambda (m) (string-match-p "Error: bad input" m)) msgs)))))
 
 (ert-deftest clime-test-output/text-output-returns-data ()
-  "clime-output returns its data argument for chaining."
-  (let ((clime--active-output-format clime-output-default-format))
+  "clime-out returns its data argument for chaining."
+  (let ((clime-out--active-format clime-output-default-format))
     (with-output-to-string
-      (should (equal (clime-output "val") "val")))))
+      (should (equal (clime-out "val") "val")))))
 
 ;;; ─── Output Dispatch (Streaming JSON) ──────────────────────────────
 
 (ert-deftest clime-test-output/streaming-json-output ()
-  "clime-output in streaming JSON emits NDJSON immediately."
-  (let ((clime--active-output-format
+  "clime-out in streaming JSON emits NDJSON immediately."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json") :streaming t)))
     (let* ((output (with-output-to-string
-                     (clime-output "hello")))
+                     (clime-out "hello")))
            (parsed (json-read-from-string (string-trim output))))
       (should (equal parsed "hello")))))
 
 (ert-deftest clime-test-output/streaming-json-multiple ()
   "Multiple output calls in streaming JSON produce NDJSON."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json") :streaming t)))
     (let* ((output (with-output-to-string
-                     (clime-output "line1")
-                     (clime-output "line2")))
+                     (clime-out "line1")
+                     (clime-out "line2")))
            (lines (split-string (string-trim output) "\n" t)))
       (should (= (length lines) 2))
       (should (equal (json-read-from-string (nth 0 lines)) "line1"))
       (should (equal (json-read-from-string (nth 1 lines)) "line2")))))
 
 (ert-deftest clime-test-output/streaming-json-error ()
-  "clime-output-error in streaming JSON emits immediately."
-  (let ((clime--active-output-format
+  "clime-out-error in streaming JSON emits immediately."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json") :streaming t)))
     (let* ((output (with-output-to-string
-                     (clime-output-error "bad")))
+                     (clime-out-error "bad")))
            (parsed (json-read-from-string (string-trim output))))
       (should (equal (cdr (assq 'error parsed)) "bad")))))
 
 ;;; ─── Output Dispatch (Buffered JSON) ───────────────────────────────
 
 (ert-deftest clime-test-output/buffered-json-accumulates ()
-  "clime-output in buffered JSON pushes to items list."
-  (let ((clime--active-output-format
+  "clime-out in buffered JSON pushes to items list."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
+        (clime-out--items nil)
+        (clime-out--errors nil))
     (with-output-to-string
-      (clime-output '((x . 1)))
-      (clime-output '((x . 2))))
-    (should (= (length clime--output-items) 2))))
+      (clime-out '((x . 1)))
+      (clime-out '((x . 2))))
+    (should (= (length clime-out--items) 2))))
 
 (ert-deftest clime-test-output/buffered-json-error-accumulates ()
-  "clime-output-error in buffered JSON pushes to errors list."
-  (let ((clime--active-output-format
+  "clime-out-error in buffered JSON pushes to errors list."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
-    (clime-output-error "bad")
-    (should (equal clime--output-errors '("bad")))))
+        (clime-out--items nil)
+        (clime-out--errors nil))
+    (clime-out-error "bad")
+    (should (equal clime-out--errors '("bad")))))
 
 (ert-deftest clime-test-output/buffered-json-error-no-stdout ()
-  "clime-output-error in buffered JSON produces no immediate stdout."
-  (let ((clime--active-output-format
+  "clime-out-error in buffered JSON produces no immediate stdout."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
+        (clime-out--items nil)
+        (clime-out--errors nil))
     (let ((output (with-output-to-string
-                    (clime-output-error "bad"))))
+                    (clime-out-error "bad"))))
       (should (equal output "")))))
 
 (ert-deftest clime-test-output/buffered-json-multiple-errors ()
-  "Multiple clime-output-error calls accumulate in order."
-  (let ((clime--active-output-format
+  "Multiple clime-out-error calls accumulate in order."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
-    (clime-output-error "err1")
-    (clime-output-error "err2")
+        (clime-out--items nil)
+        (clime-out--errors nil))
+    (clime-out-error "err1")
+    (clime-out-error "err2")
     ;; Pushed in reverse (push order), reversed at flush
-    (should (= (length clime--output-errors) 2))))
+    (should (= (length clime-out--errors) 2))))
 
-;;; ─── clime-output-stream ───────────────────────────────────────────
+;;; ─── clime-out-emit ───────────────────────────────────────────
 
 (ert-deftest clime-test-output/stream-bypasses-buffer ()
-  "clime-output-stream emits immediately, even in buffered mode."
-  (let ((clime--active-output-format
+  "clime-out-emit emits immediately, even in buffered mode."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
+        (clime-out--items nil)
+        (clime-out--errors nil))
     (let* ((output (with-output-to-string
-                     (clime-output-stream '((a . 1)))
-                     (clime-output-stream '((b . 2)))))
+                     (clime-out-emit '((a . 1)))
+                     (clime-out-emit '((b . 2)))))
            (lines (split-string (string-trim output) "\n" t)))
       (should (= (length lines) 2))
       (should (equal (cdr (assq 'a (json-read-from-string (nth 0 lines)))) 1))
       ;; Nothing pushed to items buffer
-      (should (null clime--output-items)))))
+      (should (null clime-out--items)))))
 
 (ert-deftest clime-test-output/stream-returns-data ()
-  "clime-output-stream returns its data argument."
-  (let ((clime--active-output-format
+  "clime-out-emit returns its data argument."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json"))))
     (with-output-to-string
-      (should (equal (clime-output-stream "val") "val")))))
+      (should (equal (clime-out-emit "val") "val")))))
 
 (ert-deftest clime-test-output/stream-text-mode ()
-  "clime-output-stream in text mode uses text encoder."
-  (let ((clime--active-output-format clime-output-default-format))
-    (let ((output (with-output-to-string (clime-output-stream "hello"))))
+  "clime-out-emit in text mode uses text encoder."
+  (let ((clime-out--active-format clime-output-default-format))
+    (let ((output (with-output-to-string (clime-out-emit "hello"))))
       (should (equal output "hello")))))
 
 ;;; ─── Finalize ──────────────────────────────────────────────────────
 
 (ert-deftest clime-test-output/finalize-default-errors-win ()
   "Default finalize: errors present → error envelope."
-  (let ((result (clime--output-finalize-default
+  (let ((result (clime-out--finalize-default
                  '(((x . 1))) "retval" '("fail"))))
     (should (equal (cdr (assq 'error result)) "fail"))))
 
 (ert-deftest clime-test-output/finalize-default-multi-items ()
   "Default finalize: 2+ items → JSON array."
-  (let ((result (clime--output-finalize-default
+  (let ((result (clime-out--finalize-default
                  '(((a . 1)) ((b . 2))) nil nil)))
     (should (vectorp result))
     (should (= (length result) 2))))
 
 (ert-deftest clime-test-output/finalize-default-single-item ()
   "Default finalize: 1 item → bare object."
-  (let ((result (clime--output-finalize-default
+  (let ((result (clime-out--finalize-default
                  '(((key . "val"))) nil nil)))
     (should (not (vectorp result)))
     (should (equal (cdr (assq 'key result)) "val"))))
 
 (ert-deftest clime-test-output/finalize-default-retval ()
   "Default finalize: no items, retval → success envelope."
-  (let ((result (clime--output-finalize-default nil "hello" nil)))
+  (let ((result (clime-out--finalize-default nil "hello" nil)))
     (should (equal (cdr (assq 'success result)) t))
     (should (equal (cdr (assq 'data result)) "hello"))))
 
 (ert-deftest clime-test-output/finalize-default-nil ()
   "Default finalize: all nil → nil (no output)."
-  (should-not (clime--output-finalize-default nil nil nil)))
+  (should-not (clime-out--finalize-default nil nil nil)))
 
 (ert-deftest clime-test-output/finalize-errors-trump-items ()
   "Default finalize: errors take priority over items and retval."
-  (let ((result (clime--output-finalize-default
+  (let ((result (clime-out--finalize-default
                  '(((x . 1)) ((y . 2))) "retval" '("fail"))))
     (should (equal (cdr (assq 'error result)) "fail"))
     (should-not (assq 'x result))
@@ -294,7 +286,7 @@
 
 (ert-deftest clime-test-output/finalize-items-trump-retval ()
   "Default finalize: items take priority over retval."
-  (let ((result (clime--output-finalize-default
+  (let ((result (clime-out--finalize-default
                  '(((buffered . t))) "ignored" nil)))
     (should (equal (cdr (assq 'buffered result)) t))
     (should-not (assq 'data result))))
@@ -303,13 +295,13 @@
 
 (ert-deftest clime-test-output/flush-multi-items ()
   "Flush with multiple items produces JSON array."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
-    (push '((name . "b")) clime--output-items)
-    (push '((name . "a")) clime--output-items)
-    (let* ((output (with-output-to-string (clime--output-flush nil nil)))
+        (clime-out--items nil)
+        (clime-out--errors nil))
+    (push '((name . "b")) clime-out--items)
+    (push '((name . "a")) clime-out--items)
+    (let* ((output (with-output-to-string (clime-out--flush nil nil)))
            (parsed (json-read-from-string (string-trim output))))
       (should (vectorp parsed))
       (should (= (length parsed) 2))
@@ -318,72 +310,72 @@
 
 (ert-deftest clime-test-output/flush-single-item ()
   "Flush with single item produces bare object."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items (list '((key . "val"))))
-        (clime--output-errors nil))
-    (let* ((output (with-output-to-string (clime--output-flush nil nil)))
+        (clime-out--items (list '((key . "val"))))
+        (clime-out--errors nil))
+    (let* ((output (with-output-to-string (clime-out--flush nil nil)))
            (parsed (json-read-from-string (string-trim output))))
       (should (not (vectorp parsed)))
       (should (equal (cdr (assq 'key parsed)) "val")))))
 
 (ert-deftest clime-test-output/flush-empty ()
   "Flush with no items and no retval produces no output."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
-    (let ((output (with-output-to-string (clime--output-flush nil nil))))
+        (clime-out--items nil)
+        (clime-out--errors nil))
+    (let ((output (with-output-to-string (clime-out--flush nil nil))))
       (should (equal output "")))))
 
 (ert-deftest clime-test-output/flush-retval-when-no-items ()
   "Flush with retval and no items produces success envelope."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
-    (let* ((output (with-output-to-string (clime--output-flush nil "hello")))
+        (clime-out--items nil)
+        (clime-out--errors nil))
+    (let* ((output (with-output-to-string (clime-out--flush nil "hello")))
            (parsed (json-read-from-string (string-trim output))))
       (should (equal (cdr (assq 'success parsed)) t))
       (should (equal (cdr (assq 'data parsed)) "hello")))))
 
 (ert-deftest clime-test-output/flush-errors-suppress-items ()
   "Flush with errors suppresses item output (default finalize)."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items (list '((x . 1))))
-        (clime--output-errors (list "fail")))
-    (let* ((output (with-output-to-string (clime--output-flush nil nil)))
+        (clime-out--items (list '((x . 1))))
+        (clime-out--errors (list "fail")))
+    (let* ((output (with-output-to-string (clime-out--flush nil nil)))
            (parsed (json-read-from-string (string-trim output))))
       (should (equal (cdr (assq 'error parsed)) "fail"))
       (should-not (assq 'x parsed)))))
 
 (ert-deftest clime-test-output/flush-custom-finalize ()
   "Flush with custom finalize controls output shape."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items (list '((x . 1))))
-        (clime--output-errors nil))
+        (clime-out--items (list '((x . 1))))
+        (clime-out--errors nil))
     (let* ((finalize (lambda (items retval _errors)
                        `((items . ,(vconcat items))
                          (count . ,(length items)))))
-           (output (with-output-to-string (clime--output-flush finalize nil)))
+           (output (with-output-to-string (clime-out--flush finalize nil)))
            (parsed (json-read-from-string (string-trim output))))
       (should (= (cdr (assq 'count parsed)) 1)))))
 
 (ert-deftest clime-test-output/flush-custom-finalize-with-errors ()
   "Custom finalize receives errors and can merge with items."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items (list '((x . 1))))
-        (clime--output-errors (list "fail")))
+        (clime-out--items (list '((x . 1))))
+        (clime-out--errors (list "fail")))
     (let* ((received nil)
            (finalize (lambda (items retval errors)
                        (setq received (list items retval errors))
                        `((partial . t)
                          (items . ,(vconcat items))
                          (errors . ,(vconcat errors)))))
-           (output (with-output-to-string (clime--output-flush finalize nil)))
+           (output (with-output-to-string (clime-out--flush finalize nil)))
            (parsed (json-read-from-string (string-trim output))))
       ;; Finalize received errors
       (should (equal (nth 2 received) '("fail")))
@@ -393,12 +385,12 @@
 ;;; ─── clime-run Integration ─────────────────────────────────────────
 
 (ert-deftest clime-test-output/run-json-accumulates-output-calls ()
-  "clime-run buffers multiple clime-output calls into JSON array."
+  "clime-run buffers multiple clime-out calls into JSON array."
   (let* ((cmd (clime-make-command
                :name "multi"
                :handler (lambda (_ctx)
-                          (clime-output '((x . 1)))
-                          (clime-output '((x . 2)))
+                          (clime-out '((x . 1)))
+                          (clime-out '((x . 2)))
                           nil)))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "multi" cmd))))
@@ -410,11 +402,11 @@
     (should (= (length parsed) 2))))
 
 (ert-deftest clime-test-output/run-json-single-output-bare ()
-  "clime-run with single clime-output call emits bare object."
+  "clime-run with single clime-out call emits bare object."
   (let* ((cmd (clime-make-command
                :name "one"
                :handler (lambda (_ctx)
-                          (clime-output '((key . "val")))
+                          (clime-out '((key . "val")))
                           nil)))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "one" cmd))))
@@ -440,11 +432,11 @@
     (should (equal (cdr (assq 'data parsed)) "hello"))))
 
 (ert-deftest clime-test-output/run-json-output-takes-precedence-over-return ()
-  "When handler calls clime-output AND returns a value, items win."
+  "When handler calls clime-out AND returns a value, items win."
   (let* ((cmd (clime-make-command
                :name "both"
                :handler (lambda (_ctx)
-                          (clime-output '((buffered . t)))
+                          (clime-out '((buffered . t)))
                           "ignored")))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "both" cmd))))
@@ -500,11 +492,11 @@
 ;;; ─── clime-run Error Handling ──────────────────────────────────────
 
 (ert-deftest clime-test-output/run-handler-error-via-finalize ()
-  "Handler calling clime-output-error routes through finalize."
+  "Handler calling clime-out-error routes through finalize."
   (let* ((cmd (clime-make-command
                :name "fail"
                :handler (lambda (_ctx)
-                          (clime-output-error "handler fail")
+                          (clime-out-error "handler fail")
                           nil)))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "fail" cmd))))
@@ -519,8 +511,8 @@
   (let* ((cmd (clime-make-command
                :name "mixed"
                :handler (lambda (_ctx)
-                          (clime-output '((x . 1)))
-                          (clime-output-error "handler fail")
+                          (clime-out '((x . 1)))
+                          (clime-out-error "handler fail")
                           "retval")))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "mixed" cmd))))
@@ -538,7 +530,7 @@
   (let* ((cmd (clime-make-command
                :name "errval"
                :handler (lambda (_ctx)
-                          (clime-output-error "bad")
+                          (clime-out-error "bad")
                           "retval")))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "errval" cmd))))
@@ -569,7 +561,7 @@
          (cmd (clime-make-command
                :name "boom"
                :handler (lambda (_ctx)
-                          (clime-output '((x . 1)))
+                          (clime-out '((x . 1)))
                           (error "kaboom"))))
          (fmt (clime-make-output-format
                :name 'json :flags '("--json")
@@ -606,11 +598,11 @@
     (should (stringp (cdr (assq 'error parsed))))))
 
 (ert-deftest clime-test-output/run-handler-error-exit-code-1 ()
-  "Handler calling clime-output-error results in exit code 1."
+  "Handler calling clime-out-error results in exit code 1."
   (let* ((cmd (clime-make-command
                :name "fail"
                :handler (lambda (_ctx)
-                          (clime-output-error "nope")
+                          (clime-out-error "nope")
                           nil)))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "fail" cmd)))))
@@ -639,8 +631,8 @@
   (let* ((cmd (clime-make-command
                :name "ok"
                :handler (lambda (_ctx)
-                          (clime-output '((a . 1)))
-                          (clime-output '((b . 2)))
+                          (clime-out '((a . 1)))
+                          (clime-out '((b . 2)))
                           nil)))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "ok" cmd))))
@@ -710,8 +702,8 @@
   (let* ((cmd (clime-make-command
                :name "multi"
                :handler (lambda (_ctx)
-                          (clime-output '((x . 1)))
-                          (clime-output '((x . 2)))
+                          (clime-out '((x . 1)))
+                          (clime-out '((x . 2)))
                           nil)))
          (fmt (clime-make-output-format
                :name 'json :flags '("--json")
@@ -729,12 +721,12 @@
     (should (= (length (cdr (assq 'items parsed))) 2))))
 
 (ert-deftest clime-test-output/format-streaming ()
-  "Streaming output-format emits NDJSON per clime-output call."
+  "Streaming output-format emits NDJSON per clime-out call."
   (let* ((cmd (clime-make-command
                :name "stream"
                :handler (lambda (_ctx)
-                          (clime-output '((line . 1)))
-                          (clime-output '((line . 2)))
+                          (clime-out '((line . 1)))
+                          (clime-out '((line . 2)))
                           nil)))
          (fmt (clime-make-output-format :name 'json :flags '("--json")
                                          :streaming t))
@@ -798,54 +790,54 @@
     (should (string-match-p "--json" output))
     (should (string-match-p "Output as JSON" output))))
 
-;;; ─── :text Keyword on clime-output ───────────────────────────────
+;;; ─── :text Keyword on clime-out ──────────────────────────────────
 
 (ert-deftest clime-test-output/text-mode-with-text-keyword ()
   "In text mode, :text string is emitted instead of encoded data."
-  (let ((clime--active-output-format clime-output-default-format))
+  (let ((clime-out--active-format clime-output-default-format))
     (let ((output (with-output-to-string
-                    (clime-output '((name . "foo") (status . "ok"))
+                    (clime-out '((name . "foo") (status . "ok"))
                                  :text "foo     ok"))))
       (should (equal output "foo     ok\n")))))
 
 (ert-deftest clime-test-output/text-mode-without-text-keyword ()
   "In text mode without :text, behavior unchanged (encoder called)."
-  (let ((clime--active-output-format clime-output-default-format))
-    (let ((output (with-output-to-string (clime-output "hello"))))
+  (let ((clime-out--active-format clime-output-default-format))
+    (let ((output (with-output-to-string (clime-out "hello"))))
       (should (equal output "hello")))))
 
 (ert-deftest clime-test-output/text-mode-text-keyword-returns-data ()
   ":text keyword does not change return value — still returns data."
-  (let ((clime--active-output-format clime-output-default-format)
+  (let ((clime-out--active-format clime-output-default-format)
         (data '((name . "foo"))))
     (with-output-to-string
-      (should (equal (clime-output data :text "foo") data)))))
+      (should (equal (clime-out data :text "foo") data)))))
 
 (ert-deftest clime-test-output/json-buffered-ignores-text-keyword ()
   "In buffered JSON mode, :text is ignored — data is accumulated."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json")))
-        (clime--output-items nil)
-        (clime--output-errors nil))
+        (clime-out--items nil)
+        (clime-out--errors nil))
     (with-output-to-string
-      (clime-output '((name . "foo")) :text "foo"))
-    (should (= (length clime--output-items) 1))
-    (should (equal (car clime--output-items) '((name . "foo"))))))
+      (clime-out '((name . "foo")) :text "foo"))
+    (should (= (length clime-out--items) 1))
+    (should (equal (car clime-out--items) '((name . "foo"))))))
 
 (ert-deftest clime-test-output/json-streaming-ignores-text-keyword ()
   "In streaming JSON mode, :text is ignored — data is JSON-encoded."
-  (let ((clime--active-output-format
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json") :streaming t)))
     (let* ((output (with-output-to-string
-                     (clime-output '((name . "foo")) :text "foo")))
+                     (clime-out '((name . "foo")) :text "foo")))
            (parsed (json-read-from-string (string-trim output))))
       (should (equal (cdr (assq 'name parsed)) "foo")))))
 
 (ert-deftest clime-test-output/text-keyword-nil-uses-encoder ()
   "Passing :text nil falls back to encoder (same as omitting :text)."
-  (let ((clime--active-output-format clime-output-default-format))
+  (let ((clime-out--active-format clime-output-default-format))
     (let ((output (with-output-to-string
-                    (clime-output "hello" :text nil))))
+                    (clime-out "hello" :text nil))))
       (should (equal output "hello")))))
 
 ;;; ─── :text Keyword Integration (clime-run) ──────────────────────
@@ -855,8 +847,8 @@
   (let* ((cmd (clime-make-command
                :name "list"
                :handler (lambda (_ctx)
-                          (clime-output '((n . 1)) :text "one")
-                          (clime-output '((n . 2)) :text "two")
+                          (clime-out '((n . 1)) :text "one")
+                          (clime-out '((n . 2)) :text "two")
                           nil)))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "list" cmd))))
@@ -873,8 +865,8 @@
   (let* ((cmd (clime-make-command
                :name "list"
                :handler (lambda (_ctx)
-                          (clime-output '((n . 1)) :text "one")
-                          (clime-output '((n . 2)) :text "two")
+                          (clime-out '((n . 1)) :text "one")
+                          (clime-out '((n . 2)) :text "two")
                           nil)))
          (app (clime-make-app :name "t" :version "1" :json-mode t
                                :children (list (cons "list" cmd))))
@@ -883,36 +875,36 @@
                      (should (= code 0))))))
     (should (equal output "one\ntwo\n"))))
 
-;;; ─── clime-output-text ──────────────────────────────────────────
+;;; ─── clime-out-text ──────────────────────────────────────────
 
 (ert-deftest clime-test-output/output-text-emits-in-text-mode ()
-  "clime-output-text emits string with newline in text mode."
-  (let ((clime--active-output-format clime-output-default-format))
+  "clime-out-text emits string with newline in text mode."
+  (let ((clime-out--active-format clime-output-default-format))
     (let ((output (with-output-to-string
-                    (clime-output-text "Agents:"))))
+                    (clime-out-text "Agents:"))))
       (should (equal output "Agents:\n")))))
 
 (ert-deftest clime-test-output/output-text-noop-in-json ()
-  "clime-output-text is a no-op in JSON mode."
-  (let ((clime--active-output-format
+  "clime-out-text is a no-op in JSON mode."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'json :flags '("--json"))))
     (let ((output (with-output-to-string
-                    (clime-output-text "Agents:"))))
+                    (clime-out-text "Agents:"))))
       (should (equal output "")))))
 
 (ert-deftest clime-test-output/output-text-noop-in-custom-structured ()
-  "clime-output-text is a no-op for any non-text format."
-  (let ((clime--active-output-format
+  "clime-out-text is a no-op for any non-text format."
+  (let ((clime-out--active-format
          (clime-make-output-format :name 'yaml :flags '("--yaml"))))
     (let ((output (with-output-to-string
-                    (clime-output-text "Header:"))))
+                    (clime-out-text "Header:"))))
       (should (equal output "")))))
 
 (ert-deftest clime-test-output/output-text-returns-nil ()
-  "clime-output-text always returns nil."
-  (let ((clime--active-output-format clime-output-default-format))
+  "clime-out-text always returns nil."
+  (let ((clime-out--active-format clime-output-default-format))
     (with-output-to-string
-      (should-not (clime-output-text "text")))))
+      (should-not (clime-out-text "text")))))
 
 (provide 'clime-output-tests)
 ;;; clime-output-tests.el ends here

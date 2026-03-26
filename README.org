@@ -992,28 +992,29 @@ CLI flag that controls how handler output is encoded:
 ./myapp.el show --json 123   # JSON output
 #+end_src
 
-Handlers use ~clime-output~ to emit data without knowing the active
+Handlers use ~clime-out~ to emit data without knowing the active
 format:
 
 #+begin_src emacs-lisp
 (clime-handler (ctx)
-  (clime-output '((name . "foo") (status . "ok")))
-  (clime-output '((name . "bar") (status . "err"))))
+  (clime-out '((name . "foo") (status . "ok")) :text "foo  ok")
+  (clime-out '((name . "bar") (status . "err")) :text "bar  err"))
 #+end_src
 
-In text mode, each item is printed with ~princ~.  In JSON mode, items
-accumulate --- multiple items become a JSON array, a single item is a
-bare object, wrapped in a ~{success, data}~ envelope.  Errors reported
-via ~clime-output-error~ take priority over items at finalize time.
+In text mode, the ~:text~ string is emitted (with newline).  In JSON
+mode, items accumulate --- multiple items become a JSON array, a single
+item is a bare object, wrapped in a ~{success, data}~ envelope.  Errors
+reported via ~clime-out-error~ take priority over items at finalize time.
 
 The output API:
 
 | Function               | Behavior                                                     |
 |------------------------+--------------------------------------------------------------|
-| ~clime-output~         | Emit one item (accumulated or streamed, per format)          |
-| ~clime-output-error~   | Report an error (accumulated or handled immediately)         |
-| ~clime-output-stream~  | Encode and emit immediately, bypassing the accumulator       |
-| ~clime-output-name~    | Returns the active format name (~'json~, ~'text~, etc.)     |
+| ~clime-out~            | Emit one item (accumulated or streamed, per format)          |
+| ~clime-out-error~      | Report an error (accumulated or handled immediately)         |
+| ~clime-out-emit~       | Encode and emit immediately, bypassing the accumulator       |
+| ~clime-out-format~     | Returns the active format name (~'json~, ~'text~, etc.)     |
+| ~clime-out-text~       | Emit text-only decoration (no-op for structured formats)     |
 
 ~clime-output-format~ derives from ~clime-option~, so it supports
 ~:hidden~, ~:category~, etc.
@@ -1032,20 +1033,20 @@ Use ~:finalize~ to control the JSON envelope shape:
 #+end_src
 
 The finalize function receives ~(items retval errors)~ where ~items~ is
-the list of accumulated ~clime-output~ calls, ~retval~ is the handler's
+the list of accumulated ~clime-out~ calls, ~retval~ is the handler's
 return value, and ~errors~ is a list of error strings (may be nil).
 
 **** Streaming (NDJSON)
 
 For streaming output, set ~:streaming~ on the format.  This bypasses
-the accumulator --- each ~clime-output~ call emits one JSON object per
+the accumulator --- each ~clime-out~ call emits one JSON object per
 line immediately:
 
 #+begin_src emacs-lisp
 (clime-output-format json ("--json") :streaming)
 #+end_src
 
-Handlers can also call ~clime-output-stream~ explicitly to bypass the
+Handlers can also call ~clime-out-emit~ explicitly to bypass the
 accumulator in a non-streaming format.
 
 **** Legacy: ~:json-mode~
