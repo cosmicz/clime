@@ -798,5 +798,121 @@
     (should (string-match-p "--json" output))
     (should (string-match-p "Output as JSON" output))))
 
+;;; ─── :text Keyword on clime-output ───────────────────────────────
+
+(ert-deftest clime-test-output/text-mode-with-text-keyword ()
+  "In text mode, :text string is emitted instead of encoded data."
+  (let ((clime--active-output-format clime-output-default-format))
+    (let ((output (with-output-to-string
+                    (clime-output '((name . "foo") (status . "ok"))
+                                 :text "foo     ok"))))
+      (should (equal output "foo     ok\n")))))
+
+(ert-deftest clime-test-output/text-mode-without-text-keyword ()
+  "In text mode without :text, behavior unchanged (encoder called)."
+  (let ((clime--active-output-format clime-output-default-format))
+    (let ((output (with-output-to-string (clime-output "hello"))))
+      (should (equal output "hello")))))
+
+(ert-deftest clime-test-output/text-mode-text-keyword-returns-data ()
+  ":text keyword does not change return value — still returns data."
+  (let ((clime--active-output-format clime-output-default-format)
+        (data '((name . "foo"))))
+    (with-output-to-string
+      (should (equal (clime-output data :text "foo") data)))))
+
+(ert-deftest clime-test-output/json-buffered-ignores-text-keyword ()
+  "In buffered JSON mode, :text is ignored — data is accumulated."
+  (let ((clime--active-output-format
+         (clime-make-output-format :name 'json :flags '("--json")))
+        (clime--output-items nil)
+        (clime--output-errors nil))
+    (with-output-to-string
+      (clime-output '((name . "foo")) :text "foo"))
+    (should (= (length clime--output-items) 1))
+    (should (equal (car clime--output-items) '((name . "foo"))))))
+
+(ert-deftest clime-test-output/json-streaming-ignores-text-keyword ()
+  "In streaming JSON mode, :text is ignored — data is JSON-encoded."
+  (let ((clime--active-output-format
+         (clime-make-output-format :name 'json :flags '("--json") :streaming t)))
+    (let* ((output (with-output-to-string
+                     (clime-output '((name . "foo")) :text "foo")))
+           (parsed (json-read-from-string (string-trim output))))
+      (should (equal (cdr (assq 'name parsed)) "foo")))))
+
+(ert-deftest clime-test-output/text-keyword-nil-uses-encoder ()
+  "Passing :text nil falls back to encoder (same as omitting :text)."
+  (let ((clime--active-output-format clime-output-default-format))
+    (let ((output (with-output-to-string
+                    (clime-output "hello" :text nil))))
+      (should (equal output "hello")))))
+
+;;; ─── :text Keyword Integration (clime-run) ──────────────────────
+
+(ert-deftest clime-test-output/run-text-keyword-json-accumulates ()
+  "clime-run with --json accumulates data from :text calls into array."
+  (let* ((cmd (clime-make-command
+               :name "list"
+               :handler (lambda (_ctx)
+                          (clime-output '((n . 1)) :text "one")
+                          (clime-output '((n . 2)) :text "two")
+                          nil)))
+         (app (clime-make-app :name "t" :version "1" :json-mode t
+                               :children (list (cons "list" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("list" "--json"))))
+                     (should (= code 0)))))
+         (parsed (json-read-from-string (string-trim output))))
+    (should (vectorp parsed))
+    (should (= (length parsed) 2))
+    (should (= (cdr (assq 'n (aref parsed 0))) 1))))
+
+(ert-deftest clime-test-output/run-text-keyword-text-mode ()
+  "clime-run without --json uses :text strings."
+  (let* ((cmd (clime-make-command
+               :name "list"
+               :handler (lambda (_ctx)
+                          (clime-output '((n . 1)) :text "one")
+                          (clime-output '((n . 2)) :text "two")
+                          nil)))
+         (app (clime-make-app :name "t" :version "1" :json-mode t
+                               :children (list (cons "list" cmd))))
+         (output (with-output-to-string
+                   (let ((code (clime-run app '("list"))))
+                     (should (= code 0))))))
+    (should (equal output "one\ntwo\n"))))
+
+;;; ─── clime-output-text ──────────────────────────────────────────
+
+(ert-deftest clime-test-output/output-text-emits-in-text-mode ()
+  "clime-output-text emits string with newline in text mode."
+  (let ((clime--active-output-format clime-output-default-format))
+    (let ((output (with-output-to-string
+                    (clime-output-text "Agents:"))))
+      (should (equal output "Agents:\n")))))
+
+(ert-deftest clime-test-output/output-text-noop-in-json ()
+  "clime-output-text is a no-op in JSON mode."
+  (let ((clime--active-output-format
+         (clime-make-output-format :name 'json :flags '("--json"))))
+    (let ((output (with-output-to-string
+                    (clime-output-text "Agents:"))))
+      (should (equal output "")))))
+
+(ert-deftest clime-test-output/output-text-noop-in-custom-structured ()
+  "clime-output-text is a no-op for any non-text format."
+  (let ((clime--active-output-format
+         (clime-make-output-format :name 'yaml :flags '("--yaml"))))
+    (let ((output (with-output-to-string
+                    (clime-output-text "Header:"))))
+      (should (equal output "")))))
+
+(ert-deftest clime-test-output/output-text-returns-nil ()
+  "clime-output-text always returns nil."
+  (let ((clime--active-output-format clime-output-default-format))
+    (with-output-to-string
+      (should-not (clime-output-text "text")))))
+
 (provide 'clime-output-tests)
 ;;; clime-output-tests.el ends here

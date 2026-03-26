@@ -110,9 +110,8 @@
           (when (and verbose (> verbose 0))
             (message "cloq: %d hit%s" (length results)
                      (if (= 1 (length results)) "" "s")))
-          (if (eq (clime-output-name) 'json)
-              (mapcar (lambda (h) `((heading . ,h))) results)
-            (mapconcat #'identity results "\n"))))))
+          (dolist (h results)
+            (clime-output `((heading . ,h)) :text h))))))
 
   ;; ── tags ──────────────────────────────────────────────────────────
 
@@ -134,9 +133,8 @@
                      (dolist (tag (split-string tags-str ":" t))
                        (cl-pushnew tag all-tags :test #'string=))))))))
           (setq all-tags (sort all-tags #'string<))
-          (if (eq (clime-output-name) 'json)
-              (mapcar (lambda (tag) `((tag . ,tag))) all-tags)
-            (mapconcat #'identity all-tags "\n"))))))
+          (dolist (tag all-tags)
+            (clime-output `((tag . ,tag)) :text tag))))))
 
   ;; ── Shortcuts ─────────────────────────────────────────────────────
 

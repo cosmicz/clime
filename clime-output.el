@@ -84,15 +84,28 @@ output format: (eq (clime-output-name) \\='json)."
 
 ;;; ─── Output Functions ─────────────────────────────────────────────────
 
-(defun clime-output (data)
+(defun clime-output (data &rest keys)
   "Output DATA via the active format.
+KEYS is an optional plist.  Recognized keys:
+  :text STRING — in text mode, emit STRING (with newline) instead
+                 of encoding DATA.  Ignored by structured formats.
 Streaming: encode and princ immediately.
 Buffered: append to `clime--output-items' (flushed later)."
   (let ((fmt clime--active-output-format))
     (if (clime-output-format-streaming fmt)
-        (princ (funcall (clime-output-format-encoder fmt) data))
+        (let ((text (plist-get keys :text)))
+          (if (and text (eq (clime-output-format-name fmt) 'text))
+              (princ (concat text "\n"))
+            (princ (funcall (clime-output-format-encoder fmt) data))))
       (setq clime--output-items (nconc clime--output-items (list data)))))
   data)
+
+(defun clime-output-text (text)
+  "Emit TEXT with newline in text mode; no-op for structured formats.
+Use for headers, labels, and decoration with no structured equivalent."
+  (when (eq (clime-output-format-name clime--active-output-format) 'text)
+    (princ (concat text "\n")))
+  nil)
 
 (defun clime-output-error (msg)
   "Report error MSG via the active format.
