@@ -31,7 +31,7 @@
 
 (defconst clime--boolean-keywords
   '(:bool :flag :count :multiple :negatable :hidden :required
-    :optional :rest :inline :json-mode :streaming :deprecated)
+    :optional :rest :inline :json-mode :streaming :deprecated :env)
   "DSL keywords that accept bare form as shorthand for t.
 A bare boolean keyword (not followed by a non-keyword, non-cons value)
 is normalized to keyword t before further processing.")
@@ -612,7 +612,7 @@ Keyword arguments:
   :coerce FN        Transform after type coercion
   :conform FN       Pass-2 validation/normalization
   :default VAL      Default value when not provided
-  :env STR          Override env var name
+  :env STR|t        Env var suffix (prefixed by :env-prefix) or t to auto-derive
   :category STR     Help display category
   :hidden t         Omit from help
   :deprecated STR   Deprecation message or t

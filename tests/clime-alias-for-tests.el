@@ -345,6 +345,28 @@
                                                   (cons "bad" alias)))
                   :type 'error)))
 
+(ert-deftest clime-test-alias-for/defaults-does-not-lock ()
+  "alias :defaults sets :default but NOT :locked."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :default "text"))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                   :options (list opt)))
+         (grp (clime-make-group :name "report"
+                                :children (list (cons "show" cmd))))
+         (alias (clime-alias--create
+                 :name "show-csv"
+                 :target '("report" "show")
+                 :defaults '((format . "csv"))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "report" grp)
+                                              (cons "show-csv" alias)))))
+    (clime--resolve-aliases app)
+    (let* ((resolved (cdr (assoc "show-csv" (clime-group-children app))))
+           (fmt-opt (cl-find-if (lambda (o) (eq (clime-option-name o) 'format))
+                                (clime-node-options resolved))))
+      (should (equal "csv" (clime-option-default fmt-opt)))
+      (should-not (clime-option-locked fmt-opt)))))
+
 ;;; ─── :vals ─────────────────────────────────────────────────────────
 
 (ert-deftest clime-test-alias-for/vals-struct-slot ()
@@ -352,8 +374,8 @@
   (let ((alias (clime-alias--create :target '("x"))))
     (should-not (clime-alias-vals alias))))
 
-(ert-deftest clime-test-alias-for/vals-removes-option-from-list ()
-  "alias :vals removes the option from the command's options list."
+(ert-deftest clime-test-alias-for/vals-locks-option ()
+  "alias :vals sets :locked on the option and value in :default."
   (let* ((opt-a (clime-make-option :name 'format :flags '("--format")))
          (opt-b (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
          (cmd (clime-make-command :name "show" :handler #'ignore
@@ -368,10 +390,19 @@
                               :children (list (cons "report" grp)
                                               (cons "show-csv" alias)))))
     (clime--resolve-aliases app)
-    (let ((resolved (cdr (assoc "show-csv" (clime-group-children app)))))
-      ;; Only --verbose remains
-      (should (= 1 (length (clime-node-options resolved))))
-      (should (eq 'verbose (clime-option-name (car (clime-node-options resolved))))))))
+    (let* ((resolved (cdr (assoc "show-csv" (clime-group-children app))))
+           (fmt-opt (cl-find-if (lambda (o) (eq (clime-option-name o) 'format))
+                                (clime-node-options resolved))))
+      ;; Both options remain
+      (should (= 2 (length (clime-node-options resolved))))
+      ;; format is locked
+      (should fmt-opt)
+      (should (clime-option-locked fmt-opt))
+      (should (equal "csv" (clime-option-default fmt-opt)))
+      ;; verbose is not locked
+      (should-not (clime-option-locked
+                   (cl-find-if (lambda (o) (eq (clime-option-name o) 'verbose))
+                               (clime-node-options resolved)))))))
 
 (ert-deftest clime-test-alias-for/vals-stored-as-locked-vals ()
   "alias :vals are stored as locked-vals on the resolved command."
@@ -410,7 +441,7 @@
       (should (equal "csv" (plist-get params 'format))))))
 
 (ert-deftest clime-test-alias-for/vals-not-overridable ()
-  "alias :vals option is removed from CLI — passing the flag is an error."
+  "alias :vals option is locked — passing the flag from CLI is an error."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                    :options (list opt)))
@@ -618,6 +649,220 @@
            (params (clime-parse-result-params result)))
       (should (equal "csv" (plist-get params 'format)))
       (should (equal 10 (plist-get params 'limit))))))
+
+;;; ─── :vals / :defaults with mutex groups ─────────────────────────────
+
+(ert-deftest clime-test-alias-for/vals-with-mutex-option ()
+  "alias :vals targeting an option inside clime-mutex resolves without error."
+  (eval '(clime-app clime-test--af-vals-mutex
+           :version "1"
+           (clime-command query
+             :help "Run a query"
+             (clime-mutex query-mode
+               (clime-opt todo ("--todo" "-t") :help "TODO keyword")
+               (clime-opt sexp ("--sexp") :help "S-expression query"))
+             (clime-handler (ctx)
+               (clime-let ctx (todo sexp)
+                 (or todo sexp))))
+           (clime-group shortcuts :inline :category "Shortcuts"
+             (clime-alias-for waiting (query)
+               :help "Show WAITING items"
+               :vals '((todo . "WAITING")))))
+        t)
+  ;; Alias resolves — no error about unknown option
+  (let* ((shortcuts (cdr (assoc "shortcuts"
+                                 (clime-group-children
+                                  clime-test--af-vals-mutex))))
+         (resolved (cdr (assoc "waiting"
+                                (clime-group-children shortcuts))))
+         (all-opt-names (mapcar #'clime-option-name
+                                (clime-node-all-options resolved))))
+    ;; todo locked by :vals but still in options list, sexp remains
+    (should (memq 'todo all-opt-names))
+    (should (clime-option-locked
+             (cl-find-if (lambda (o) (eq (clime-option-name o) 'todo))
+                          (clime-node-all-options resolved))))
+    (should (memq 'sexp all-opt-names))
+    ;; locked-vals stored
+    (should (equal '((todo . "WAITING")) (clime-node-locked-vals resolved))))
+  ;; Parse works — locked val injected
+  (let* ((result (clime-parse clime-test--af-vals-mutex '("waiting")))
+         (params (clime-parse-result-params result)))
+    (should (equal "WAITING" (plist-get params 'todo)))))
+
+(ert-deftest clime-test-alias-for/defaults-with-mutex-option ()
+  "alias :defaults targeting an option inside clime-mutex resolves without error."
+  (eval '(clime-app clime-test--af-defaults-mutex
+           :version "1"
+           (clime-command query
+             :help "Run a query"
+             (clime-mutex query-mode
+               (clime-opt todo ("--todo" "-t") :help "TODO keyword")
+               (clime-opt sexp ("--sexp") :help "S-expression query"))
+             (clime-handler (ctx)
+               (clime-let ctx (todo)
+                 todo)))
+           (clime-alias-for pending (query)
+             :help "Show TODO items"
+             :defaults '((todo . "TODO"))))
+        t)
+  ;; Default patched on the mutex-nested option
+  (let* ((result (clime-parse clime-test--af-defaults-mutex '("pending")))
+         (params (clime-parse-result-params result)))
+    (should (equal "TODO" (plist-get params 'todo))))
+  ;; Can still override
+  (let* ((result (clime-parse clime-test--af-defaults-mutex
+                              '("pending" "--todo" "DONE")))
+         (params (clime-parse-result-params result)))
+    (should (equal "DONE" (plist-get params 'todo)))))
+
+(ert-deftest clime-test-alias-for/vals-mutex-does-not-mutate-target ()
+  "alias :vals on mutex option does not affect the original command."
+  (eval '(clime-app clime-test--af-vals-mutex-nomut
+           :version "1"
+           (clime-command query
+             :help "Query"
+             (clime-mutex qm
+               (clime-opt todo ("--todo") :help "Keyword")
+               (clime-opt sexp ("--sexp") :help "Sexp"))
+             (clime-handler (ctx) nil))
+           (clime-alias-for waiting (query)
+             :vals '((todo . "WAITING"))))
+        t)
+  ;; Original query command still has todo in its mutex
+  (let* ((query (cdr (assoc "query"
+                             (clime-group-children
+                              clime-test--af-vals-mutex-nomut))))
+         (all-opt-names (mapcar #'clime-option-name
+                                (clime-node-all-options query))))
+    (should (memq 'todo all-opt-names))
+    (should (memq 'sexp all-opt-names))))
+
+;;; ─── Group Lock Propagation (clime-di0) ─────────────────────────────
+
+(ert-deftest clime-test-alias-for/vals-mutex-locks-siblings ()
+  "alias :vals locking a mutex member locks all siblings in the group."
+  (let* ((exclusive (clime-check-exclusive 'qm '(todo sexp)))
+         (opt-todo (clime-make-option :name 'todo :flags '("--todo")))
+         (opt-sexp (clime-make-option :name 'sexp :flags '("--sexp")))
+         (mutex (clime-make-group :name "qm" :inline t
+                                  :options (list opt-todo opt-sexp)
+                                  :conform (list exclusive)))
+         (cmd (clime-make-command :name "query" :handler #'ignore
+                                  :children (list (cons "qm" mutex))))
+         (grp (clime-make-group :name "root"
+                                :children (list (cons "query" cmd))))
+         (alias (clime-alias--create
+                 :name "waiting"
+                 :target '("root" "query")
+                 :vals '((todo . "WAITING"))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "root" grp)
+                                              (cons "waiting" alias)))))
+    (let* ((resolved (cdr (assoc "waiting" (clime-group-children app))))
+           (sexp-opt (cl-find-if (lambda (o) (eq (clime-option-name o) 'sexp))
+                                 (clime-node-all-options resolved))))
+      ;; sexp must be locked as a sibling of locked todo
+      (should (clime-option-locked sexp-opt))
+      ;; sexp has no value — it was excluded, not set
+      (should-not (clime-option-default sexp-opt)))))
+
+(ert-deftest clime-test-alias-for/vals-mutex-all-locked-no-extra ()
+  "When :vals locks all mutex members, no extra propagation needed."
+  (let* ((exclusive (clime-check-exclusive 'qm '(todo sexp)))
+         (opt-todo (clime-make-option :name 'todo :flags '("--todo")))
+         (opt-sexp (clime-make-option :name 'sexp :flags '("--sexp")))
+         (mutex (clime-make-group :name "qm" :inline t
+                                  :options (list opt-todo opt-sexp)
+                                  :conform (list exclusive)))
+         (cmd (clime-make-command :name "query" :handler #'ignore
+                                  :children (list (cons "qm" mutex))))
+         (grp (clime-make-group :name "root"
+                                :children (list (cons "query" cmd))))
+         (alias (clime-alias--create
+                 :name "both-locked"
+                 :target '("root" "query")
+                 :vals '((todo . "WAITING") (sexp . "(active)"))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "root" grp)
+                                              (cons "both-locked" alias)))))
+    (let* ((resolved (cdr (assoc "both-locked" (clime-group-children app)))))
+      ;; Both locked with their values
+      (let ((todo (cl-find-if (lambda (o) (eq (clime-option-name o) 'todo))
+                              (clime-node-all-options resolved)))
+            (sexp (cl-find-if (lambda (o) (eq (clime-option-name o) 'sexp))
+                              (clime-node-all-options resolved))))
+        (should (clime-option-locked todo))
+        (should (equal "WAITING" (clime-option-default todo)))
+        (should (clime-option-locked sexp))
+        (should (equal "(active)" (clime-option-default sexp)))))))
+
+(ert-deftest clime-test-alias-for/vals-zip-locks-siblings ()
+  "alias :vals locking a zip member locks all siblings in the group."
+  (let* ((paired (clime-check-paired 'zg '(skip reason)))
+         (opt-skip (clime-make-option :name 'skip :flags '("--skip") :multiple t))
+         (opt-reason (clime-make-option :name 'reason :flags '("--reason") :multiple t))
+         (zip (clime-make-group :name "zg" :inline t
+                                :options (list opt-skip opt-reason)
+                                :conform (list paired)))
+         (cmd (clime-make-command :name "process" :handler #'ignore
+                                  :children (list (cons "zg" zip))))
+         (grp (clime-make-group :name "root"
+                                :children (list (cons "process" cmd))))
+         (alias (clime-alias--create
+                 :name "skip-all"
+                 :target '("root" "process")
+                 :vals '((skip . ("a" "b")))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "root" grp)
+                                              (cons "skip-all" alias)))))
+    (let* ((resolved (cdr (assoc "skip-all" (clime-group-children app))))
+           (reason-opt (cl-find-if (lambda (o) (eq (clime-option-name o) 'reason))
+                                   (clime-node-all-options resolved))))
+      ;; reason must be locked as a sibling of locked skip
+      (should (clime-option-locked reason-opt))
+      (should-not (clime-option-default reason-opt)))))
+
+(ert-deftest clime-test-alias-for/vals-plain-group-no-propagation ()
+  "Plain inline groups (no conformer) do not propagate locks."
+  (let* ((opt-a (clime-make-option :name 'alpha :flags '("--alpha")))
+         (opt-b (clime-make-option :name 'beta :flags '("--beta")))
+         (grp-inline (clime-make-group :name "plain" :inline t
+                                       :options (list opt-a opt-b)))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :children (list (cons "plain" grp-inline))))
+         (top (clime-make-group :name "root"
+                                :children (list (cons "cmd" cmd))))
+         (alias (clime-alias--create
+                 :name "locked-a"
+                 :target '("root" "cmd")
+                 :vals '((alpha . "x"))))
+         (app (clime-make-app :name "myapp"
+                              :children (list (cons "root" top)
+                                              (cons "locked-a" alias)))))
+    (let* ((resolved (cdr (assoc "locked-a" (clime-group-children app))))
+           (beta-opt (cl-find-if (lambda (o) (eq (clime-option-name o) 'beta))
+                                 (clime-node-all-options resolved))))
+      ;; beta should NOT be locked — plain group has no conformer
+      (should-not (clime-option-locked beta-opt)))))
+
+(ert-deftest clime-test-alias-for/vals-mutex-sibling-unreachable-cli ()
+  "Locked mutex siblings are unreachable from CLI parsing."
+  (eval '(clime-app clime-test--af-mutex-sibling-cli
+           :version "1"
+           (clime-command query
+             :help "Query"
+             (clime-mutex qm
+               (clime-opt todo ("--todo") :help "Keyword")
+               (clime-opt sexp ("--sexp") :help "Sexp"))
+             (clime-handler (ctx) nil))
+           (clime-alias-for waiting (query)
+             :vals '((todo . "WAITING"))))
+        t)
+  ;; --sexp is locked as sibling, so passing it from CLI is an error
+  (should-error (clime-parse clime-test--af-mutex-sibling-cli
+                             '("waiting" "--sexp" "(active)"))
+                :type 'clime-usage-error))
 
 (provide 'clime-alias-for-tests)
 ;;; clime-alias-for-tests.el ends here

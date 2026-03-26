@@ -1,5 +1,3 @@
-#!/bin/sh
-":"; S="$(realpath "$0")";D="$(dirname "$S")"; CLIME_ARGV0="$0" CLIME_MAIN_APP=clime-make exec emacs --batch -Q -L "$D" --eval "(setq load-file-name \"$S\")" --eval "(with-temp-buffer(insert-file-contents load-file-name)(setq lexical-binding t)(goto-char(point-min))(condition-case nil(while t(eval(read(current-buffer))t))(end-of-file nil)))" -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
 ;;; clime-make.el --- CLI tool for the clime framework  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Cosmin Octavian
@@ -388,6 +386,27 @@ CTX is the clime context."
         (let ((init-result (clime-make--init-handler ctx)))
           (format "%s\n%s" scaffold-result init-result))))))
 
+(defun clime-make--strip-handler (ctx)
+  "Handle the `strip' command: remove a clime shebang from an Elisp file.
+CTX is the clime context."
+  (clime-let ctx (file)
+    (let ((target (expand-file-name file)))
+      (unless (file-exists-p target)
+        (signal 'clime-usage-error
+                (list (format "%s does not exist" file))))
+      (unless (clime-make--clime-shebang-p target)
+        (signal 'clime-usage-error
+                (list (format "%s has no clime shebang to strip"
+                              (file-name-nondirectory file)))))
+      (with-temp-buffer
+        (insert-file-contents target)
+        (goto-char (point-min))
+        (forward-line 2)
+        (delete-region (point-min) (point))
+        (write-region nil nil target))
+      (set-file-modes target (logand (file-modes target) #o666))
+      (format "done: stripped shebang from %s" target))))
+
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
 (clime-app clime-make
@@ -395,51 +414,51 @@ CTX is the clime context."
   :help "clime — declarative CLI framework for Emacs Lisp."
 
   ;; ── init ─────────────────────────────────────────────────────────────
-  (clime-command
-   init
-   :help "Add a polyglot shebang header to an Emacs Lisp file"
+  (clime-command init
+    :help "Add a polyglot shebang header to an Emacs Lisp file"
 
-   (clime-arg file :help "The .el file to initialize")
+    (clime-arg file
+      :help "The .el file to initialize")
 
-   (clime-opt extra-load-path ("--load-path" "-L") :multiple
-                 :help "Additional load paths to include in the shebang")
+    (clime-opt extra-load-path ("--load-path" "-L")
+      :multiple :help "Additional load paths to include in the shebang")
 
-   (clime-opt self-dir ("--self-dir") :bool
-                 :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
+    (clime-opt self-dir ("--self-dir")
+      :bool :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
-   (clime-opt rel-load-path ("--rel-load-path" "-R") :multiple
-                 :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
+    (clime-opt rel-load-path ("--rel-load-path" "-R")
+      :multiple :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
 
-   (clime-opt standalone ("--standalone") :bool
-                 :help "Skip the automatic clime load path (for vendored/bundled setups)")
+    (clime-opt standalone ("--standalone")
+      :bool :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-   (clime-opt force ("--force" "-f") :bool
-                 :help "Replace an existing non-clime shebang")
+    (clime-opt force ("--force" "-f")
+      :bool :help "Replace an existing non-clime shebang")
 
-   (clime-opt env ("--env" "-e") :multiple
-                 :help "Set environment variable in shebang (NAME=VALUE)")
+    (clime-opt env ("--env" "-e")
+      :multiple :help "Set environment variable in shebang (NAME=VALUE)")
 
-   (clime-handler (ctx) (clime-make--init-handler ctx)))
+    (clime-handler (ctx) (clime-make--init-handler ctx)))
 
   ;; ── bundle ──────────────────────────────────────────────────────────
   (clime-command bundle
-                 :help "Concatenate multiple Elisp source files into a single file"
+    :help "Concatenate multiple Elisp source files into a single file"
 
-                 (clime-arg files :nargs :rest :help "Source files in dependency order")
+    (clime-arg files :nargs :rest :help "Source files in dependency order")
 
-                 (clime-opt output ("--output" "-o") :required
-                               :help "Output file path")
+    (clime-opt output ("--output" "-o")
+      :required :help "Output file path")
 
-                 (clime-opt provide ("--provide" "-p")
-                               :help "Feature name for (provide 'FEATURE) (default: output filename)")
+    (clime-opt provide ("--provide" "-p")
+      :help "Feature name for (provide 'FEATURE) (default: output filename)")
 
-                 (clime-opt main ("--main" "-m")
-                               :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
+    (clime-opt main ("--main" "-m")
+      :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
 
-                 (clime-opt description ("--description" "-d")
-                               :help "One-line description for the file header")
+    (clime-opt description ("--description" "-d")
+      :help "One-line description for the file header")
 
-                 (clime-handler (ctx) (clime-make--bundle-handler ctx)))
+    (clime-handler (ctx) (clime-make--bundle-handler ctx)))
 
   ;; ── scaffold ───────────────────────────────────────────────────────
   (clime-command scaffold
@@ -450,31 +469,38 @@ CTX is the clime context."
     (clime-handler (ctx) (clime-make--scaffold-handler ctx)))
 
   ;; ── quickstart ──────────────────────────────────────────────────────
-  (clime-command
-   quickstart
-   :help "Scaffold entrypoint + add shebang (scaffold + init)"
+  (clime-command quickstart
+    :help "Scaffold entrypoint + add shebang (scaffold + init)"
 
-   (clime-arg file :help "The .el file to set up")
+    (clime-arg file :help "The .el file to set up")
 
-   (clime-opt extra-load-path ("--load-path" "-L") :multiple
-                 :help "Additional load paths to include in the shebang")
+    (clime-opt self-dir ("--self-dir")
+      :bool :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
-   (clime-opt self-dir ("--self-dir") :bool
-                 :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
+    (clime-opt extra-load-path ("--load-path" "-L")
+      :multiple :help "Additional load paths to include in the shebang")
 
-   (clime-opt rel-load-path ("--rel-load-path" "-R") :multiple
-                 :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
+    (clime-opt rel-load-path ("--rel-load-path" "-R")
+      :multiple :help "Load path relative (to $(dirname \"$0\")) script dir")
 
-   (clime-opt standalone ("--standalone") :bool
-                 :help "Skip the automatic clime load path (for vendored/bundled setups)")
+    (clime-opt standalone ("--standalone")
+      :bool :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-   (clime-opt force ("--force" "-f") :bool
-                 :help "Replace an existing non-clime shebang")
+    (clime-opt force ("--force" "-f")
+      :bool :help "Replace an existing non-clime shebang")
 
-   (clime-opt env ("--env" "-e") :multiple
-                 :help "Set environment variable in shebang (NAME=VALUE)")
+    (clime-opt env ("--env" "-e")
+      :multiple :help "Set environment variable in shebang (NAME=VALUE)")
 
-   (clime-handler (ctx) (clime-make--quickstart-handler ctx))))
+    (clime-handler (ctx) (clime-make--quickstart-handler ctx)))
+
+  ;; ── strip ────────────────────────────────────────────────────────
+  (clime-command strip
+    :help "Remove the clime shebang header from an Elisp file"
+
+    (clime-arg file :help "The .el file to strip")
+
+    (clime-handler (ctx) (clime-make--strip-handler ctx))))
 
 (provide 'clime-make)
 ;;; Entrypoint:

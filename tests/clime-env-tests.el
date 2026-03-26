@@ -78,9 +78,10 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
 ;;; ─── Auto-derived from :env-prefix ─────────────────────────────────────
 
 (ert-deftest clime-test-env/auto-derive-from-prefix ()
-  "Option without :env auto-derives var from app :env-prefix."
+  "Option with :env t auto-derives var from app :env-prefix."
   (clime-test-with-env (("MYAPP_REGISTRY" "custom-reg"))
-    (let* ((opt (clime-make-option :name 'registry :flags '("--registry")))
+    (let* ((opt (clime-make-option :name 'registry :flags '("--registry")
+                                   :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -93,7 +94,7 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   "Hyphenated option names convert to underscores in env var."
   (clime-test-with-env (("MYAPP_DRY_RUN" "true"))
     (let* ((opt (clime-make-option :name 'dry-run :flags '("--dry-run")
-                                   :nargs 0))
+                                   :nargs 0 :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -101,12 +102,12 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
            (result (clime-parse app '("cmd"))))
       (should (eq (plist-get (clime-parse-result-params result) 'dry-run) t)))))
 
-(ert-deftest clime-test-env/explicit-env-overrides-prefix ()
-  "Explicit :env takes priority over auto-derivation."
-  (clime-test-with-env (("CUSTOM_VAR" "custom")
+(ert-deftest clime-test-env/explicit-env-suffix-with-prefix ()
+  "Explicit :env string is a suffix — prefix is prepended."
+  (clime-test-with-env (("MYAPP_CUSTOM" "custom")
                         ("MYAPP_VAL" "derived"))
     (let* ((opt (clime-make-option :name 'val :flags '("--val")
-                                   :env "CUSTOM_VAR"))
+                                   :env "CUSTOM"))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -134,7 +135,7 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   "Env var value is coerced to integer when option has :type integer."
   (clime-test-with-env (("MYAPP_PORT" "8080"))
     (let* ((opt (clime-make-option :name 'port :flags '("--port")
-                                   :type 'integer))
+                                   :type 'integer :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -147,7 +148,7 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   "Non-numeric env var signals usage error for integer option."
   (clime-test-with-env (("MYAPP_PORT" "abc"))
     (let* ((opt (clime-make-option :name 'port :flags '("--port")
-                                   :type 'integer))
+                                   :type 'integer :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -162,7 +163,8 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   (dolist (val '("1" "true" "TRUE" "yes" "YES" "True" "Yes"))
     (clime-test-with-env (("MYAPP_FORCE" nil))
       (setenv "MYAPP_FORCE" val)
-      (let* ((opt (clime-make-option :name 'force :flags '("--force") :nargs 0))
+      (let* ((opt (clime-make-option :name 'force :flags '("--force") :nargs 0
+                                     :env t))
              (cmd (clime-make-command :name "cmd" :handler #'ignore
                                       :options (list opt)))
              (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -175,7 +177,8 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   (dolist (val '("0" "false" "FALSE" "no" "NO" "False" "No"))
     (clime-test-with-env (("MYAPP_FORCE" nil))
       (setenv "MYAPP_FORCE" val)
-      (let* ((opt (clime-make-option :name 'force :flags '("--force") :nargs 0))
+      (let* ((opt (clime-make-option :name 'force :flags '("--force") :nargs 0
+                                     :env t))
              (cmd (clime-make-command :name "cmd" :handler #'ignore
                                       :options (list opt)))
              (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -186,7 +189,8 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
 (ert-deftest clime-test-env/boolean-invalid-signals-error ()
   "Invalid boolean env var value signals usage error."
   (clime-test-with-env (("MYAPP_FORCE" "maybe"))
-    (let* ((opt (clime-make-option :name 'force :flags '("--force") :nargs 0))
+    (let* ((opt (clime-make-option :name 'force :flags '("--force") :nargs 0
+                                   :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -200,7 +204,7 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   "Multiple option splits env var value on commas."
   (clime-test-with-env (("MYAPP_TAG" "dev,prod,test"))
     (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
-                                   :multiple t))
+                                   :multiple t :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -213,7 +217,7 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   "Separator option splits env var on separator, not comma."
   (clime-test-with-env (("MYAPP_TAG" "dev:prod:test"))
     (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
-                                   :multiple t :separator ":"))
+                                   :multiple t :separator ":" :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -228,7 +232,7 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   "Empty string env var is treated as unset."
   (clime-test-with-env (("MYAPP_VAL" ""))
     (let* ((opt (clime-make-option :name 'val :flags '("--val")
-                                   :default "fallback"))
+                                   :default "fallback" :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore
                                     :options (list opt)))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
@@ -241,7 +245,7 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   "Root-level options also get env var resolution."
   (clime-test-with-env (("MYAPP_VERBOSE" "3"))
     (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose")
-                                        :type 'integer))
+                                        :type 'integer :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
                                 :options (list root-opt)
@@ -254,7 +258,7 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
   "Count option from env var sets the count value."
   (clime-test-with-env (("MYAPP_VERBOSE" "3"))
     (let* ((opt (clime-make-option :name 'verbose :flags '("-v" "--verbose")
-                                   :count t))
+                                   :count t :env t))
            (cmd (clime-make-command :name "cmd" :handler #'ignore))
            (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
                                 :options (list opt)
@@ -262,6 +266,88 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
            (result (clime-parse app '("cmd"))))
       (should (equal (plist-get (clime-parse-result-params result) 'verbose)
                      3)))))
+
+;;; ─── :env t opt-in ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-env/env-t-with-prefix ()
+  ":env t with :env-prefix auto-derives PREFIX_OPTNAME."
+  (clime-test-with-env (("MYAPP_DEBUG" "true"))
+    (let* ((opt (clime-make-option :name 'debug :flags '("--debug")
+                                   :nargs 0 :env t))
+           (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                    :options (list opt)))
+           (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
+                                :children (list (cons "cmd" cmd))))
+           (result (clime-parse app '("cmd"))))
+      (should (eq (plist-get (clime-parse-result-params result) 'debug) t)))))
+
+(ert-deftest clime-test-env/env-t-without-prefix ()
+  ":env t without :env-prefix auto-derives OPTNAME (no prefix)."
+  (clime-test-with-env (("REVERSE" "from-env"))
+    (let* ((opt (clime-make-option :name 'reverse :flags '("--reverse")
+                                   :env t))
+           (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                    :options (list opt)))
+           (app (clime-make-app :name "t" :version "1"
+                                :children (list (cons "cmd" cmd))))
+           (result (clime-parse app '("cmd"))))
+      (should (equal (plist-get (clime-parse-result-params result) 'reverse)
+                     "from-env")))))
+
+(ert-deftest clime-test-env/explicit-suffix-no-prefix ()
+  ":env STRING without :env-prefix uses the string as-is."
+  (clime-test-with-env (("FILES" "a.org"))
+    (let* ((opt (clime-make-option :name 'files :flags '("--file")
+                                   :env "FILES"))
+           (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                    :options (list opt)))
+           (app (clime-make-app :name "t" :version "1"
+                                :children (list (cons "cmd" cmd))))
+           (result (clime-parse app '("cmd"))))
+      (should (equal (plist-get (clime-parse-result-params result) 'files)
+                     "a.org")))))
+
+;;; ─── clime--env-var-for-option unit tests ──────────────────────────────
+
+(ert-deftest clime-test-env/var-for-option-suffix-with-prefix ()
+  "String :env + prefix → PREFIX_SUFFIX."
+  (let* ((opt (clime-make-option :name 'files :flags '("--file")
+                                 :env "FILES"))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "APP")))
+    (should (equal (clime--env-var-for-option opt app) "APP_FILES"))))
+
+(ert-deftest clime-test-env/var-for-option-suffix-no-prefix ()
+  "String :env without prefix → string as-is."
+  (let* ((opt (clime-make-option :name 'files :flags '("--file")
+                                 :env "FILES"))
+         (app (clime-make-app :name "t" :version "1")))
+    (should (equal (clime--env-var-for-option opt app) "FILES"))))
+
+(ert-deftest clime-test-env/var-for-option-t-with-prefix ()
+  ":env t + prefix → PREFIX_OPTNAME."
+  (let* ((opt (clime-make-option :name 'debug :flags '("--debug")
+                                 :env t :nargs 0))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "APP")))
+    (should (equal (clime--env-var-for-option opt app) "APP_DEBUG"))))
+
+(ert-deftest clime-test-env/var-for-option-t-no-prefix ()
+  ":env t without prefix → OPTNAME."
+  (let* ((opt (clime-make-option :name 'reverse :flags '("--reverse")
+                                 :env t))
+         (app (clime-make-app :name "t" :version "1")))
+    (should (equal (clime--env-var-for-option opt app) "REVERSE"))))
+
+(ert-deftest clime-test-env/var-for-option-nil-with-prefix ()
+  "No :env + prefix → nil (explicit opt-in required)."
+  (let* ((opt (clime-make-option :name 'registry :flags '("--registry")))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "APP")))
+    (should-not (clime--env-var-for-option opt app))))
+
+(ert-deftest clime-test-env/var-for-option-nil-no-prefix ()
+  "No :env + no prefix → nil."
+  (let* ((opt (clime-make-option :name 'val :flags '("--val")))
+         (app (clime-make-app :name "t" :version "1")))
+    (should-not (clime--env-var-for-option opt app))))
 
 (provide 'clime-env-tests)
 ;;; clime-env-tests.el ends here

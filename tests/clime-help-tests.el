@@ -114,6 +114,18 @@
     (should (string-match-p "--out" help))
     (should-not (string-match-p "--secret" help))))
 
+(ert-deftest clime-test-help/locked-option-omitted ()
+  "Locked options are not shown in help."
+  (let* ((opt-visible (clime-make-option :name 'out :flags '("--out")
+                                          :help "Output file"))
+         (opt-locked (clime-make-option :name 'fmt :flags '("--format")
+                                        :help "Format" :locked t :default "csv"))
+         (cmd (clime-make-command :name "x" :handler #'ignore
+                                  :options (list opt-visible opt-locked)))
+         (help (clime-format-help cmd '("app" "x"))))
+    (should (string-match-p "--out" help))
+    (should-not (string-match-p "--format" help))))
+
 ;;; ─── Option Flag Formatting ────────────────────────────────────────────
 
 (ert-deftest clime-test-help/short-flag-first ()
@@ -1109,6 +1121,118 @@ Width applies to content; prefix is extra visual indentation."
         (should go-pos)
         (should ex-pos)
         (should (< go-pos ex-pos))))))
+
+;;; ─── Env var annotations ────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/env-annotation-with-prefix-and-env-t ()
+  "Option with :env t and app :env-prefix shows env var in help."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")
+                                 :help "Be verbose" :env t))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "\\[\\$MYAPP_VERBOSE\\]" help))))
+
+(ert-deftest clime-test-help/env-annotation-with-explicit-suffix ()
+  "Option with :env \"SUFFIX\" and app :env-prefix shows combined var."
+  (let* ((opt (clime-make-option :name 'files :flags '("--file")
+                                 :help "Input files" :env "FILES"))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "\\[\\$MYAPP_FILES\\]" help))))
+
+(ert-deftest clime-test-help/env-annotation-absent-without-env ()
+  "Option without :env has no env annotation even with :env-prefix."
+  (let* ((opt (clime-make-option :name 'limit :flags '("--limit")
+                                 :help "Max results"))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should-not (string-match-p "\\$MYAPP" help))))
+
+(ert-deftest clime-test-help/env-annotation-in-global-options ()
+  "Global Options section also shows env annotations."
+  (let* ((root-opt (clime-make-option :name 'verbose :flags '("--verbose")
+                                      :help "Be verbose" :env t))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
+                              :options (list root-opt)
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "Global Options:" help))
+    (should (string-match-p "\\[\\$MYAPP_VERBOSE\\]" help))))
+
+(ert-deftest clime-test-help/env-annotation-with-live-value ()
+  "Env annotation shows current value when env var is set."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                 :help "API token" :env t))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "MYAPP"
+                              :children (list (cons "cmd" cmd)))))
+    (let ((process-environment (append '("MYAPP_TOKEN=secret123")
+                                       process-environment)))
+      (let ((help (clime-format-help
+                   (cdr (car (clime-group-children app)))
+                   '("t" "cmd"))))
+        (should (string-match-p "\\[\\$MYAPP_TOKEN=secret123\\]" help))))))
+
+;;; ─── Required annotation ────────────────────────────────────────────────
+
+(ert-deftest clime-test-help/required-annotation ()
+  "Required option without default shows (required) in help."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token")
+                                 :help "API token" :required t))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "(required)" help))))
+
+(ert-deftest clime-test-help/required-with-default-no-annotation ()
+  "Required option with default does not show (required)."
+  (let* ((opt (clime-make-option :name 'out :flags '("--out")
+                                 :help "Output file" :required t
+                                 :default "out.txt"))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should-not (string-match-p "(required)" help))))
+
+(ert-deftest clime-test-help/optional-no-required-annotation ()
+  "Non-required option does not show (required)."
+  (let* ((opt (clime-make-option :name 'out :flags '("--out")
+                                 :help "Output file"))
+         (cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should-not (string-match-p "(required)" help))))
 
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

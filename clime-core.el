@@ -38,7 +38,7 @@
   (flags nil :type list :documentation "List of flag strings, e.g. (\"--verbose\" \"-v\").")
   (type 'string :type symbol :documentation "Type converter symbol.")
   (nargs nil :type (or integer null) :documentation "Arg count: nil=1, 0=boolean, N=fixed.")
-  (env nil :type (or string null) :documentation "Env var name override.")
+  (env nil :type (or string boolean null) :documentation "Env var name: string suffix (prefixed by app :env-prefix), t for auto-derive, or nil.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
@@ -49,7 +49,8 @@
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
   (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0).")
-  (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used."))
+  (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used.")
+  (locked nil :type boolean :documentation "When non-nil, option is locked (from alias :vals).  Locked options are hidden from CLI/help and rendered as read-only in invoke.  The locked value is stored in :default."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.
@@ -155,7 +156,8 @@ The returned symbol is a named function for debugging convenience."
         (signal 'clime-usage-error
                 (list (format "Options %s are mutually exclusive"
                               (mapconcat (lambda (k) (format "%s" k))
-                                         set-names ", ")))))
+                                         set-names ", "))
+                      :params set-names)))
       (cond
        ((= (length set-names) 1)
         (let ((winner (car set-names)))
@@ -173,7 +175,8 @@ The returned symbol is a named function for debugging convenience."
         (signal 'clime-usage-error
                 (list (format "One of %s is required"
                               (mapconcat (lambda (k) (format "%s" k))
-                                         member-names ", ")))))
+                                         member-names ", "))
+                      :params member-names)))
        (default
         (plist-put params group-name default))
        (t params)))))
@@ -199,7 +202,8 @@ under GROUP-NAME."
         (signal 'clime-usage-error
                 (list (format "Options %s are required"
                               (mapconcat (lambda (k) (format "%s" k))
-                                         member-names ", ")))))
+                                         member-names ", "))
+                      :params member-names)))
       ;; Partial presence check
       (when (and any-set (not all-set))
         (let ((missing (cl-remove-if
@@ -209,7 +213,8 @@ under GROUP-NAME."
                   (list (format "%s requires %s"
                                 (car set-names)
                                 (mapconcat (lambda (k) (format "%s" k))
-                                           missing ", "))))))
+                                           missing ", "))
+                        :params member-names))))
       ;; Cardinality check
       (when all-set
         (let ((counts (mapcar (lambda (k)
@@ -224,7 +229,8 @@ under GROUP-NAME."
                                  member-names)))
               (signal 'clime-usage-error
                       (list (format "Paired options must be used the same number of times: %s"
-                                    (mapconcat #'identity parts ", "))))))
+                                    (mapconcat #'identity parts ", "))
+                            :params member-names))))
           ;; Build zipped alist
           (let* ((n (car counts))
                  (zipped '()))
@@ -358,6 +364,24 @@ Walk the tree, find commands with non-nil `alias', resolve them
 by copying args, options, and handler from the target.  Idempotent."
   (clime--resolve-aliases-walk app app))
 
+(defun clime--deep-copy-inline-children (children)
+  "Deep-copy CHILDREN alist for alias resolution.
+Copies inline group structs and their option structs to avoid
+mutating the original target command."
+  (mapcar (lambda (entry)
+            (let ((child (cdr entry)))
+              (if (and (clime-group-p child) (clime-node-inline child))
+                  (let ((copy (copy-sequence child)))
+                    (setf (clime-node-options copy)
+                          (mapcar #'copy-sequence (clime-node-options child)))
+                    (when (clime-group-children child)
+                      (setf (clime-group-children copy)
+                            (clime--deep-copy-inline-children
+                             (clime-group-children child))))
+                    (cons (car entry) copy))
+                entry)))
+          children))
+
 (defun clime--resolve-aliases-walk (node app)
   "Walk NODE's subtree resolving aliases against APP root.
 Alias nodes are replaced in-place in the children alist with
@@ -376,7 +400,10 @@ resolved command copies."
                             :name (clime-node-name child)
                             :handler (clime-node-handler target)
                             :args (clime-node-args target)
-                            :options (copy-sequence (clime-node-options target))
+                            :options (mapcar #'copy-sequence
+                                            (clime-node-options target))
+                            :children (clime--deep-copy-inline-children
+                                       (clime-group-children target))
                             :help (or (clime-node-help child)
                                       (clime-node-help target))
                             :epilog (or (clime-node-epilog child)
@@ -385,32 +412,27 @@ resolved command copies."
                             :hidden (clime-node-hidden child)
                             :aliases (clime-node-aliases child)
                             :deprecated (clime-node-deprecated child))))
-            ;; Apply :defaults — patch :default on copied options
+            ;; Apply :defaults — patch :default on deep-copied options
             (dolist (dfl defaults)
               (let* ((name (car dfl))
                      (val (cdr dfl))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
-                                      (clime-node-options resolved))))
+                                      (clime-node-all-options resolved))))
                 (unless opt
                   (error "Alias %s: :defaults names unknown option `%s'"
                          (clime-node-name child) name))
-                ;; Replace with a copy to avoid mutating target's option
-                (let ((new-opt (copy-sequence opt)))
-                  (setf (clime-option-default new-opt) val)
-                  (setf (clime-node-options resolved)
-                        (mapcar (lambda (o) (if (eq o opt) new-opt o))
-                                (clime-node-options resolved))))))
-            ;; Apply :vals — remove options from list (hidden from CLI/help)
+                (setf (clime-option-default opt) val)))
+            ;; Apply :vals — lock options with their values
             (dolist (val-entry vals)
               (let* ((name (car val-entry))
+                     (val (cdr val-entry))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
-                                      (clime-node-options resolved))))
+                                      (clime-node-all-options resolved))))
                 (unless opt
                   (error "Alias %s: :vals names unknown option `%s'"
                          (clime-node-name child) name))
-                (setf (clime-node-options resolved)
-                      (cl-remove-if (lambda (o) (eq (clime-option-name o) name))
-                                    (clime-node-options resolved)))))
+                (setf (clime-option-locked opt) t
+                      (clime-option-default opt) val)))
             ;; Store vals for injection during finalize
             (when vals
               (setf (clime-node-locked-vals resolved) vals))
@@ -421,6 +443,30 @@ resolved command copies."
          ;; Group: recurse
          ((clime-group-p child)
           (clime--resolve-aliases-walk child app)))))))
+
+(defun clime--propagate-group-locks (node)
+  "Walk NODE's tree propagating locks through conformer groups.
+When an option inside an inline group with a :conform list is locked,
+lock all non-locked siblings in that group.  This prevents users from
+interacting with siblings that would always violate group constraints."
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (let ((child (cdr entry)))
+        (when (and (clime-group-p child) (clime-node-inline child)
+                   (clime-node-conform child))
+          ;; Inline conformer group — check for locked members
+          (let ((opts (clime-node-options child))
+                (has-locked nil))
+            (dolist (o opts)
+              (when (clime-option-locked o)
+                (setq has-locked t)))
+            (when has-locked
+              (dolist (o opts)
+                (unless (clime-option-locked o)
+                  (setf (clime-option-locked o) t))))))
+        ;; Recurse into all group children
+        (when (clime-group-p child)
+          (clime--propagate-group-locks child))))))
 
 (defun clime-make-group (&rest args)
   "Create a `clime-group' with validation.
@@ -531,6 +577,7 @@ ARGS is a plist of slot values."
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
     (clime--resolve-aliases app)
+    (clime--propagate-group-locks app)
     (clime--validate-tree app)
     app))
 
@@ -812,6 +859,26 @@ Sibling collisions are allowed."
       (when (clime-branch-p node)
         (dolist (entry (clime-group-children node))
           (clime-check-ancestor-collisions (cdr entry) merged path))))))
+
+;;; ─── Env var derivation ─────────────────────────────────────────────
+
+(defun clime--env-var-for-option (opt app)
+  "Return the env var name for OPT, or nil if none applies.
+:env STRING is a suffix (APP's :env-prefix prepended when present).
+:env t opts in to auto-derivation from option name.
+When :env is nil, no env var is derived."
+  (let ((env (clime-option-env opt))
+        (prefix (and (clime-app-p app) (clime-app-env-prefix app))))
+    (cond
+     ;; Explicit suffix string
+     ((stringp env)
+      (if prefix (concat prefix "_" env) env))
+     ;; Explicit opt-in (t)
+     (env
+      (let ((derived (upcase (replace-regexp-in-string
+                              "-" "_" (symbol-name (clime-option-name opt))))))
+        (if prefix (concat prefix "_" derived) derived)))
+     (t nil))))
 
 (provide 'clime-core)
 ;;; clime-core.el ends here

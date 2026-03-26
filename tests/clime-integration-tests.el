@@ -26,7 +26,11 @@
 (defun clime-test--run-script (script-path args &optional env)
   "Run SCRIPT-PATH with ARGS as a subprocess, returning (EXIT . OUTPUT).
 ENV is an optional alist of (NAME . VALUE) pairs to add to the
-process environment."
+process environment.  Skips the test if SCRIPT-PATH is not executable
+\(run `make init' to set up shebangs)."
+  (unless (file-executable-p script-path)
+    (signal 'ert-test-skipped
+            (list (format "%s not executable (run make init)" script-path))))
   (let* ((process-environment
           (append (mapcar (lambda (e) (format "%s=%s" (car e) (cdr e)))
                           env)

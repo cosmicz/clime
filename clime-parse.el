@@ -68,13 +68,16 @@ Only applies to long flags.  Does not double-negate --no-no-X."
 Walk the parent chain from CURRENT-NODE upward.
 For --no-X flags, checks if the positive --X option is negatable.
 Return (OPTION . SCOPE) where SCOPE is \\='current, \\='ancestor,
-\\='negated-current, or \\='negated-ancestor.  Returns nil if not found."
+\\='negated-current, or \\='negated-ancestor.  Returns nil if not found.
+Locked options (from alias :vals) are skipped."
   (let ((opt (clime-node-find-option current-node flag)))
+    (when (and opt (clime-option-locked opt)) (setq opt nil))
     (if opt
         (cons opt 'current)
       (let ((node (clime-node-parent current-node)))
         (while (and node (not opt))
           (setq opt (clime-node-find-option node flag))
+          (when (and opt (clime-option-locked opt)) (setq opt nil))
           (unless opt (setq node (clime-node-parent node))))
         (if opt
             (cons opt 'ancestor)
@@ -83,10 +86,12 @@ Return (OPTION . SCOPE) where SCOPE is \\='current, \\='ancestor,
             (when pos-flag
               (let ((pos-opt (clime-node-find-option current-node pos-flag))
                     (pos-node nil))
+                (when (and pos-opt (clime-option-locked pos-opt)) (setq pos-opt nil))
                 (unless pos-opt
                   (setq pos-node (clime-node-parent current-node))
                   (while (and pos-node (not pos-opt))
                     (setq pos-opt (clime-node-find-option pos-node pos-flag))
+                    (when (and pos-opt (clime-option-locked pos-opt)) (setq pos-opt nil))
                     (unless pos-opt (setq pos-node (clime-node-parent pos-node)))))
                 (when (and pos-opt (clime-option-negatable pos-opt))
                   (cons pos-opt (if pos-node 'negated-ancestor 'negated-current)))))))))))
@@ -311,15 +316,6 @@ Signals `clime-usage-error' if no content is available."
 
 ;;; ─── Env Var Provider ──────────────────────────────────────────────────
 
-(defun clime--env-var-for-option (opt app)
-  "Return the env var name for OPT, or nil if none applies.
-Uses explicit :env on the option, or auto-derives from APP's :env-prefix."
-  (or (clime-option-env opt)
-      (when (and (clime-app-p app) (clime-app-env-prefix app))
-        (concat (clime-app-env-prefix app) "_"
-                (upcase (replace-regexp-in-string
-                         "-" "_" (symbol-name (clime-option-name opt))))))))
-
 (defun clime--parse-boolean-env (value flag-or-name)
   "Parse VALUE as a boolean env var string.
 Return t for truthy values, nil for falsy.
@@ -378,9 +374,10 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
 
 (defun clime--apply-defaults (nodes params)
   "Apply default values for all options and args in NODES not already in PARAMS.
-NODES is a list of nodes whose params to process.  Returns updated PARAMS."
+NODES is a list of nodes whose params to process.  Returns updated PARAMS.
+Walks inline group children to reach options in mutex/zip groups."
   (dolist (node nodes)
-    (dolist (opt (clime-node-options node))
+    (dolist (opt (clime-node-all-options node))
       (let ((name (clime-option-name opt)))
         (unless (plist-member params name)
           (let ((default (clime-option-default opt)))
@@ -668,12 +665,21 @@ since static choices were already validated in pass 1."
                                     (mapconcat (lambda (c) (format "%s" c))
                                                resolved ", ")))))))))))
 
+(defun clime--call-conform (cfn val param)
+  "Call conform function CFN with VAL and optionally PARAM.
+If CFN accepts exactly 1 argument, call (CFN VAL).
+Otherwise call (CFN VAL PARAM) for backward compatibility."
+  (let ((max-args (cdr (func-arity cfn))))
+    (if (and (numberp max-args) (= max-args 1))
+        (funcall cfn val)
+      (funcall cfn val param))))
+
 (defun clime--run-conformers (nodes params)
   "Run :conform functions for options and args in NODES against PARAMS.
 Called in pass 2 after dynamic choices validation and env var application.
 Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
-\(value, param) and returns the conformed value; signaled errors become
-`clime-usage-error'."
+\(value) or (value, param) depending on arity, and returns the conformed
+value; signaled errors become `clime-usage-error'."
   (dolist (node nodes)
     (dolist (opt (clime-node-options node))
       (let ((cfn (clime-option-conform opt)))
@@ -682,7 +688,7 @@ Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
                  (val (plist-get params name)))
             (when val
               (condition-case err
-                  (let ((conformed (funcall cfn val opt)))
+                  (let ((conformed (clime--call-conform cfn val opt)))
                     (setq params (plist-put params name conformed)))
                 (error
                  (signal 'clime-usage-error
@@ -696,7 +702,7 @@ Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
                  (val (plist-get params name)))
             (when val
               (condition-case err
-                  (let ((conformed (funcall cfn val arg)))
+                  (let ((conformed (clime--call-conform cfn val arg)))
                     (setq params (plist-put params name conformed)))
                 (error
                  (signal 'clime-usage-error

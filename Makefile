@@ -1,8 +1,9 @@
 EMACS ?= emacs
 
 BATCH = $(EMACS) --batch -Q -L . -L ./tests
+CLIME_MAKE = $(BATCH) -l clime-make-main.el --
 
-.PHONY: all compile lint test tests dist init readme clean clean-elc help
+.PHONY: all compile lint test tests dist init strip readme clean clean-elc help
 
 all: compile
 
@@ -47,16 +48,27 @@ DIST_SRCS = clime-settings.el clime-core.el clime-parse.el \
 	clime-make.el
 
 dist:
-	@./clime-make.el bundle -o $(DIST_DIR)/clime.el \
+	@$(CLIME_MAKE) bundle -o $(DIST_DIR)/clime.el \
 		--provide clime --main clime-make-main.el \
 		--description "Declarative CLI framework for Emacs Lisp" \
 		$(DIST_SRCS)
-	@./clime-make.el init --standalone --env CLIME_MAIN_APP=clime \
+	@$(CLIME_MAKE) init --standalone --env CLIME_MAIN_APP=clime \
 		$(DIST_DIR)/clime.el
 
+CLOQ_DEPS ?=
+
 init:
-	@./clime-make.el init clime-make.el --self-dir --standalone
-	@./clime-make.el init examples/pkm.el -R .. --standalone
+	@$(CLIME_MAKE) quickstart clime-make.el --self-dir --standalone
+	@$(CLIME_MAKE) init examples/pkm.el -R .. --standalone
+	@$(CLIME_MAKE) init examples/cloq.el -R .. --standalone \
+		--env CLIME_MAIN_APP=cloq $(CLOQ_DEPS)
+
+strip:
+	@for f in clime-make.el examples/*.el; do \
+		if head -1 "$$f" | grep -q '^#!'; then \
+			$(CLIME_MAKE) strip "$$f"; \
+		fi; \
+	done
 
 readme:
 	@echo "Exporting README.org → README.md..."
@@ -81,7 +93,9 @@ help:
 	@echo "  test     - Run tests (SELECT= to filter)"
 	@echo "  tests    - Alias for 'test'"
 	@echo "  dist     - Build single-file dist/clime.el bundle"
-	@echo "  init     - Update shebangs on executable scripts"
+	@echo "  init     - Add shebangs to clime-make.el and examples"
+	@echo "             CLOQ_DEPS='-L /path/to/org-ql ...' for cloq deps"
+	@echo "  strip    - Remove shebangs from clime-make.el and examples"
 	@echo "  readme   - Export README.org to README.md"
 	@echo "  clean    - Remove .elc files and build artifacts"
 	@echo "  help     - Show this help message"

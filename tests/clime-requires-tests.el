@@ -159,9 +159,9 @@
 (ert-deftest clime-test-requires/env-var-satisfies ()
   "Env-var-set values satisfy the requirement."
   (let* ((opt-skip (clime-make-option :name 'skip :flags '("--skip")
-                                       :requires '(reason)))
+                                       :requires '(reason) :env t))
          (opt-reason (clime-make-option :name 'reason :flags '("--reason")
-                                         :requires '(skip)))
+                                         :requires '(skip) :env t))
          (cmd (clime-make-command :name "run" :handler (lambda (_ctx) "ok")
                                   :options (list opt-skip opt-reason)))
          (app (clime-make-app :name "t" :version "1" :env-prefix "TEST_REQ"

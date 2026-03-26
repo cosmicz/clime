@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 — 2026-03-25
+
+### Breaking changes
+
+- **`:env` opt-in required**: options no longer auto-derive env var
+  names from `:env-prefix` alone.  Add `:env` (or `:env t`) to each
+  option that should participate in env var resolution.  Explicit
+  `:env "SUFFIX"` still works as before.
+
+### Features
+
+- **`clime-invoke` structured return**: `clime-invoke` now returns
+  `(:params PLIST :exit EXIT :output OUTPUT)` instead of just the
+  params plist.  `:exit` is the handler exit code (integer or nil if
+  the user quit), `:output` is the captured handler output string.
+  Enables programmatic pipelines without inspecting buffer side effects.
+
+- **Help env annotations**: CLI `--help` output now shows env var names
+  on options that participate in env resolution.  Format: `[$VAR]` or
+  `[$VAR=value]` when the variable is set in the environment.
+
+- **Help `(required)` annotation**: options marked `:required` with no
+  `:default` display a `(required)` suffix in help text.
+
+- **`:conform` accepts 1-arg and 2-arg signatures**: option/arg
+  conformers can use `(lambda (val) ...)` (value only) or
+  `(lambda (val param) ...)` (value + param struct).  Arity is
+  detected automatically.
+
+- **Invoke: conformer inline validation**: the validation pipeline now
+  runs param conformers in the invoke menu after every mutation,
+  attributing errors to specific options inline.
+
+- **Invoke: locked conformer groups**: when an inline group member is
+  locked (e.g. via alias `:vals`), the entire conformer group is locked
+  in the invoke menu.
+
+- **Invoke: locked option metadata**: locked options display their full
+  metadata (value, source) in the invoke menu instead of being hidden.
+
+- **Invoke: visibility toggle**: `?` key cycles through three display
+  modes — `normal` (default), `all` (reveals hidden items with
+  annotation), `clean` (also hides deprecated).  Current mode shown in
+  footer.
+
+- **`make strip` command**: strips shebangs from tracked `.el` files
+  before commits.  `CLIME_MAKE` env var available in batch mode.
+
+### Fixes
+
+- **`:env-prefix` with explicit `:env` suffix**: `:env-prefix` now
+  correctly prepends to an explicit `:env` suffix instead of replacing
+  it.
+
+- **Alias `:vals`/`:defaults` in inline groups**: alias preset values
+  now correctly resolve options inside mutex/zip groups.
+
+- **Help: inline group children**: `--help` now displays options from
+  inline group children (mutex/zip) in categorized sections.
+
+- **Invoke quit/back keys**: reworked to `ESC`/`DEL`, freeing `q` for
+  user app bindings.
+
 ## 0.4.0 — 2026-03-19
 
 ### Option groups

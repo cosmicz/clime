@@ -37,7 +37,7 @@
 (require 'clime-output)
 (require 'clime-run)
 
-(defconst clime-version "0.4.0"
+(defconst clime-version "0.5.0"
   "The clime package version string.")
 
 (defconst clime--modules
