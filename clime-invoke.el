@@ -415,8 +415,8 @@ When more than 5 choices, truncate around SELECTED with ellipsis."
      ;; Multiple
      ((clime-option-multiple option)
       (if (and val (listp val) val)
-          (propertize (string-join (mapcar (lambda (v) (format "%s" v)) val) ", ")
-                      'face 'clime-invoke-active)
+          (string-join (mapcar (lambda (v) (propertize (format "%s" v) 'face 'clime-invoke-active)) val)
+                      ", ")
         (propertize "(unset)" 'face 'clime-invoke-unset)))
      ;; Plain value
      (t
