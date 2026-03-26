@@ -414,51 +414,51 @@ CTX is the clime context."
   :help "clime — declarative CLI framework for Emacs Lisp."
 
   ;; ── init ─────────────────────────────────────────────────────────────
-  (clime-command
-   init
-   :help "Add a polyglot shebang header to an Emacs Lisp file"
+  (clime-command init
+    :help "Add a polyglot shebang header to an Emacs Lisp file"
 
-   (clime-arg file :help "The .el file to initialize")
+    (clime-arg file
+      :help "The .el file to initialize")
 
-   (clime-opt extra-load-path ("--load-path" "-L") :multiple
-                 :help "Additional load paths to include in the shebang")
+    (clime-opt extra-load-path ("--load-path" "-L")
+      :multiple :help "Additional load paths to include in the shebang")
 
-   (clime-opt self-dir ("--self-dir") :bool
-                 :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
+    (clime-opt self-dir ("--self-dir")
+      :bool :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
-   (clime-opt rel-load-path ("--rel-load-path" "-R") :multiple
-                 :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
+    (clime-opt rel-load-path ("--rel-load-path" "-R")
+      :multiple :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
 
-   (clime-opt standalone ("--standalone") :bool
-                 :help "Skip the automatic clime load path (for vendored/bundled setups)")
+    (clime-opt standalone ("--standalone")
+      :bool :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-   (clime-opt force ("--force" "-f") :bool
-                 :help "Replace an existing non-clime shebang")
+    (clime-opt force ("--force" "-f")
+      :bool :help "Replace an existing non-clime shebang")
 
-   (clime-opt env ("--env" "-e") :multiple
-                 :help "Set environment variable in shebang (NAME=VALUE)")
+    (clime-opt env ("--env" "-e")
+      :multiple :help "Set environment variable in shebang (NAME=VALUE)")
 
-   (clime-handler (ctx) (clime-make--init-handler ctx)))
+    (clime-handler (ctx) (clime-make--init-handler ctx)))
 
   ;; ── bundle ──────────────────────────────────────────────────────────
   (clime-command bundle
-                 :help "Concatenate multiple Elisp source files into a single file"
+    :help "Concatenate multiple Elisp source files into a single file"
 
-                 (clime-arg files :nargs :rest :help "Source files in dependency order")
+    (clime-arg files :nargs :rest :help "Source files in dependency order")
 
-                 (clime-opt output ("--output" "-o") :required
-                               :help "Output file path")
+    (clime-opt output ("--output" "-o")
+      :required :help "Output file path")
 
-                 (clime-opt provide ("--provide" "-p")
-                               :help "Feature name for (provide 'FEATURE) (default: output filename)")
+    (clime-opt provide ("--provide" "-p")
+      :help "Feature name for (provide 'FEATURE) (default: output filename)")
 
-                 (clime-opt main ("--main" "-m")
-                               :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
+    (clime-opt main ("--main" "-m")
+      :help "Entrypoint file whose code is appended with a clime-main-script-p guard")
 
-                 (clime-opt description ("--description" "-d")
-                               :help "One-line description for the file header")
+    (clime-opt description ("--description" "-d")
+      :help "One-line description for the file header")
 
-                 (clime-handler (ctx) (clime-make--bundle-handler ctx)))
+    (clime-handler (ctx) (clime-make--bundle-handler ctx)))
 
   ;; ── scaffold ───────────────────────────────────────────────────────
   (clime-command scaffold
@@ -469,31 +469,30 @@ CTX is the clime context."
     (clime-handler (ctx) (clime-make--scaffold-handler ctx)))
 
   ;; ── quickstart ──────────────────────────────────────────────────────
-  (clime-command
-   quickstart
-   :help "Scaffold entrypoint + add shebang (scaffold + init)"
+  (clime-command quickstart
+    :help "Scaffold entrypoint + add shebang (scaffold + init)"
 
-   (clime-arg file :help "The .el file to set up")
+    (clime-arg file :help "The .el file to set up")
 
-   (clime-opt extra-load-path ("--load-path" "-L") :multiple
-                 :help "Additional load paths to include in the shebang")
+    (clime-opt self-dir ("--self-dir")
+      :bool :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
 
-   (clime-opt self-dir ("--self-dir") :bool
-                 :help "Add script's own directory to load path (uses $(dirname \"$0\") at runtime)")
+    (clime-opt extra-load-path ("--load-path" "-L")
+      :multiple :help "Additional load paths to include in the shebang")
 
-   (clime-opt rel-load-path ("--rel-load-path" "-R") :multiple
-                 :help "Load path relative to script dir (e.g. -R .. adds $(dirname \"$0\")/..)")
+    (clime-opt rel-load-path ("--rel-load-path" "-R")
+      :multiple :help "Load path relative (to $(dirname \"$0\")) script dir")
 
-   (clime-opt standalone ("--standalone") :bool
-                 :help "Skip the automatic clime load path (for vendored/bundled setups)")
+    (clime-opt standalone ("--standalone")
+      :bool :help "Skip the automatic clime load path (for vendored/bundled setups)")
 
-   (clime-opt force ("--force" "-f") :bool
-                 :help "Replace an existing non-clime shebang")
+    (clime-opt force ("--force" "-f")
+      :bool :help "Replace an existing non-clime shebang")
 
-   (clime-opt env ("--env" "-e") :multiple
-                 :help "Set environment variable in shebang (NAME=VALUE)")
+    (clime-opt env ("--env" "-e")
+      :multiple :help "Set environment variable in shebang (NAME=VALUE)")
 
-   (clime-handler (ctx) (clime-make--quickstart-handler ctx)))
+    (clime-handler (ctx) (clime-make--quickstart-handler ctx)))
 
   ;; ── strip ────────────────────────────────────────────────────────
   (clime-command strip

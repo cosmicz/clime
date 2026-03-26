@@ -2,8 +2,8 @@
 #+options: toc:nil num:nil
 
 *clime* is a declarative CLI framework for Emacs Lisp.  Write your
-app's commands, options, and arguments once with a structured DSL ---
-run it from the shell as an executable script or interactively from
+app's commands, options, and arguments once with a structured DSL
+then run it from the shell as an executable script or interactively from
 Emacs via =clime-invoke=.
 
 clime handles the plumbing: a polyglot shebang for direct shell
@@ -14,7 +14,8 @@ as both standalone CLIs and Emacs libraries.
 
 Here's ~clime-make~ (clime's own build tool, built with clime)
 running interactively:
-[[file:img/invoke-menu.png]]
+
+[[file:.github/assets/invoke-menu.png]]
 
 And from the command line:
 #+begin_src bash
