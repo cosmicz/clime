@@ -70,6 +70,24 @@ Returns a new list; ITEMS is not modified."
           (setq items (cdr items))))))
     (nreverse result)))
 
+;;; ─── :optional → :required Normalization ────────────────────────────────
+
+(defun clime--normalize-optional (plist)
+  "Normalize :optional into :required in PLIST.
+If :optional is truthy and :required is also present, signal an error.
+If :optional is truthy, strip :optional and set :required nil.
+If :optional is nil (explicit), strip :optional and set :required t.
+Returns a new plist; PLIST is not modified."
+  (if (not (plist-member plist :optional))
+      plist
+    (let ((opt-val (plist-get plist :optional))
+          (new (cl-copy-list plist)))
+      (cl-remf new :optional)
+      (when (plist-member plist :required)
+        (error ":optional and :required are mutually exclusive"))
+      (setq new (plist-put new :required (not opt-val)))
+      new)))
+
 ;;; ─── Body Parser ────────────────────────────────────────────────────────
 
 (defun clime--extract-keywords (body valid-keys)
@@ -325,6 +343,8 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defopt' template.
     (when from-name
       (setq plist (cl-copy-list plist))
       (cl-remf plist :from))
+    ;; :optional → :required nil (DSL-only shorthand, not a real slot)
+    (setq plist (clime--normalize-optional plist))
     ;; :bool/:flag t → :nargs 0 (DSL-only shorthand, not a real slot)
     (setq plist (clime--normalize-bool-flag plist))
     ;; :separator implies :multiple t
@@ -348,6 +368,8 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defarg' template.
     (when from-name
       (setq plist (cl-copy-list plist))
       (cl-remf plist :from))
+    ;; :optional → :required nil (DSL-only shorthand, not a real slot)
+    (setq plist (clime--normalize-optional plist))
     (if from-name
         (let ((template-sym (intern (format "clime--arg-%s" from-name))))
           `(apply #'clime-make-arg
@@ -593,11 +615,11 @@ Child forms:
 
 (cl-defmacro clime-opt (name flags
                         &rest plist
-                        &key bool flag from type help required default
-                        nargs env count multiple choices coerce conform
-                        separator category hidden deprecated
-                           negatable requires
-                           &allow-other-keys)
+                        &key bool flag from type help required optional
+                        default nargs env count multiple choices coerce
+                        conform separator category hidden deprecated
+                        negatable requires
+                        &allow-other-keys)
   "Define a CLI option NAME with FLAGS.
 NAME is a symbol — the canonical parameter name.
 FLAGS is a list of flag strings, e.g. (\"--verbose\" \"-v\").
@@ -609,6 +631,7 @@ Keyword arguments:
   :separator SEP    Split value by SEP (implies :multiple)
   :negatable t      Generate --no-X variant
   :required t       Option must be provided
+  :optional t       Option is not required (exclusive with :required)
   :requires SYMS    Other options that must also be set
   :nargs N          Number of arguments (0 = boolean)
   :type SYM         Type converter (\\='string, \\='integer, \\='number)
@@ -623,7 +646,7 @@ Keyword arguments:
   :help STR         One-line help text
   :from SYM         Inherit from `clime-defopt' template"
   (declare (indent 2))
-  (ignore bool flag from type help required default nargs env count
+  (ignore bool flag from type help required optional default nargs env count
           multiple choices coerce conform separator category hidden
           deprecated negatable requires)
   (clime--build-option (cons name (cons flags plist))))
@@ -633,8 +656,8 @@ Keyword arguments:
 
 (cl-defmacro clime-arg (name
                         &rest plist
-                        &key from type help required default nargs
-                        choices coerce conform deprecated
+                        &key from type help required optional default
+                        nargs choices coerce conform deprecated
                         &allow-other-keys)
   "Define a positional argument NAME.
 NAME is a symbol — the canonical parameter name.
@@ -647,12 +670,13 @@ Keyword arguments:
   :default VAL      Default value when not provided
   :nargs N          Number of arguments (:rest for rest args)
   :required BOOL    Whether arg is required (default t)
+  :optional BOOL    Arg is not required (exclusive with :required)
   :deprecated STR   Deprecation message or t
   :help STR         One-line help text
   :from SYM         Inherit from `clime-defarg' template"
   (declare (indent 1))
-  (ignore from type help required default nargs choices coerce conform
-          deprecated)
+  (ignore from type help required optional default nargs choices coerce
+          conform deprecated)
   (clime--build-arg (cons name plist)))
 
 (defalias 'clime-argument 'clime-arg)

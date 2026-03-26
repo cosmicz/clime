@@ -1724,5 +1724,78 @@
                    (clime-run app '("test-cmd2" "hello")))))
     (should (equal output "hello"))))
 
+;;; ─── :optional keyword ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-dsl/optional-arg-bare ()
+  "Bare :optional on clime-arg sets required to nil."
+  (let ((arg (eval '(clime-arg name :optional :help "Name") t)))
+    (should (clime-arg-p arg))
+    (should-not (clime-arg-required arg))))
+
+(ert-deftest clime-test-dsl/optional-arg-explicit-t ()
+  ":optional t on clime-arg sets required to nil."
+  (let ((arg (eval '(clime-arg name :optional t :help "Name") t)))
+    (should-not (clime-arg-required arg))))
+
+(ert-deftest clime-test-dsl/optional-nil-sets-required-arg ()
+  ":optional nil on clime-arg sets required to t."
+  (let ((arg (eval '(clime-arg name :optional nil :help "Name") t)))
+    (should (clime-arg-required arg))))
+
+(ert-deftest clime-test-dsl/optional-nil-sets-required-opt ()
+  ":optional nil on clime-opt sets required to t."
+  (let ((opt (eval '(clime-opt bar ("--bar") :optional nil :help "Bar") t)))
+    (should (clime-option-required opt))))
+
+(ert-deftest clime-test-dsl/optional-opt-bare ()
+  "Bare :optional on clime-opt sets required to nil."
+  (let ((opt (eval '(clime-opt bar ("--bar") :optional :help "Bar") t)))
+    (should (clime-option-p opt))
+    (should-not (clime-option-required opt))))
+
+(ert-deftest clime-test-dsl/optional-opt-explicit-t ()
+  ":optional t on clime-opt sets required to nil."
+  (let ((opt (eval '(clime-opt bar ("--bar") :optional t :help "Bar") t)))
+    (should-not (clime-option-required opt))))
+
+(ert-deftest clime-test-dsl/optional-and-required-conflict-arg ()
+  ":optional t and :required t together on clime-arg signals error."
+  (should-error
+   (eval '(clime-arg name :required t :optional t) t)
+   :type 'error))
+
+(ert-deftest clime-test-dsl/optional-and-required-conflict-opt ()
+  ":optional t and :required t together on clime-opt signals error."
+  (should-error
+   (eval '(clime-opt bar ("--bar") :required t :optional t) t)
+   :type 'error))
+
+(ert-deftest clime-test-dsl/optional-stripped-from-plist ()
+  ":optional does not leak to the struct (not a real slot)."
+  (let ((arg (eval '(clime-arg name :optional :help "Name") t)))
+    ;; If :optional leaked, clime-make-arg would error on unknown key
+    ;; or the struct would have garbage.  Just verify it's a valid struct.
+    (should (clime-arg-p arg))
+    (should (equal (clime-arg-help arg) "Name"))))
+
+(ert-deftest clime-test-dsl/optional-arg-parse-integration ()
+  "An :optional arg does not trigger missing-required-argument error."
+  (let* ((cmd (clime-command greet
+                :help "Greet"
+                (clime-arg name :optional :help "Name" :default "world")
+                (clime-handler (ctx)
+                  (princ (plist-get (clime-context-params ctx) 'name))
+                  nil)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list cmd))))
+    ;; Without the arg — should use default, no error
+    (let ((output (with-output-to-string
+                    (clime-run app '("greet")))))
+      (should (equal output "world")))
+    ;; With the arg — should use provided value
+    (let ((output (with-output-to-string
+                    (clime-run app '("greet" "Alice")))))
+      (should (equal output "Alice")))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here
