@@ -105,6 +105,8 @@ and `function' wrappers like #\\='(lambda ...)."
   (pcase form
     (`(apply ,(or `(function ,fn) `(quote ,fn)) . ,_) fn)
     (`(function (lambda . ,_)) 'lambda)
+    (`(function ,(pred symbolp)) 'function)
+    (`(quote ,(pred symbolp)) 'quote)
     (`(cons ,_ ,inner) (clime--expanded-constructor inner))
     (`(,head . ,_) head)
     (_ nil)))
@@ -116,7 +118,9 @@ and `function' wrappers like #\\='(lambda ...)."
     (clime-alias--create       . :children)
     (clime-make-group          . :children)
     (clime-make-output-format  . :output-formats)
-    (lambda                    . :handler))
+    (lambda                    . :handler)
+    (function                  . :handler)
+    (quote                     . :handler))
   "Map from expanded constructor symbol to `clime--classify-body' category.")
 
 (defun clime--classify-body (forms)
@@ -763,12 +767,18 @@ Expands to an inline group with conformer via `clime-check-paired'."
   (declare (indent 1))
   (clime--build-zip-conform (cons name body)))
 
-(defmacro clime-handler (arglist &rest body)
-  "Define a command handler with ARGLIST and BODY.
-ARGLIST is typically (CTX) — receives the parse context.
-BODY is the handler implementation."
+(defmacro clime-handler (arglist-or-fn &rest body)
+  "Define a command handler.
+With ARGLIST-OR-FN as a list and BODY, produces (lambda ARGLIST-OR-FN BODY).
+With a single function reference, passes it through:
+  (clime-handler #\\='my-fn)  → #\\='my-fn
+  (clime-handler \\='my-fn)   → \\='my-fn"
   (declare (indent 1))
-  `(lambda ,arglist ,@body))
+  (if (and (null body)
+           (or (not (listp arglist-or-fn))
+               (memq (car-safe arglist-or-fn) '(function quote))))
+      arglist-or-fn
+    `(lambda ,arglist-or-fn ,@body)))
 
 (provide 'clime-dsl)
 ;;; clime-dsl.el ends here

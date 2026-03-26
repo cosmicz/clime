@@ -1676,5 +1676,53 @@
          (opt (car (clime-node-options cmd))))
     (should (eq (clime-option-env opt) t))))
 
+;;; ─── clime-handler Sugar ────────────────────────────────────────────
+
+(defun clime-test--echo-handler (ctx)
+  "Test handler that returns the id param."
+  (clime-ctx-get ctx 'id))
+
+(ert-deftest clime-test-dsl/handler-sharp-quote ()
+  "clime-handler with #'fn passes the function through."
+  (let ((h (clime-handler #'clime-test--echo-handler)))
+    (should (eq h #'clime-test--echo-handler))))
+
+(ert-deftest clime-test-dsl/handler-quote ()
+  "clime-handler with 'fn passes the symbol through."
+  (let ((h (clime-handler 'clime-test--echo-handler)))
+    (should (eq h 'clime-test--echo-handler))))
+
+(ert-deftest clime-test-dsl/handler-lambda-unchanged ()
+  "clime-handler with arglist + body still produces a lambda."
+  (let ((h (clime-handler (ctx) (clime-ctx-get ctx 'id))))
+    (should (functionp h))
+    (should (equal (funcall h (clime-context--create
+                               :params '(id "42")))
+                   "42"))))
+
+(ert-deftest clime-test-dsl/handler-sharp-quote-in-command ()
+  "clime-command with (clime-handler #'fn) works end-to-end."
+  (let* ((cmd (clime-command test-cmd
+                :help "Test"
+                (clime-arg id :help "ID")
+                (clime-handler #'clime-test--echo-handler)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list cmd)))
+         (output (with-output-to-string
+                   (clime-run app '("test-cmd" "hello")))))
+    (should (equal output "hello"))))
+
+(ert-deftest clime-test-dsl/handler-quote-in-command ()
+  "clime-command with (clime-handler 'fn) works end-to-end."
+  (let* ((cmd (clime-command test-cmd2
+                :help "Test"
+                (clime-arg id :help "ID")
+                (clime-handler 'clime-test--echo-handler)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list cmd)))
+         (output (with-output-to-string
+                   (clime-run app '("test-cmd2" "hello")))))
+    (should (equal output "hello"))))
+
 (provide 'clime-dsl-tests)
 ;;; clime-dsl-tests.el ends here
