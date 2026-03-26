@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`:optional` keyword**: `clime-arg` and `clime-opt` now accept
+  `:optional` as the inverse of `:required`.  Bare `:optional` or
+  `:optional t` sets `:required nil`; `:optional nil` sets `:required t`.
+  Mutually exclusive with `:required` (error if both present).
+
 ## 0.5.0 — 2026-03-25
 
 ### Breaking changes

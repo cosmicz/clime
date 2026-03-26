@@ -488,7 +488,9 @@ same result.
 
 Mark an option as ~:required~ to enforce that it must be provided.
 Unlike positional args (which are required by default), options are
-optional by default --- ~:required~ makes them mandatory:
+optional by default --- ~:required~ makes them mandatory.  The inverse
+keyword ~:optional~ is also available: on args it means ~:required nil~,
+on options it's the default but can be used for clarity:
 
 #+begin_src emacs-lisp
 (clime-opt token ("--token") :required
@@ -649,7 +651,7 @@ Declare positional arguments with ~clime-arg~:
       (format "Showing %s" id))))
 #+end_src
 
-Arguments are required by default.  Use ~:required nil~ for optional args.
+Arguments are required by default.  Use ~:optional~ (or ~:required nil~) for optional args.
 
 *** Rest args
 
@@ -1206,10 +1208,10 @@ All parameter forms (~clime-opt~, ~clime-arg~) accept: ~:type~,
 | ~clime-app~           |                    | Root application definition      | ~:version~, ~:env-prefix~, ~:setup~                                  |
 | ~clime-command~       |                    | Leaf command (has handler)       | All shared command slots                                              |
 | ~clime-group~         |                    | Branch node (has children)       | ~:inline~                                                             |
-| ~clime-opt~           | ~clime-option~     | Named option (flag or value)     | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:requires~, ~:env~, ~:category~ |
+| ~clime-opt~           | ~clime-option~     | Named option (flag or value)     | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:optional~, ~:requires~, ~:env~, ~:category~ |
 | ~clime-mutex~         |                    | Exclusive option group           | Group name, ~:default~, contains ~clime-opt~ forms                    |
 | ~clime-zip~           |                    | Paired option group              | Group name, contains ~clime-opt~ forms                                |
-| ~clime-arg~           | ~clime-argument~   | Positional argument              | ~:nargs~, ~:required~                                                 |
+| ~clime-arg~           | ~clime-argument~   | Positional argument              | ~:nargs~, ~:required~, ~:optional~                                    |
 | ~clime-defopt~        | ~clime-defoption~  | Reusable option template         | Any option slot except ~:name~, ~:flags~                              |
 | ~clime-defarg~        | ~clime-defargument~ | Reusable arg template            | Any arg slot except ~:name~                                           |
 | ~clime-defcommand~    |                    | Composable command (~defvar~)    | Same as ~clime-command~                                               |
