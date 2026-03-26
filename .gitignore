@@ -18,6 +18,9 @@ tmp/
 # Distribution build
 dist/
 
+# Local executables
+bin/
+
 # Generated from README.org via make readme
 README.md
 

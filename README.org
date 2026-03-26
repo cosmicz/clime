@@ -18,11 +18,33 @@ running interactively:
 [[file:.github/assets/invoke-menu.png]]
 
 And from the command line:
-#+begin_src bash
-./clime-make.el quickstart greet.el        # scaffold + shebang
-./clime-make.el init --self-dir myapp.el   # just the shebang
-./clime-make.el bundle -o dist/app.el ...  # single-file distribution
+
+#+begin_src sh
+./clime-make.el quickstart --help
 #+end_src
+
+#+RESULTS:
+#+begin_example shell
+Usage: clime-make.el quickstart [OPTIONS] <file>
+
+Scaffold entrypoint + add shebang (scaffold + init)
+
+Arguments:
+  <file>    The .el file to set up
+
+Options:
+  --self-dir                       Add script's own directory to load path (uses
+                                   $(dirname "$0") at runtime)
+  -L, --load-path VALUE ...        Additional load paths to include in the
+                                   shebang
+  -R, --rel-load-path VALUE ...    Load path relative (to $(dirname "$0"))
+                                   script dir
+  --standalone                     Skip the automatic clime load path (for
+                                   vendored/bundled setups)
+  -f, --force                      Replace an existing non-clime shebang
+  -e, --env VALUE ...              Set environment variable in shebang
+                                   (NAME=VALUE)
+#+end_example
 
 * Getting Started
 

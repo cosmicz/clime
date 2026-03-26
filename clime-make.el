@@ -235,10 +235,11 @@ Returns FEATURE as a symbol, or nil if not found."
 (defun clime-make--init-handler (ctx)
   "Handle the `init' command: add a polyglot shebang to an Elisp file.
 CTX is the clime context."
-  (clime-let ctx (file (extras extra-load-path)
+  (clime-let ctx (file output (extras extra-load-path)
                        (rels rel-load-path) self-dir standalone force env)
     (let* ((clime-dir (file-name-directory clime-make--self-path))
-           (target (expand-file-name file))
+           (source (expand-file-name file))
+           (target (if output (expand-file-name output) source))
            (resolve (or self-dir rels))
            (self-dir-flag (if self-dir " -L \"$D\"" ""))
            (rel-flags
@@ -258,9 +259,14 @@ CTX is the clime context."
               (format " -L %S" clime-dir)))
            (load-paths
             (concat self-dir-flag rel-flags clime-flag extra-flags)))
-      (unless (file-exists-p target)
+      (unless (file-exists-p source)
         (signal 'clime-usage-error
                 (list (format "%s does not exist" file))))
+      (when output
+        (let ((dir (file-name-directory target)))
+          (when (and dir (not (file-directory-p dir)))
+            (make-directory dir t)))
+        (copy-file source target t))
       (when env
         (clime-make--validate-env-vars env))
       (let ((action (clime-make--write-shebang target env load-paths force resolve)))
@@ -369,9 +375,22 @@ CTX is the clime context."
 (defun clime-make--quickstart-handler (ctx)
   "Handle the `quickstart' command: scaffold + init with auto CLIME_MAIN_APP.
 CTX is the clime context."
-  (clime-let ctx (file env)
-    (let* ((target (expand-file-name file))
-           (app-sym (clime-make--detect-app target)))
+  (clime-let ctx (file output env)
+    (let* ((source (expand-file-name file))
+           (target (if output (expand-file-name output) source))
+           (app-sym (clime-make--detect-app source)))
+      ;; When -o is set, copy source to output first, then redirect
+      ;; scaffold and init to operate on the copy
+      (when output
+        (let ((dir (file-name-directory target)))
+          (when (and dir (not (file-directory-p dir)))
+            (make-directory dir t)))
+        (copy-file source target t)
+        (setf (clime-context-params ctx)
+              (plist-put (clime-context-params ctx) 'file target))
+        ;; Clear output so init handler doesn't copy again
+        (setf (clime-context-params ctx)
+              (plist-put (clime-context-params ctx) 'output nil)))
       ;; Scaffold first
       (let ((scaffold-result (clime-make--scaffold-handler ctx)))
         ;; Auto-inject CLIME_MAIN_APP unless user already passed it
@@ -438,6 +457,9 @@ CTX is the clime context."
     (clime-opt env ("--env" "-e")
       :multiple :help "Set environment variable in shebang (NAME=VALUE)")
 
+    (clime-opt output ("--output" "-o")
+      :help "Write to OUTPUT instead of modifying the source file")
+
     (clime-handler (ctx) (clime-make--init-handler ctx)))
 
   ;; ── bundle ──────────────────────────────────────────────────────────
@@ -491,6 +513,9 @@ CTX is the clime context."
 
     (clime-opt env ("--env" "-e")
       :multiple :help "Set environment variable in shebang (NAME=VALUE)")
+
+    (clime-opt output ("--output" "-o")
+      :help "Write to OUTPUT instead of modifying the source file")
 
     (clime-handler (ctx) (clime-make--quickstart-handler ctx)))
 

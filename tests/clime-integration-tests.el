@@ -696,6 +696,76 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
        (should (= 0 (car result)))
        (should (equal "Hello, world!" (cdr result)))))))
 
+;;; ─── Init/Quickstart --output ───────────────────────────────────────────
+
+(ert-deftest clime-test-integration/init-output-copies-to-target ()
+  "init -o writes shebang to output file, leaving source untouched."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-app.el"))
+          (out-file (expand-file-name "out/test-app.el")))
+     (clime-test--write-app-source app-file)
+     (let ((source-before (with-temp-buffer
+                            (insert-file-contents app-file)
+                            (buffer-string)))
+           (result (clime-test--run-script
+                    clime-make (list "init" app-file "-o" out-file))))
+       (should (= 0 (car result)))
+       (should (string-match-p "is now executable" (cdr result)))
+       ;; Source unchanged
+       (should (equal source-before
+                      (with-temp-buffer
+                        (insert-file-contents app-file)
+                        (buffer-string))))
+       ;; Output has shebang
+       (with-temp-buffer
+         (insert-file-contents out-file)
+         (should (string-prefix-p "#!/bin/sh" (buffer-string))))
+       ;; Output is executable
+       (should (file-executable-p out-file))))))
+
+(ert-deftest clime-test-integration/init-output-creates-directories ()
+  "init -o creates parent directories for the output file."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-app.el"))
+          (out-file (expand-file-name "deep/nested/dir/app.el")))
+     (clime-test--write-app-source app-file)
+     (let ((result (clime-test--run-script
+                    clime-make (list "init" app-file "-o" out-file))))
+       (should (= 0 (car result)))
+       (should (file-exists-p out-file))))))
+
+(ert-deftest clime-test-integration/quickstart-output-copies-to-target ()
+  "quickstart -o scaffolds+inits to output file, leaving source untouched."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-app.el"))
+          (out-file (expand-file-name "out/test-app.el")))
+     (clime-test--write-app-with-provide app-file)
+     (let ((source-before (with-temp-buffer
+                            (insert-file-contents app-file)
+                            (buffer-string)))
+           (result (clime-test--run-script
+                    clime-make (list "quickstart" app-file "-o" out-file))))
+       (should (= 0 (car result)))
+       ;; Source unchanged
+       (should (equal source-before
+                      (with-temp-buffer
+                        (insert-file-contents app-file)
+                        (buffer-string))))
+       ;; Output has both shebang and entrypoint
+       (with-temp-buffer
+         (insert-file-contents out-file)
+         (let ((content (buffer-string)))
+           (should (string-prefix-p "#!/bin/sh" content))
+           (should (string-match-p ";;; Entrypoint:" content))
+           (should (string-match-p "CLIME_MAIN_APP=test-app" content))))
+       ;; Output runs
+       (let ((result (clime-test--run-script out-file '("hello" "world"))))
+         (should (= 0 (car result)))
+         (should (equal "Hello, world!" (cdr result))))))))
+
 ;;; ─── Bundle Command ─────────────────────────────────────────────────────
 
 (defun clime-test--write-module (file-path feature code)

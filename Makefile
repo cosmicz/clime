@@ -3,7 +3,7 @@ EMACS ?= emacs
 BATCH = $(EMACS) --batch -Q -L . -L ./tests
 CLIME_MAKE = $(BATCH) -l clime-make-main.el --
 
-.PHONY: all compile lint test tests dist init strip readme clean clean-elc help
+.PHONY: all compile lint test tests dist bin init strip readme clean clean-elc help
 
 all: compile
 
@@ -55,6 +55,26 @@ dist:
 	@$(CLIME_MAKE) init --standalone --env CLIME_MAIN_APP=clime \
 		$(DIST_DIR)/clime.el
 
+# ── Local executables (gitignored) ─────────────────────────────────
+BIN_DIR := bin
+
+# Auto-discover straight.el repos for cloq dependencies
+STRAIGHT_DIR ?= $(HOME)/.emacs.d/.local/straight/repos
+CLOQ_DEPS_LIST := org-ql s.el dash.el ts.el
+CLOQ_LP := $(foreach d,$(CLOQ_DEPS_LIST),-L $(STRAIGHT_DIR)/$(d))
+
+bin/clime: $(DIST_SRCS) clime-make-main.el
+	@mkdir -p $(BIN_DIR)
+	@$(MAKE) --no-print-directory dist
+	@cp $(DIST_DIR)/clime.el $@
+
+bin/cloq: examples/cloq.el
+	@mkdir -p $(BIN_DIR)
+	@$(CLIME_MAKE) init $< -o $@ -L .. $(CLOQ_LP) \
+		--env CLIME_MAIN_APP=cloq
+
+bin: bin/clime bin/cloq
+
 CLOQ_DEPS ?=
 
 init:
@@ -82,7 +102,7 @@ clean-elc:
 
 clean: clean-elc
 	@echo "Cleaning up all build artifacts..."
-	@rm -rf .packages $(DIST_DIR)
+	@rm -rf .packages $(DIST_DIR) $(BIN_DIR)
 	@echo "Done."
 
 help:
@@ -93,6 +113,8 @@ help:
 	@echo "  test     - Run tests (SELECT= to filter)"
 	@echo "  tests    - Alias for 'test'"
 	@echo "  dist     - Build single-file dist/clime.el bundle"
+	@echo "  bin      - Build local executables in bin/ (gitignored)"
+	@echo "             STRAIGHT_DIR= to override straight.el repos path"
 	@echo "  init     - Add shebangs to clime-make.el and examples"
 	@echo "             CLOQ_DEPS='-L /path/to/org-ql ...' for cloq deps"
 	@echo "  strip    - Remove shebangs from clime-make.el and examples"
