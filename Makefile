@@ -73,7 +73,11 @@ bin/cloq: examples/cloq.el
 	@$(CLIME_MAKE) init $< -o $@ -L .. $(CLOQ_LP) \
 		--env CLIME_MAIN_APP=cloq
 
-bin: bin/clime bin/cloq
+bin/greeter: examples/greeter.el
+	@mkdir -p $(BIN_DIR)
+	@$(CLIME_MAKE) init --client $< -o $@ -R .. --standalone
+
+bin: bin/clime bin/cloq bin/greeter
 
 CLOQ_DEPS ?=
 

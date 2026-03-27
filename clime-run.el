@@ -173,5 +173,60 @@ No-op when called from an interactive Emacs session."
       (setq command-line-args-left nil)
       (kill-emacs (clime-run app args)))))
 
+;;; ─── Emacsclient Dispatch ─────────────────────────────────────────────
+
+(defun clime-run-client (app-sym dir &rest plist)
+  "Run the clime app named by APP-SYM via emacsclient IPC.
+DIR is the temp directory for file-based communication:
+  DIR/argv — null-delimited argument list (input)
+  DIR/in   — stdin content, read via CLIME_STDIN_FILE (input, optional)
+  DIR/out  — captured stdout (output)
+  DIR/err  — captured stderr/messages (output)
+  DIR/exit — integer exit code (output)
+
+PLIST accepts:
+  :load-path  List of directories to add to `load-path'.
+  :file       Path to the .el file defining the app (loaded on first call).
+
+Does NOT call `kill-emacs'.  Returns nil."
+  ;; Lazy-load app
+  (dolist (p (plist-get plist :load-path))
+    (add-to-list 'load-path p))
+  (let ((app-file (plist-get plist :file)))
+    (when (and (not (boundp app-sym)) app-file)
+      (load app-file nil t)))
+  ;; Read args from null-delimited file
+  (let* ((argv-file (expand-file-name "argv" dir))
+         (args (when (file-exists-p argv-file)
+                 (with-temp-buffer
+                   (insert-file-contents argv-file)
+                   (split-string (buffer-string) "\0" t))))
+         ;; Set up stdin file if present
+         (in-file (expand-file-name "in" dir))
+         (process-environment
+          (if (file-exists-p in-file)
+              (cons (concat "CLIME_STDIN_FILE=" in-file) process-environment)
+            process-environment))
+         ;; Capture stdout
+         (out-buf (generate-new-buffer " *clime-client-out*"))
+         (err-msgs nil)
+         (exit-code
+          (let ((standard-output out-buf)
+                (inhibit-message t))
+            (cl-letf (((symbol-function 'message)
+                       (lambda (fmt &rest margs)
+                         (push (apply #'format fmt margs) err-msgs))))
+              (clime-run (symbol-value app-sym) args)))))
+    ;; Write results
+    (with-temp-file (expand-file-name "out" dir)
+      (insert-buffer-substring out-buf))
+    (with-temp-file (expand-file-name "err" dir)
+      (dolist (msg (nreverse err-msgs))
+        (insert msg "\n")))
+    (with-temp-file (expand-file-name "exit" dir)
+      (insert (number-to-string (or exit-code 0))))
+    (kill-buffer out-buf)
+    nil))
+
 (provide 'clime-run)
 ;;; clime-run.el ends here

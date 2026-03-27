@@ -450,5 +450,200 @@
       (setq code (clime-run--execute (lambda (_) (error "boom")) ctx)))
     (should (= 1 code))))
 
+;;; ─── clime-run-client ───────────────────────────────────────────────────
+
+(defvar clime-test--client-app nil
+  "Test app for clime-run-client tests.")
+
+(eval '(clime-app clime-test--client-app
+         :version "1"
+         (clime-command greet
+           :help "Greet"
+           (clime-arg name :optional :default "world" :help "Name")
+           (clime-handler (ctx)
+             (princ (format "Hello, %s!"
+                            (plist-get (clime-context-params ctx) 'name)))
+             nil))
+         (clime-command fail
+           :help "Fail"
+           (clime-handler (ctx)
+             (error "deliberate error"))))
+      t)
+
+(ert-deftest clime-test-run/client-captures-stdout ()
+  "clime-run-client writes handler output to DIR/out."
+  (clime-test-with-temp-dir
+   (let ((dir default-directory))
+     ;; Write argv: null-delimited
+     (with-temp-file (expand-file-name "argv" dir)
+       (insert "greet\0Alice\0"))
+     (clime-run-client 'clime-test--client-app dir)
+     (should (equal "Hello, Alice!"
+                    (with-temp-buffer
+                      (insert-file-contents (expand-file-name "out" dir))
+                      (buffer-string))))
+     (should (equal "0"
+                    (with-temp-buffer
+                      (insert-file-contents (expand-file-name "exit" dir))
+                      (buffer-string)))))))
+
+(ert-deftest clime-test-run/client-captures-exit-code ()
+  "clime-run-client writes nonzero exit code on error."
+  (clime-test-with-temp-dir
+   (let ((dir default-directory))
+     (with-temp-file (expand-file-name "argv" dir)
+       (insert "fail\0"))
+     (clime-run-client 'clime-test--client-app dir)
+     (should (equal "1"
+                    (with-temp-buffer
+                      (insert-file-contents (expand-file-name "exit" dir))
+                      (buffer-string)))))))
+
+(ert-deftest clime-test-run/client-captures-stderr ()
+  "clime-run-client captures message calls to DIR/err."
+  (clime-test-with-temp-dir
+   (let ((dir default-directory))
+     (with-temp-file (expand-file-name "argv" dir)
+       (insert "fail\0"))
+     (clime-run-client 'clime-test--client-app dir)
+     (let ((err (with-temp-buffer
+                  (insert-file-contents (expand-file-name "err" dir))
+                  (buffer-string))))
+       (should (string-match-p "deliberate error" err))))))
+
+(ert-deftest clime-test-run/client-default-args ()
+  "clime-run-client works with no argv file (no args)."
+  (clime-test-with-temp-dir
+   (let ((dir default-directory))
+     ;; No argv file — app should show help or error
+     ;; greet with default "world" if we put just the command
+     (with-temp-file (expand-file-name "argv" dir)
+       (insert "greet\0"))
+     (clime-run-client 'clime-test--client-app dir)
+     (should (equal "Hello, world!"
+                    (with-temp-buffer
+                      (insert-file-contents (expand-file-name "out" dir))
+                      (buffer-string)))))))
+
+(ert-deftest clime-test-run/client-returns-nil ()
+  "clime-run-client returns nil (for emacsclient)."
+  (clime-test-with-temp-dir
+   (let ((dir default-directory))
+     (with-temp-file (expand-file-name "argv" dir)
+       (insert "greet\0"))
+     (should (null (clime-run-client 'clime-test--client-app dir))))))
+
+(ert-deftest clime-test-run/client-stdin-file ()
+  "clime-run-client reads stdin from DIR/in via CLIME_STDIN_FILE."
+  (clime-test-with-temp-dir
+   (let ((dir default-directory))
+     ;; Set up an app that reads stdin via -
+     (eval '(clime-app clime-test--stdin-client-app
+              :version "1"
+              (clime-command echo
+                :help "Echo"
+                (clime-arg text :help "Text")
+                (clime-handler (ctx)
+                  (princ (plist-get (clime-context-params ctx) 'text))
+                  nil)))
+           t)
+     (with-temp-file (expand-file-name "argv" dir)
+       (insert "echo\0-\0"))
+     (with-temp-file (expand-file-name "in" dir)
+       (insert "from-stdin"))
+     (clime-run-client 'clime-test--stdin-client-app dir)
+     (should (equal "from-stdin"
+                    (with-temp-buffer
+                      (insert-file-contents (expand-file-name "out" dir))
+                      (buffer-string)))))))
+
+(ert-deftest clime-test-run/client-lazy-load ()
+  "clime-run-client loads :file when app symbol is unbound."
+  (clime-test-with-temp-dir
+   (let ((dir default-directory)
+         (app-file (expand-file-name "lazy-app.el")))
+     ;; Write a minimal app file
+     (with-temp-file app-file
+       (insert "(require 'clime)\n"
+               "(clime-app clime-test--lazy-app\n"
+               "  :version \"1\"\n"
+               "  (clime-command ping\n"
+               "    :help \"Ping\"\n"
+               "    (clime-handler (ctx) (princ \"pong\") nil)))\n"))
+     ;; Ensure unbound
+     (when (boundp 'clime-test--lazy-app)
+       (makunbound 'clime-test--lazy-app))
+     (with-temp-file (expand-file-name "argv" dir)
+       (insert "ping\0"))
+     (clime-run-client 'clime-test--lazy-app dir :file app-file)
+     (should (equal "pong"
+                    (with-temp-buffer
+                      (insert-file-contents (expand-file-name "out" dir))
+                      (buffer-string))))
+     ;; Cleanup
+     (makunbound 'clime-test--lazy-app))))
+
+;;; ─── Client wrapper generation ──────────────────────────────────────────
+
+(require 'clime-make)
+
+(ert-deftest clime-test-run/client-wrapper-content ()
+  "clime-make--make-client-wrapper generates a valid bash wrapper."
+  (let ((wrapper (clime-make--make-client-wrapper
+                  'my-app
+                  '("/home/user/app" "/opt/clime")
+                  "/home/user/app/my-app.el")))
+    ;; Bash shebang
+    (should (string-prefix-p "#!/usr/bin/env bash" wrapper))
+    ;; App symbol embedded
+    (should (string-match-p "clime-run-client 'my-app" wrapper))
+    ;; Load paths embedded
+    (should (string-match-p "/home/user/app" wrapper))
+    (should (string-match-p "/opt/clime" wrapper))
+    ;; App file embedded
+    (should (string-match-p "my-app\\.el" wrapper))
+    ;; Null-delimited argv
+    (should (string-match-p "printf.*\\\\0" wrapper))
+    ;; Connection flag parsing
+    (should (string-match-p "--socket-name" wrapper))
+    (should (string-match-p "--server-file" wrapper))
+    ;; Env fallback
+    (should (string-match-p "EMACS_SOCKET_NAME" wrapper))
+    ;; Error handling
+    (should (string-match-p "Cannot connect to Emacs server" wrapper))))
+
+(ert-deftest clime-test-run/client-wrapper-write ()
+  "clime-make--write-client-wrapper writes an executable file."
+  (clime-test-with-temp-dir
+   (let ((target (expand-file-name "my-app")))
+     (clime-make--write-client-wrapper
+      target 'my-app '("/opt/clime") "/home/user/my-app.el" nil)
+     (should (file-exists-p target))
+     (should (file-executable-p target))
+     (with-temp-buffer
+       (insert-file-contents target)
+       (should (string-prefix-p "#!/usr/bin/env bash" (buffer-string)))))))
+
+(ert-deftest clime-test-run/client-wrapper-no-overwrite ()
+  "clime-make--write-client-wrapper refuses to overwrite without force."
+  (clime-test-with-temp-dir
+   (let ((target (expand-file-name "my-app")))
+     (with-temp-file target (insert "existing"))
+     (should-error
+      (clime-make--write-client-wrapper
+       target 'my-app '("/opt/clime") "/home/user/my-app.el" nil)
+      :type 'clime-usage-error))))
+
+(ert-deftest clime-test-run/client-wrapper-force-overwrite ()
+  "clime-make--write-client-wrapper overwrites with force."
+  (clime-test-with-temp-dir
+   (let ((target (expand-file-name "my-app")))
+     (with-temp-file target (insert "existing"))
+     (clime-make--write-client-wrapper
+      target 'my-app '("/opt/clime") "/home/user/my-app.el" t)
+     (with-temp-buffer
+       (insert-file-contents target)
+       (should (string-prefix-p "#!/usr/bin/env bash" (buffer-string)))))))
+
 (provide 'clime-run-tests)
 ;;; clime-run-tests.el ends here

@@ -171,6 +171,98 @@ If TARGET has no shebang, prepend one (return \"done\")."
     (set-file-modes target #o755)
     action))
 
+;;; ─── Client Wrapper (emacsclient) ───────────────────────────────────
+
+(defconst clime-make--client-wrapper-template "\
+#!/usr/bin/env bash
+set -euo pipefail
+DIR=$(mktemp -d)
+trap 'rm -rf \"$DIR\"' EXIT
+
+# Parse emacsclient connection flags
+EC_ARGS=()
+APP_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case \"$1\" in
+    --socket-name) EC_ARGS+=(--socket-name \"$2\"); shift 2 ;;
+    --server-file) EC_ARGS+=(--server-file \"$2\"); shift 2 ;;
+    *) APP_ARGS+=(\"$1\"); shift ;;
+  esac
+done
+
+# Env fallback for connection flags
+[[ -n \"${EMACS_SOCKET_NAME:-}\" && ! \" ${EC_ARGS[*]:-} \" =~ \" --socket-name \" ]] && \\
+  EC_ARGS+=(--socket-name \"$EMACS_SOCKET_NAME\")
+[[ -n \"${EMACS_SERVER_FILE:-}\" && ! \" ${EC_ARGS[*]:-} \" =~ \" --server-file \" ]] && \\
+  EC_ARGS+=(--server-file \"$EMACS_SERVER_FILE\")
+
+# Write null-delimited args
+printf '%%s\\0' \"${APP_ARGS[@]}\" > \"$DIR/argv\"
+
+# Capture stdin if data is available on a non-tty fd
+if [[ ! -t 0 ]] && read -t 0; then
+  cat > \"$DIR/in\"
+fi
+
+# Dispatch via emacsclient
+EC_OUT=$(emacsclient \"${EC_ARGS[@]}\" --eval \\
+  \"(progn (dolist (p %s) (add-to-list 'load-path p)) (require 'clime-run) (clime-run-client '%s \\\"$DIR\\\" :load-path %s :file %s))\" \\
+  2>&1) || {
+  if [[ \"$EC_OUT\" == *\"connect\"* || \"$EC_OUT\" == *\"server file\"* || \"$EC_OUT\" == *\"No such file\"* ]]; then
+    echo \"Error: Cannot connect to Emacs server\" >&2
+    echo \"  Start a daemon with: emacs --daemon\" >&2
+  else
+    echo \"Error: $EC_OUT\" >&2
+  fi
+  exit 1
+}
+
+# Output results
+[[ -s \"$DIR/out\" ]] && cat \"$DIR/out\"
+[[ -s \"$DIR/err\" ]] && cat \"$DIR/err\" >&2
+exit \"$(cat \"$DIR/exit\" 2>/dev/null || echo 1)\"
+"
+  "Template for the emacsclient bash wrapper.
+Format args: LOAD-PATHS APP-SYM LOAD-PATHS APP-FILE.")
+
+(defun clime-make--bash-escape-quotes (str)
+  "Escape double quotes in STR for embedding in a bash double-quoted string."
+  (replace-regexp-in-string "\"" "\\\\\"" str))
+
+(defun clime-make--make-client-wrapper (app-sym load-paths app-file)
+  "Build a bash wrapper script for emacsclient invocation.
+APP-SYM is the clime-app symbol name (a symbol).
+LOAD-PATHS is a list of absolute directory path strings.
+APP-FILE is the absolute path to the .el file defining the app.
+Paths are escaped for embedding inside a bash double-quoted string."
+  (let ((lp-form (clime-make--bash-escape-quotes
+                  (if load-paths
+                      (concat "'("
+                              (mapconcat (lambda (p) (format "%S" p))
+                                        load-paths " ")
+                              ")")
+                    "nil")))
+        (file-form (clime-make--bash-escape-quotes
+                    (format "%S" app-file))))
+    (format clime-make--client-wrapper-template
+            lp-form (symbol-name app-sym) lp-form file-form)))
+
+(defun clime-make--write-client-wrapper (target app-sym load-paths app-file force)
+  "Write an emacsclient wrapper to TARGET.
+APP-SYM, LOAD-PATHS, APP-FILE are passed to `clime-make--make-client-wrapper'.
+If TARGET exists and FORCE is nil, signal an error."
+  (when (and (file-exists-p target) (not force))
+    (signal 'clime-usage-error
+            (list (format "%s already exists (use --force to replace)"
+                          (file-name-nondirectory target)))))
+  (let ((wrapper (clime-make--make-client-wrapper app-sym load-paths app-file)))
+    (with-temp-file target
+      (insert wrapper)))
+  (set-file-modes target #o755)
+  "done")
+
+;;; ─── Code Extraction ────────────────────────────────────────────────
+
 (defun clime-make--extract-code (file)
   "Extract library code from FILE using GNU-style section markers.
 Returns text between `;;; Code:' and `;;; Entrypoint:' (or
@@ -234,43 +326,68 @@ Returns FEATURE as a symbol, or nil if not found."
 
 (defun clime-make--init-handler (ctx)
   "Handle the `init' command: add a polyglot shebang to an Elisp file.
+When --client is set, generate an emacsclient wrapper instead.
 CTX is the clime context."
   (clime-let ctx (file output (extras extra-load-path)
-                       (rels rel-load-path) self-dir standalone force env)
+                       (rels rel-load-path) self-dir standalone force env
+                       client)
     (let* ((clime-dir (file-name-directory clime-make--self-path))
            (source (expand-file-name file))
-           (target (if output (expand-file-name output) source))
-           (resolve (or self-dir rels))
-           (self-dir-flag (if self-dir " -L \"$D\"" ""))
-           (rel-flags
-            (if rels
-                (mapconcat (lambda (p)
-                             (format " -L \"$D/%s\"" p))
-                           rels "")
-              ""))
-           (extra-flags
-            (if extras
-                (mapconcat (lambda (p)
-                             (format " -L %S" (expand-file-name p)))
-                           extras "")
-              ""))
-           (clime-flag
-            (if standalone ""
-              (format " -L %S" clime-dir)))
-           (load-paths
-            (concat self-dir-flag rel-flags clime-flag extra-flags)))
+           (target (if output (expand-file-name output) source)))
       (unless (file-exists-p source)
         (signal 'clime-usage-error
                 (list (format "%s does not exist" file))))
-      (when output
-        (let ((dir (file-name-directory target)))
-          (when (and dir (not (file-directory-p dir)))
-            (make-directory dir t)))
-        (copy-file source target t))
-      (when env
-        (clime-make--validate-env-vars env))
-      (let ((action (clime-make--write-shebang target env load-paths force resolve)))
-        (format "%s: %s is now executable" action target)))))
+      (let ((result
+             (if client
+                 ;; ── emacsclient wrapper ──
+                 (clime-make--init-client source target clime-dir
+                                          extras rels self-dir standalone force)
+               ;; ── batch shebang (original path) ──
+               (let* ((resolve (or self-dir rels))
+                      (self-dir-flag (if self-dir " -L \"$D\"" ""))
+                      (rel-flags
+                       (if rels
+                           (mapconcat (lambda (p) (format " -L \"$D/%s\"" p))
+                                      rels "")
+                         ""))
+                      (extra-flags
+                       (if extras
+                           (mapconcat (lambda (p) (format " -L %S" (expand-file-name p)))
+                                      extras "")
+                         ""))
+                      (clime-flag (if standalone "" (format " -L %S" clime-dir)))
+                      (load-paths (concat self-dir-flag rel-flags clime-flag extra-flags)))
+                 (when output
+                   (let ((dir (file-name-directory target)))
+                     (when (and dir (not (file-directory-p dir)))
+                       (make-directory dir t)))
+                   (copy-file source target t))
+                 (when env
+                   (clime-make--validate-env-vars env))
+                 (let ((action (clime-make--write-shebang target env load-paths force resolve)))
+                   (format "%s: %s is now executable" action target))))))
+        (when (and output (not (string= source target)))
+          (setq result (format "%s\n  output: %s" result target)))
+        result))))
+
+(defun clime-make--init-client (source target clime-dir
+                                     extras rels self-dir standalone force)
+  "Generate an emacsclient wrapper for SOURCE at TARGET.
+CLIME-DIR, EXTRAS, RELS, SELF-DIR, STANDALONE, FORCE mirror the
+init handler's resolved values."
+  (let* ((app-sym (clime-make--detect-app source))
+         (source-dir (file-name-directory source))
+         (load-paths
+          (append (when self-dir (list source-dir))
+                  (mapcar (lambda (p) (expand-file-name p source-dir)) (or rels '()))
+                  (unless standalone (list clime-dir))
+                  (mapcar #'expand-file-name (or extras '())))))
+    (unless app-sym
+      (signal 'clime-usage-error
+              (list (format "%s: no (clime-app SYMBOL ...) form found"
+                            (file-name-nondirectory source)))))
+    (let ((action (clime-make--write-client-wrapper target app-sym load-paths source force)))
+      (format "%s: %s is now an emacsclient wrapper" action target))))
 
 (defun clime-make--bundle-handler (ctx)
   "Handle the `bundle' command: concatenate source files into one.
@@ -459,6 +576,10 @@ CTX is the clime context."
 
     (clime-opt output ("--output" "-o")
       :help "Write to OUTPUT instead of modifying the source file")
+
+    (clime-opt client ("--client")
+      :bool :requires '(output)
+      :help "Generate an emacsclient wrapper instead of a shebang")
 
     (clime-handler (ctx) (clime-make--init-handler ctx)))
 
