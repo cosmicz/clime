@@ -32,7 +32,9 @@ lint:
 		2>&1 || true
 	@echo "Lint complete."
 
-SELECTOR ?= ^clime-test-
+SEL ?= ^clime-test-
+SELECT ?= $(SEL)
+SELECTOR ?= $(SELECT)
 
 test: clean-elc
 	@$(BATCH) -l ./tests/clime-tests-runner.el \
@@ -107,7 +109,7 @@ help:
 	@echo "  all       - Default target. Same as 'compile'"
 	@echo "  compile   - Byte-compile all Elisp files"
 	@echo "  lint      - Byte-compile with warnings + checkdoc"
-	@echo "  test      - Run tests (SELECTOR= to filter, default: ^clime-test-)"
+	@echo "  test      - Run tests (SEL= to filter, default: ^clime-test-)"
 	@echo "  tests     - Alias for 'test'"
 	@echo "  dist      - Build single-file dist/clime.el bundle"
 	@echo "  bins      - Build all local executables in bin/ (gitignored)"
