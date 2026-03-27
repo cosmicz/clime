@@ -398,7 +398,8 @@
       ;; format is locked
       (should fmt-opt)
       (should (clime-option-locked fmt-opt))
-      (should (equal "csv" (clime-option-default fmt-opt)))
+      (should (equal "csv" (clime-param-value fmt-opt)))
+      (should (eq 'app (clime-param-source fmt-opt)))
       ;; verbose is not locked
       (should-not (clime-option-locked
                    (cl-find-if (lambda (o) (eq (clime-option-name o) 'verbose))
@@ -793,9 +794,9 @@
             (sexp (cl-find-if (lambda (o) (eq (clime-option-name o) 'sexp))
                               (clime-node-all-options resolved))))
         (should (clime-option-locked todo))
-        (should (equal "WAITING" (clime-option-default todo)))
+        (should (equal "WAITING" (clime-param-value todo)))
         (should (clime-option-locked sexp))
-        (should (equal "(active)" (clime-option-default sexp)))))))
+        (should (equal "(active)" (clime-param-value sexp)))))))
 
 (ert-deftest clime-test-alias-for/vals-zip-locks-siblings ()
   "alias :vals locking a zip member locks all siblings in the group."

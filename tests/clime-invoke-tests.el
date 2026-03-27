@@ -1574,7 +1574,7 @@
   "Locked options from alias :vals appear in the menu as read-only rows."
   (let* ((opt (clime-make-option :name 'todo :flags '("--todo" "-t")
                                  :help "TODO keyword"
-                                 :locked t :default "WAITING"))
+                                 :locked t :value "WAITING" :source 'app))
          (cmd (clime-make-command :name "waiting" :handler #'ignore
                                   :options (list opt)
                                   :locked-vals '((todo . "WAITING"))))
@@ -1613,7 +1613,7 @@
   "Setting a mutex sibling of a locked option triggers a validation error."
   (let* ((exclusive (clime-check-exclusive 'query-mode '(todo sexp)))
          (opt-todo (clime-make-option :name 'todo :flags '("--todo")
-                                      :locked t :default "WAITING"))
+                                      :locked t :value "WAITING" :source 'app))
          (opt-sexp (clime-make-option :name 'sexp :flags '("--sexp")))
          (mutex (clime-group--create :name "query-mode" :inline t
                                      :options (list opt-todo opt-sexp)
@@ -1681,9 +1681,9 @@
   "Locked mutex sibling (nil value) renders as (excluded) not nil."
   (let* ((exclusive (clime-check-exclusive 'qm '(todo sexp)))
          (opt-todo (clime-make-option :name 'todo :flags '("--todo")
-                                      :locked t :default "WAITING"))
+                                      :locked t :value "WAITING" :source 'app))
          (opt-sexp (clime-make-option :name 'sexp :flags '("--sexp")
-                                      :locked t :default nil))
+                                      :locked t))
          (mutex (clime-group--create :name "qm" :inline t
                                      :options (list opt-todo opt-sexp)
                                      :conform (list exclusive)))

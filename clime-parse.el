@@ -33,7 +33,7 @@
   (path nil :type list :documentation "List of node names from root to command.")
   (display-path nil :type list :documentation "User-facing path excluding inline group names.")
   (params nil :type list :documentation "Plist of (param-name value) for all scopes.")
-  (visited-nodes nil :type list :documentation "Nodes visited during parse (for finalization).")
+  (tree nil :documentation "Deep-copied app tree with :value/:source slots populated.")
   (finalized nil :type boolean :documentation "Non-nil after pass-2 finalization."))
 
 ;;; ─── Internal Helpers ───────────────────────────────────────────────────
@@ -226,18 +226,18 @@ When NEGATED is non-nil, explicitly set the param to nil (for --no-X flags)."
   (let ((name (clime-option-name opt))
         (type (clime-option-type opt))
         (choices (clime-option-choices opt))
-        (coerce (clime-option-coerce opt)))
+        (coerce (clime-option-coerce opt))
+        val)
     (cond
      ;; Negated flag (--no-X): explicitly set to nil
      (negated
-      (plist-put params name nil))
+      (setq val nil))
      ;; Count option: increment
      ((clime-option-count opt)
-      (let ((current (or (plist-get params name) 0)))
-        (plist-put params name (1+ current))))
+      (setq val (1+ (or (plist-get params name) 0))))
      ;; Boolean (non-count): set t
      ((clime-option-boolean-p opt)
-      (plist-put params name t))
+      (setq val t))
      ;; Multiple: append to list (split by separator if set)
      ((clime-option-multiple opt)
       (let* ((sep (clime-option-separator opt))
@@ -249,12 +249,14 @@ When NEGATED is non-nil, explicitly set the param to nil (for --no-X flags)."
                              (clime--transform-value v type choices coerce flag))
                            raw-vals))
              (current (plist-get params name)))
-        (plist-put params name (append current vals))))
+        (setq val (append current vals))))
      ;; Normal value option
      (t
-      (plist-put params name
-                 (clime--transform-value token-value type choices coerce
-                                         (car (clime-option-flags opt))))))))
+      (setq val (clime--transform-value token-value type choices coerce
+                                        (car (clime-option-flags opt))))))
+    (setf (clime-param-value opt) val
+          (clime-param-source opt) 'user)
+    (plist-put params name val)))
 
 (defun clime--required-args-satisfied-p (node params)
   "Return non-nil if all required positional args of NODE have values in PARAMS."
@@ -339,37 +341,36 @@ APP is the root app node (for :env-prefix).  Returns updated PARAMS."
                            (clime--env-var-for-option opt app)))
              (value (and env-var (getenv env-var))))
         (when (and value (not (string-empty-p value)))
-          (cond
-           ;; Count option: parse as integer
-           ((clime-option-count opt)
-            (setq params (plist-put params name
-                                   (clime--coerce-value value 'integer env-var))))
-           ;; Boolean flag: parse truthy/falsy, falsy means unset
-           ((clime-option-boolean-p opt)
-            (when (clime--parse-boolean-env value env-var)
-              (setq params (plist-put params name t))))
-           ;; Multiple option: split on separator (or comma), transform each
-           ((clime-option-multiple opt)
-            (let ((type (clime-option-type opt))
-                  (choices (clime-option-choices opt))
-                  (coerce (clime-option-coerce opt))
-                  (sep (or (clime-option-separator opt) ",")))
-              (setq params
-                    (plist-put params name
-                               (mapcar (lambda (v)
-                                         (clime--transform-value
-                                          (string-trim v) type choices
-                                          coerce env-var))
-                                       (split-string value sep t))))))
-           ;; Normal value option
-           (t
-            (setq params
-                  (plist-put params name
-                             (clime--transform-value
-                              value (clime-option-type opt)
-                              (clime-option-choices opt)
-                              (clime-option-coerce opt)
-                              env-var)))))))))
+          (let ((env-val
+                 (cond
+                  ;; Count option: parse as integer
+                  ((clime-option-count opt)
+                   (clime--coerce-value value 'integer env-var))
+                  ;; Boolean flag: parse truthy/falsy, falsy means unset
+                  ((clime-option-boolean-p opt)
+                   (and (clime--parse-boolean-env value env-var) t))
+                  ;; Multiple option: split on separator (or comma), transform each
+                  ((clime-option-multiple opt)
+                   (let ((type (clime-option-type opt))
+                         (choices (clime-option-choices opt))
+                         (coerce (clime-option-coerce opt))
+                         (sep (or (clime-option-separator opt) ",")))
+                     (mapcar (lambda (v)
+                               (clime--transform-value
+                                (string-trim v) type choices coerce env-var))
+                             (split-string value sep t))))
+                  ;; Normal value option
+                  (t
+                   (clime--transform-value
+                    value (clime-option-type opt)
+                    (clime-option-choices opt)
+                    (clime-option-coerce opt)
+                    env-var)))))
+            ;; Boolean falsy returns nil from parse-boolean-env — skip
+            (when (or env-val (not (clime-option-boolean-p opt)))
+              (setf (clime-param-value opt) env-val
+                    (clime-param-source opt) 'env)
+              (setq params (plist-put params name env-val))))))))
   params)
 
 (defun clime--apply-defaults (nodes params)
@@ -382,15 +383,19 @@ Walks inline group children to reach options in mutex/zip groups."
         (unless (plist-member params name)
           (let ((default (clime-option-default opt)))
             (when default
-              (setq params (plist-put params name
-                                      (clime--resolve-value default))))))))
+              (let ((val (clime--resolve-value default)))
+                (setf (clime-param-value opt) val
+                      (clime-param-source opt) 'default)
+                (setq params (plist-put params name val))))))))
     (dolist (arg (clime-node-args node))
       (let ((name (clime-arg-name arg)))
         (unless (plist-member params name)
           (let ((default (clime-arg-default arg)))
             (when default
-              (setq params (plist-put params name
-                                      (clime--resolve-value default)))))))))
+              (let ((val (clime--resolve-value default)))
+                (setf (clime-param-value arg) val
+                      (clime-param-source arg) 'default)
+                (setq params (plist-put params name val)))))))))
   params)
 
 (defun clime--check-required (nodes params path)
@@ -474,7 +479,6 @@ This enables a setup hook to run between passes."
         (path (list (or (clime-app-argv0 app) (clime-app-name app))))
         (display-path (list (or (clime-app-argv0 app) (clime-app-name app))))
         (arg-index 0)
-        (visited-nodes (list app))
         (i 0)
         (len (length argv))
         (clime--stdin-app app))
@@ -482,6 +486,11 @@ This enables a setup hook to run between passes."
     (clime--set-parent-refs app)
     ;; Resolve alias commands (idempotent)
     (clime--resolve-aliases app)
+    ;; Deep-copy tree so :value/:source mutations are isolated
+    (let ((tree-copy (clime--deep-copy-tree app)))
+      (setq app tree-copy
+            current-node tree-copy
+            root tree-copy))
     (condition-case err
         (progn
     (while (< i len)
@@ -543,8 +552,10 @@ This enables a setup hook to run between passes."
                   ;; Not a known option: collect as rest value
                   (push (clime--resolve-stdin-value tok) rest-values)
                   (cl-incf i))))
-            (setq params (plist-put params (clime-arg-name arg-spec)
-                                   (nreverse rest-values)))))
+            (let ((val (nreverse rest-values)))
+              (setf (clime-param-value arg-spec) val
+                    (clime-param-source arg-spec) 'user)
+              (setq params (plist-put params (clime-arg-name arg-spec) val)))))
 
          ;; 4. Option-like token
          ((and option-parsing (clime--option-like-p token))
@@ -575,8 +586,7 @@ This enables a setup hook to run between passes."
             (setq current-node node)
             (setq path (append path (list (clime-node-name node))))
             (unless (clime-node-inline node)
-              (setq display-path (append display-path (list (clime-node-name node)))))
-            (push node visited-nodes))
+              (setq display-path (append display-path (list (clime-node-name node))))))
           (setq arg-index 0)
           (cl-incf i))
 
@@ -591,6 +601,8 @@ This enables a setup hook to run between passes."
                                   (clime-arg-choices arg-spec)
                                   (clime-arg-coerce arg-spec)
                                   (format "<%s>" (clime-arg-name arg-spec)))))
+                    (setf (clime-param-value arg-spec) coerced
+                          (clime-param-source arg-spec) 'user)
                     (setq params (plist-put params (clime-arg-name arg-spec) coerced)))
                   (cl-incf arg-index)
                   (cl-incf i))
@@ -623,7 +635,7 @@ This enables a setup hook to run between passes."
                    :path path
                    :display-path display-path
                    :params params
-                   :visited-nodes visited-nodes)))
+                   :tree app)))
       (if skip-finalize
           result
         (clime-parse-finalize result))))
@@ -689,6 +701,7 @@ value; signaled errors become `clime-usage-error'."
             (when val
               (condition-case err
                   (let ((conformed (clime--call-conform cfn val opt)))
+                    (setf (clime-param-value opt) conformed)
                     (setq params (plist-put params name conformed)))
                 (error
                  (signal 'clime-usage-error
@@ -703,6 +716,7 @@ value; signaled errors become `clime-usage-error'."
             (when val
               (condition-case err
                   (let ((conformed (clime--call-conform cfn val arg)))
+                    (setf (clime-param-value arg) conformed)
                     (setq params (plist-put params name conformed)))
                 (error
                  (signal 'clime-usage-error
@@ -744,7 +758,7 @@ Recurses into nested inline groups before conforming each."
 
 (defun clime--run-node-conformers (nodes params)
   "Postorder-conform visited NODES, also descending into inline groups.
-NODES is the visited-nodes list (leaf first, from push during parse).
+NODES is the scope list (leaf first, from node ancestors).
 At each node, inline group children not on the dispatch path are
 conformed first (recursively, postorder), then the node itself."
   (dolist (node nodes)
@@ -760,34 +774,63 @@ Validates dynamic choices, applies env vars, runs conformers, applies
 defaults, and checks required params.  Returns the updated RESULT."
   (when (clime-parse-result-finalized result)
     (error "clime-parse-finalize: result already finalized"))
-  (let* ((visited-nodes (clime-parse-result-visited-nodes result))
+  (let* ((node (clime-parse-result-node result))
+         (scope (cons node (clime-node-ancestors node)))
          (params (clime-parse-result-params result))
          (display-path (clime-parse-result-display-path result))
-         (root (cl-find-if #'clime-app-p visited-nodes)))
+         (root (clime-parse-result-tree result)))
     ;; Inject locked vals (from alias :vals resolution).
     ;; Walk leaf→root; skip keys already set so leaf takes priority.
-    (dolist (node visited-nodes)
-      (dolist (entry (clime-node-locked-vals node))
+    ;; Two sources: (1) locked options with :source 'app (from alias :vals),
+    ;; (2) locked-vals alist on nodes (for group-level locked vals without
+    ;; a corresponding option struct on the same node).
+    (dolist (n scope)
+      (dolist (opt (clime-node-all-options n))
+        (when (and (clime-option-locked opt)
+                   (eq (clime-param-source opt) 'app))
+          (let ((name (clime-param-name opt)))
+            (unless (plist-member params name)
+              (setq params (plist-put params name (clime-param-value opt)))))))
+      (dolist (entry (clime-node-locked-vals n))
         (unless (plist-member params (car entry))
           (setq params (plist-put params (car entry) (cdr entry))))))
     ;; Validate dynamic choices (functions resolved now, after setup)
-    (clime--validate-dynamic-choices visited-nodes params)
+    (clime--validate-dynamic-choices scope params)
     ;; Apply env vars (external input, needs conforming)
-    (setq params (clime--apply-env visited-nodes params root))
+    (setq params (clime--apply-env scope params root))
     ;; Run option/arg :conform functions (after env, before defaults —
     ;; defaults are developer-authored and should already be valid)
-    (setq params (clime--run-conformers visited-nodes params))
+    (setq params (clime--run-conformers scope params))
     ;; Run node-level :conform (leaf→root walk)
-    (setq params (clime--run-node-conformers visited-nodes params))
+    (setq params (clime--run-node-conformers scope params))
     ;; Check :requires constraints
-    (clime--check-requires visited-nodes params)
+    (clime--check-requires scope params)
     ;; Apply defaults
-    (setq params (clime--apply-defaults visited-nodes params))
-    (clime--check-required visited-nodes params display-path)
+    (setq params (clime--apply-defaults scope params))
+    (clime--check-required scope params display-path)
     ;; Update and mark finalized
     (setf (clime-parse-result-params result) params)
     (setf (clime-parse-result-finalized result) t)
     result))
+
+(defun clime--derive-params (node)
+  "Derive a flat params plist from :value/:source slots on NODE's scope.
+Walk NODE and its ancestors, collecting (name value) for params where
+:source is non-nil.  Leaf params shadow ancestor params.  Returns a plist."
+  (let ((params '())
+        (scope (cons node (clime-node-ancestors node))))
+    (dolist (node scope)
+      (dolist (opt (clime-node-all-options node))
+        (when (clime-param-source opt)
+          (let ((name (clime-param-name opt)))
+            (unless (plist-member params name)
+              (setq params (plist-put params name (clime-param-value opt)))))))
+      (dolist (arg (clime-node-args node))
+        (when (clime-param-source arg)
+          (let ((name (clime-param-name arg)))
+            (unless (plist-member params name)
+              (setq params (plist-put params name (clime-param-value arg))))))))
+    params))
 
 (provide 'clime-parse)
 ;;; clime-parse.el ends here

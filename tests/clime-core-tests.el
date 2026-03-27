@@ -738,5 +738,119 @@
     (should-not (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
                          msgs))))
 
+;;; ─── Value/Source Slot Tests ────────────────────────────────────────
+
+(ert-deftest clime-test-param/value-slot-defaults-nil ()
+  "Option and arg :value slots default to nil."
+  (let ((opt (clime-make-option :name 'verbose :flags '("--verbose")))
+        (arg (clime-make-arg :name 'file)))
+    (should-not (clime-param-value opt))
+    (should-not (clime-param-value arg))))
+
+(ert-deftest clime-test-param/source-slot-defaults-nil ()
+  "Option and arg :source slots default to nil."
+  (let ((opt (clime-make-option :name 'verbose :flags '("--verbose")))
+        (arg (clime-make-arg :name 'file)))
+    (should-not (clime-param-source opt))
+    (should-not (clime-param-source arg))))
+
+(ert-deftest clime-test-param/value-and-source-settable ()
+  "Value and source can be set on option and arg structs."
+  (let ((opt (clime-make-option :name 'verbose :flags '("--verbose"))))
+    (setf (clime-param-value opt) "hello")
+    (setf (clime-param-source opt) 'user)
+    (should (equal "hello" (clime-param-value opt)))
+    (should (eq 'user (clime-param-source opt)))))
+
+;;; ─── Deep Copy Tests ───────────────────────────────────────────────
+
+(ert-deftest clime-test-deep-copy/option-mutation-isolated ()
+  "Mutating a copied option does not affect the original."
+  (let* ((app (clime-make-app
+               :name "test" :version "1"
+               :options (list (clime-make-option :name 'verbose :flags '("--verbose")))))
+         (copy (clime--deep-copy-tree app)))
+    (setf (clime-param-value (car (clime-node-options copy))) "changed")
+    (should-not (clime-param-value (car (clime-node-options app))))))
+
+(ert-deftest clime-test-deep-copy/arg-mutation-isolated ()
+  "Mutating a copied arg does not affect the original."
+  (let* ((cmd (clime-make-command
+               :name "run" :handler #'ignore
+               :args (list (clime-make-arg :name 'file))))
+         (app (clime-make-app
+               :name "test" :version "1"
+               :children (list (cons "run" cmd))))
+         (copy (clime--deep-copy-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (setf (clime-param-value (car (clime-node-args copy-cmd))) "mutated")
+    (should-not (clime-param-value (car (clime-node-args cmd))))))
+
+(ert-deftest clime-test-deep-copy/parent-refs-correct ()
+  "Copied children point to copied parent, not original."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app
+               :name "test" :version "1"
+               :children (list (cons "run" cmd))))
+         (_ (clime--set-parent-refs-1 app))
+         (copy (clime--deep-copy-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (should (eq copy (clime-node-parent copy-cmd)))
+    (should-not (eq app (clime-node-parent copy-cmd)))))
+
+(ert-deftest clime-test-deep-copy/original-tree-unchanged ()
+  "Deep copy does not modify any part of the original tree."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")))
+         (arg (clime-make-arg :name 'file))
+         (cmd (clime-make-command
+               :name "run" :handler #'ignore
+               :args (list arg)))
+         (app (clime-make-app
+               :name "test" :version "1"
+               :options (list opt)
+               :children (list (cons "run" cmd))))
+         (copy (clime--deep-copy-tree app)))
+    ;; Mutate everything on the copy
+    (setf (clime-param-value (car (clime-node-options copy))) "x")
+    (setf (clime-node-name copy) "mutated")
+    (let ((copy-cmd (cdr (car (clime-group-children copy)))))
+      (setf (clime-param-value (car (clime-node-args copy-cmd))) "y"))
+    ;; Original is untouched
+    (should (equal "test" (clime-node-name app)))
+    (should-not (clime-param-value opt))
+    (should-not (clime-param-value arg))))
+
+(ert-deftest clime-test-deep-copy/handlers-shared ()
+  "Handler functions are shared (not copied) between original and copy."
+  (let* ((handler #'ignore)
+         (cmd (clime-make-command :name "run" :handler handler))
+         (app (clime-make-app
+               :name "test" :version "1"
+               :children (list (cons "run" cmd))))
+         (copy (clime--deep-copy-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (should (eq handler (clime-node-handler copy-cmd)))))
+
+(ert-deftest clime-test-deep-copy/inline-group-options-isolated ()
+  "Inline group options are deep-copied and isolated from original."
+  (let* ((opt-a (clime-make-option :name 'mode-a :flags '("--mode-a") :nargs 0))
+         (opt-b (clime-make-option :name 'mode-b :flags '("--mode-b") :nargs 0))
+         (grp (clime-group--create :name "modes" :inline t
+                                    :options (list opt-a opt-b)))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :children (list (cons "modes" grp))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd))))
+         (_ (clime--set-parent-refs app))
+         (copy (clime--deep-copy-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy))))
+         (copy-grp (cdr (car (clime-group-children copy-cmd))))
+         (copy-opt (car (clime-node-options copy-grp))))
+    ;; Mutating copy option doesn't affect original
+    (setf (clime-param-value copy-opt) "changed")
+    (should-not (clime-param-value opt-a))
+    ;; Copy inline group parent points to copy cmd
+    (should (eq copy-cmd (clime-node-parent copy-grp)))))
+
 (provide 'clime-core-tests)
 ;;; clime-core-tests.el ends here

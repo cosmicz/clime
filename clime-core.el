@@ -27,7 +27,9 @@
   (name nil :type symbol :documentation "Canonical param name.")
   (help nil :type (or string null) :documentation "One-line help text.")
   (required nil :type boolean)
-  (default nil :documentation "Default value, or a function for lazy defaults."))
+  (default nil :documentation "Default value, or a function for lazy defaults.")
+  (value nil :documentation "Runtime value set during parsing/invoke.")
+  (source nil :type symbol :documentation "Value provenance: nil (unset), user, env, default, app."))
 
 ;;; ─── Option ─────────────────────────────────────────────────────────────
 
@@ -50,7 +52,7 @@
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
   (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0).")
   (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used.")
-  (locked nil :type boolean :documentation "When non-nil, option is locked (from alias :vals).  Locked options are hidden from CLI/help and rendered as read-only in invoke.  The locked value is stored in :default."))
+  (locked nil :type boolean :documentation "When non-nil, option is locked (from alias :vals).  Locked options are hidden from CLI/help and rendered as read-only in invoke."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.
@@ -306,6 +308,29 @@ ARGS is a plist of slot values."
     (error "clime-make-command: :handler is required"))
   (apply #'clime-command--create args))
 
+(defun clime--deep-copy-tree (node)
+  "Return a deep copy of NODE and its descendants.
+Options, args, and child nodes are copied; parent refs are fixed up.
+Shared immutable data (handlers, help strings, functions) is not copied."
+  (let ((copy (copy-sequence node)))
+    ;; Copy options list and each option struct
+    (when (clime-node-options copy)
+      (setf (clime-node-options copy)
+            (mapcar #'copy-sequence (clime-node-options copy))))
+    ;; Copy args list and each arg struct
+    (when (clime-node-args copy)
+      (setf (clime-node-args copy)
+            (mapcar #'copy-sequence (clime-node-args copy))))
+    ;; Recurse into children for groups/commands/apps
+    (when (clime-group-p copy)
+      (setf (clime-group-children copy)
+            (mapcar (lambda (entry)
+                      (let ((child-copy (clime--deep-copy-tree (cdr entry))))
+                        (setf (clime-node-parent child-copy) copy)
+                        (cons (car entry) child-copy)))
+                    (clime-group-children copy))))
+    copy))
+
 (defun clime--set-direct-parents (node)
   "Set the :parent of each direct child in NODE's children alist to NODE."
   (when (clime-group-p node)
@@ -432,7 +457,8 @@ resolved command copies."
                   (error "Alias %s: :vals names unknown option `%s'"
                          (clime-node-name child) name))
                 (setf (clime-option-locked opt) t
-                      (clime-option-default opt) val)))
+                      (clime-param-value opt) val
+                      (clime-param-source opt) 'app)))
             ;; Store vals for injection during finalize
             (when vals
               (setf (clime-node-locked-vals resolved) vals))

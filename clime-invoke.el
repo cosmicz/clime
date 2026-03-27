@@ -595,15 +595,15 @@ GENERAL-ERRORS is a list of strings from conformers and requires checks."
       (dolist (err (clime--find-unsatisfied-requires visited params))
         (push err general-errors)))
     ;; Conformer checks — inject locked vals so mutex/zip checks see them
-    ;; Skip locked options with nil default (excluded siblings, not set values)
+    ;; Skip locked options with nil value (excluded siblings, not set values)
     (let ((check-params (copy-sequence params)))
       (dolist (opt (clime-node-all-options node))
         (when (and (clime-option-locked opt)
-                   (not (null (clime-option-default opt))))
+                   (not (null (clime-param-value opt))))
           (let ((name (clime-option-name opt)))
             (unless (plist-member check-params name)
               (setq check-params (plist-put check-params name
-                                            (clime-option-default opt)))))))
+                                            (clime-param-value opt)))))))
       ;; Unpack (MESSAGE . PARAM-NAMES) pairs
       (dolist (entry (clime-invoke--run-conformer-checks node check-params))
         (let ((msg (car entry))
@@ -718,10 +718,10 @@ Uses 4-column layout: Key | Desc | Value | Env."
             (if (clime-option-locked opt)
                 ;; Locked option: show full flags dimmed, value in locked face
                 (let* ((desc (clime-invoke--format-desc opt params))
-                       (default (clime-option-default opt))
-                       (has-val (not (null default)))
+                       (locked-val (clime-param-value opt))
+                       (has-val (not (null locked-val)))
                        (val-str (if has-val
-                                    (propertize (format "%s" default)
+                                    (propertize (format "%s" locked-val)
                                                 'face 'clime-invoke-locked)
                                   (propertize "(excluded)" 'face 'clime-invoke-dimmed))))
                   (push (format "     %s  %s  %s"
@@ -1010,14 +1010,13 @@ Returns the updated params plist."
 APP is the root app.  PATH is the command path list.
 Runs the full parse finalization pipeline (defaults, env vars,
 conformers, required checks) before calling the handler."
-  (let* ((visited-nodes (cons node (reverse (clime-node-ancestors node))))
-         (result (clime-parse-result--create
+  (let* ((result (clime-parse-result--create
                   :command node
                   :node node
                   :path path
                   :display-path path
                   :params (copy-sequence params)
-                  :visited-nodes visited-nodes))
+                  :tree app))
          (exit-code nil)
          (output (with-output-to-string
                    (setq exit-code
