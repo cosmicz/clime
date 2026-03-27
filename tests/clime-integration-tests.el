@@ -1037,5 +1037,262 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
     (should (= 0 (car result)))
     (should (string-match-p "color=nil" (cdr result)))))
 
+;;; ─── Client Wrapper (init --client) ─────────────────────────────────────
+
+(defun clime-test--write-client-app-source (file-path)
+  "Write a minimal clime app to FILE-PATH suitable for emacsclient mode."
+  (with-temp-file file-path
+    (insert ";;; test-client.el --- test  -*- lexical-binding: t; -*-\n"
+            ";;; Code:\n"
+            "(require 'clime)\n"
+            "(clime-app test-client :version \"1.0.0\" :help \"Test client app.\"\n"
+            "  (clime-command hello :help \"Say hello\"\n"
+            "    (clime-arg name :help \"Name\")\n"
+            "    (clime-handler (ctx)\n"
+            "      (clime-let ctx (name)\n"
+            "        (clime-out `((greeting . ,(format \"Hello, %s!\" name)))\n"
+            "                   :text (format \"Hello, %s!\" name))\n"
+            "        nil))))\n"
+            "(provide 'test-client)\n"
+            ";;; Entrypoint:\n"
+            "(when (clime-main-script-p 'test-client)\n"
+            "  (clime-run-batch test-client))\n"
+            ";;; test-client.el ends here\n")))
+
+(ert-deftest clime-test-integration/init-client-generates-wrapper ()
+  "init --client --output generates a bash wrapper, not a shebang."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-client.el"))
+          (out-file (expand-file-name "test-client")))
+     (clime-test--write-client-app-source app-file)
+     (let ((result (clime-test--run-script
+                    clime-make
+                    (list "init" "--client" "-o" out-file app-file))))
+       (should (= 0 (car result)))
+       (should (string-match-p "emacsclient wrapper" (cdr result))))
+     ;; Output is a bash script, not an elisp file
+     (with-temp-buffer
+       (insert-file-contents out-file)
+       (should (string-prefix-p "#!/usr/bin/env bash" (buffer-string))))
+     ;; Output is executable
+     (should (file-executable-p out-file)))))
+
+(ert-deftest clime-test-integration/init-client-wrapper-structure ()
+  "init --client wrapper has required IPC protocol elements."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-client.el"))
+          (out-file (expand-file-name "test-client")))
+     (clime-test--write-client-app-source app-file)
+     (clime-test--run-script
+      clime-make (list "init" "--client" "-o" out-file app-file))
+     (with-temp-buffer
+       (insert-file-contents out-file)
+       (let ((content (buffer-string)))
+         ;; Temp dir + cleanup
+         (should (string-match-p "mktemp -d" content))
+         (should (string-match-p "trap.*rm -rf" content))
+         ;; Null-delimited argv
+         (should (string-match-p "printf.*\\\\0" content))
+         ;; Connection flag parsing
+         (should (string-match-p "--socket-name" content))
+         (should (string-match-p "--server-file" content))
+         ;; Env fallback
+         (should (string-match-p "EMACS_SOCKET_NAME" content))
+         (should (string-match-p "EMACS_SERVER_FILE" content))
+         ;; Bootstrap: adds load-path and requires clime-run
+         (should (string-match-p "add-to-list.*load-path" content))
+         (should (string-match-p "require.*clime-run" content))
+         ;; App symbol in dispatch
+         (should (string-match-p "clime-run-client 'test-client" content))
+         ;; IPC file reading
+         (should (string-match-p "\\$DIR/out" content))
+         (should (string-match-p "\\$DIR/err" content))
+         (should (string-match-p "\\$DIR/exit" content)))))))
+
+(ert-deftest clime-test-integration/init-client-output-note ()
+  "init --client --output reports the target file path."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-client.el"))
+          (out-file (expand-file-name "test-client-bin")))
+     (clime-test--write-client-app-source app-file)
+     (let ((result (clime-test--run-script
+                    clime-make
+                    (list "init" "--client" "-o" out-file app-file))))
+       (should (= 0 (car result)))
+       (should (string-match-p "output:" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-client-requires-output ()
+  "init --client without --output is a usage error."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-client.el")))
+     (clime-test--write-client-app-source app-file)
+     (let ((result (clime-test--run-script
+                    clime-make (list "init" "--client" app-file))))
+       (should (= 2 (car result)))
+       (should (string-match-p "requires\\|output" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-client-source-loadable ()
+  "Source file pointed to by --client wrapper is loadable by Emacs.
+Catches paren imbalance and read syntax errors that would surface
+at runtime when clime-run-client loads the app."
+  (clime-test-with-temp-dir
+   (let* ((app-file (expand-file-name "test-client.el")))
+     (clime-test--write-client-app-source app-file)
+     ;; Emacs can parse the file without errors
+     (let* ((buf (generate-new-buffer " *clime-test-load*"))
+            (exit-code
+             (call-process "emacs" nil buf nil
+                           "--batch" "-Q"
+                           "-L" clime-test--project-root
+                           "--eval" (format "(load %S nil t)" app-file)))
+            (output (with-current-buffer buf
+                      (string-trim (buffer-string)))))
+       (kill-buffer buf)
+       (should (= 0 exit-code))
+       (should-not (string-match-p "Invalid read syntax" output))))))
+
+(ert-deftest clime-test-integration/init-client-shebanged-source-loadable ()
+  "A shebanged source file is loadable via standard (load ...).
+The polyglot shebang uses `\":\"' which is valid Elisp (a string no-op),
+so (load ...) handles it correctly.  This verifies that clime-run-client
+can load app files that also have a batch shebang from `make init'."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-client.el")))
+     (clime-test--write-client-app-source app-file)
+     ;; Add a batch shebang (simulates `make init` running on the file)
+     (clime-test--run-script clime-make (list "init" app-file))
+     ;; Verify shebang was added
+     (with-temp-buffer
+       (insert-file-contents app-file)
+       (should (string-prefix-p "#!/bin/sh" (buffer-string))))
+     ;; Standard (load ...) should still work
+     (let* ((buf (generate-new-buffer " *clime-test-load*"))
+            (exit-code
+             (call-process "emacs" nil buf nil
+                           "--batch" "-Q"
+                           "-L" clime-test--project-root
+                           "--eval" (format "(load %S nil t)" app-file)))
+            (output (with-current-buffer buf
+                      (string-trim (buffer-string)))))
+       (kill-buffer buf)
+       (should (= 0 exit-code))
+       (should-not (string-match-p "Invalid read syntax" output))))))
+
+(ert-deftest clime-test-integration/init-client-no-overwrite ()
+  "init --client refuses to overwrite an existing wrapper without --force."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "test-client.el"))
+          (out-file (expand-file-name "test-client")))
+     (clime-test--write-client-app-source app-file)
+     ;; First run
+     (clime-test--run-script
+      clime-make (list "init" "--client" "-o" out-file app-file))
+     ;; Second run should fail
+     (let ((result (clime-test--run-script
+                    clime-make
+                    (list "init" "--client" "-o" out-file app-file))))
+       (should (= 2 (car result)))
+       (should (string-match-p "already exists\\|--force" (cdr result))))
+     ;; With --force should succeed
+     (let ((result (clime-test--run-script
+                    clime-make
+                    (list "init" "--client" "--force" "-o" out-file app-file))))
+       (should (= 0 (car result)))))))
+
+(ert-deftest clime-test-integration/init-client-detects-app-symbol ()
+  "init --client errors when source has no clime-app form."
+  (clime-test-with-temp-dir
+   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+          (app-file (expand-file-name "plain.el"))
+          (out-file (expand-file-name "plain")))
+     (with-temp-file app-file
+       (insert ";;; plain.el --- test  -*- lexical-binding: t; -*-\n"
+               ";;; Code:\n"
+               "(message \"hello\")\n"
+               "(provide 'plain)\n"
+               ";;; plain.el ends here\n"))
+     (let ((result (clime-test--run-script
+                    clime-make
+                    (list "init" "--client" "-o" out-file app-file))))
+       (should (/= 0 (car result)))
+       (should (string-match-p "clime-app" (cdr result)))))))
+
+;;; ─── Greeter Example ────────────────────────────────────────────────────
+
+(ert-deftest clime-test-integration/greeter-parens-balanced ()
+  "examples/greeter.el has balanced parentheses.
+Catches the extra-paren bug that caused Invalid read syntax at runtime."
+  (let ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+    (with-temp-buffer
+      (insert-file-contents greeter)
+      (emacs-lisp-mode)
+      (should (condition-case nil
+                  (progn (check-parens) t)
+                (error nil))))))
+
+(ert-deftest clime-test-integration/greeter-loadable ()
+  "examples/greeter.el loads without errors in a fresh Emacs."
+  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root))
+         (buf (generate-new-buffer " *clime-test-greeter*"))
+         (exit-code
+          (call-process "emacs" nil buf nil
+                        "--batch" "-Q"
+                        "-L" clime-test--project-root
+                        "--eval" (format "(load %S nil t)" greeter)))
+         (output (with-current-buffer buf
+                   (string-trim (buffer-string)))))
+    (kill-buffer buf)
+    (should (= 0 exit-code))
+    (should-not (string-match-p "Invalid read syntax\\|Symbol.* void" output))))
+
+(ert-deftest clime-test-integration/greeter-batch-hello ()
+  "examples/greeter.el runs hello command in batch mode."
+  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+    (skip-unless (file-executable-p greeter))
+    (let ((result (clime-test--run-script greeter '("hello" "World"))))
+      (should (= 0 (car result)))
+      (should (equal "Hello, World!" (cdr result))))))
+
+(ert-deftest clime-test-integration/greeter-batch-hello-shout ()
+  "examples/greeter.el hello --shout uppercases output."
+  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+    (skip-unless (file-executable-p greeter))
+    (let ((result (clime-test--run-script greeter '("hello" "World" "--shout"))))
+      (should (= 0 (car result)))
+      (should (equal "HELLO, WORLD!" (cdr result))))))
+
+(ert-deftest clime-test-integration/greeter-batch-hello-json ()
+  "examples/greeter.el hello --json outputs JSON."
+  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+    (skip-unless (file-executable-p greeter))
+    (let ((result (clime-test--run-script greeter '("--json" "hello" "World"))))
+      (should (= 0 (car result)))
+      (should (string-match-p "\"greeting\"" (cdr result)))
+      (should (string-match-p "Hello, World!" (cdr result))))))
+
+(ert-deftest clime-test-integration/greeter-batch-fortune ()
+  "examples/greeter.el fortune returns a non-empty string."
+  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+    (skip-unless (file-executable-p greeter))
+    (let ((result (clime-test--run-script greeter '("fortune"))))
+      (should (= 0 (car result)))
+      (should (> (length (cdr result)) 0)))))
+
+(ert-deftest clime-test-integration/greeter-batch-help ()
+  "examples/greeter.el --help shows available commands."
+  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+    (skip-unless (file-executable-p greeter))
+    (let ((result (clime-test--run-script greeter '("--help"))))
+      (should (= 0 (car result)))
+      (should (string-match-p "hello" (cdr result)))
+      (should (string-match-p "fortune" (cdr result)))
+      (should (string-match-p "buffers" (cdr result))))))
+
 (provide 'clime-integration-tests)
 ;;; clime-integration-tests.el ends here

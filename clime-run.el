@@ -186,14 +186,14 @@ DIR is the temp directory for file-based communication:
 
 PLIST accepts:
   :load-path  List of directories to add to `load-path'.
-  :file       Path to the .el file defining the app (loaded on first call).
+  :file       Path to the .el file defining the app (reloaded each call).
 
 Does NOT call `kill-emacs'.  Returns nil."
-  ;; Lazy-load app
+  ;; Load app — always reload so file changes are picked up
   (dolist (p (plist-get plist :load-path))
     (add-to-list 'load-path p))
   (let ((app-file (plist-get plist :file)))
-    (when (and (not (boundp app-sym)) app-file)
+    (when app-file
       (load app-file nil t)))
   ;; Read args from null-delimited file
   (let* ((argv-file (expand-file-name "argv" dir))
