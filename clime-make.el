@@ -649,7 +649,4 @@ CTX is the clime context."
     (clime-handler (ctx) (clime-make--strip-handler ctx))))
 
 (provide 'clime-make)
-;;; Entrypoint:
-(when (clime-main-script-p 'clime-make)
-  (clime-run-batch clime-make))
 ;;; clime-make.el ends here

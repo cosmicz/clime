@@ -152,7 +152,4 @@
                  :vals '((sexp . "(scheduled :on today)")))))
 
 (provide 'cloq)
-;;; Entrypoint:
-(when (clime-main-script-p 'cloq)
-  (clime-run-batch cloq))
 ;;; cloq.el ends here

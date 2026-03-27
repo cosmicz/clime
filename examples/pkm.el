@@ -420,6 +420,4 @@
                  :help "Remove a repository (shortcut)")))
 
 (provide 'pkm)
-;;; Entrypoint:
-(clime-run-batch pkm)
 ;;; pkm.el ends here
