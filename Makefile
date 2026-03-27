@@ -35,9 +35,11 @@ lint:
 SEL ?= ^clime-test-
 SELECT ?= $(SEL)
 SELECTOR ?= $(SELECT)
+# VERBOSE=1 to show message output from tests (not swallowed by ERT)
+VERBOSE ?=
 
 test: clean-elc
-	@$(BATCH) -l ./tests/clime-tests-runner.el \
+	@CLIME_TEST_VERBOSE=$(VERBOSE) $(BATCH) -l ./tests/clime-tests-runner.el \
 		--eval '(clime-run-tests-batch "$(SELECTOR)")' \
 		< /dev/null
 
@@ -109,7 +111,7 @@ help:
 	@echo "  all       - Default target. Same as 'compile'"
 	@echo "  compile   - Byte-compile all Elisp files"
 	@echo "  lint      - Byte-compile with warnings + checkdoc"
-	@echo "  test      - Run tests (SEL= to filter, default: ^clime-test-)"
+	@echo "  test      - Run tests (SEL= to filter, VERBOSE=1 for messages)"
 	@echo "  tests     - Alias for 'test'"
 	@echo "  dist      - Build single-file dist/clime.el bundle"
 	@echo "  bins      - Build all local executables in bin/ (gitignored)"
