@@ -86,6 +86,8 @@ init:
 	@$(CLIME_MAKE) init examples/pkm.el -R .. --standalone
 	@$(CLIME_MAKE) init examples/cloq.el -R .. --standalone \
 		--env CLIME_MAIN_APP=cloq $(CLOQ_DEPS)
+	@$(CLIME_MAKE) init examples/greeter.el -R .. --standalone \
+		--env CLIME_MAIN_APP=greeter
 
 strip:
 	@for f in clime-make.el examples/*.el; do \
