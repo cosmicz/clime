@@ -112,6 +112,14 @@
                  (sexp :tag "Custom display-buffer action"))
   :group 'clime)
 
+(defcustom clime-invoke-output-display-action nil
+  "Display buffer action for the command output window.
+When nil, use default `display-buffer' behavior.
+See Info node `(elisp)Choosing Window' for action format."
+  :type '(choice (const :tag "Default" nil)
+                 (sexp :tag "Custom display-buffer action"))
+  :group 'clime)
+
 ;;; ─── Internal State ─────────────────────────────────────────────────
 
 (defvar clime-invoke--show-mode 'normal
@@ -1032,10 +1040,17 @@ conformers, required checks) before calling the handler."
 
 ;;; ─── Output Display ─────────────────────────────────────────────────
 
-(defun clime-invoke--display-output (output &optional exit-code)
+(defun clime-invoke--display-output (output &optional exit-code display)
   "Display OUTPUT string in the *clime-output* buffer.
-EXIT-CODE is shown in the mode-line."
+EXIT-CODE is shown in the mode-line.
+
+DISPLAY controls how the output is shown:
+  t (default)  — short output (≤3 lines) is shown via `message' only;
+                  longer output opens a window via `display-buffer'.
+  `message'    — always use `message', never open a window.
+  `silent'     — suppress all display (buffer is still populated)."
   (let ((code (or exit-code 0))
+        (display (or display t))
         (buf (get-buffer-create "*clime-output*")))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
@@ -1046,10 +1061,14 @@ EXIT-CODE is shown in the mode-line."
         (goto-char (point-min)))
       (special-mode)
       (setq-local mode-line-process (format " [exit %s]" code)))
-    (display-buffer buf)
-    (when (not (string-empty-p output))
-      (with-current-buffer buf
-        (when (<= (count-lines (point-min) (point-max)) 3)
+    (unless (eq display 'silent)
+      (let ((short (and (not (string-empty-p output))
+                        (with-current-buffer buf
+                          (<= (count-lines (point-min) (point-max)) 3)))))
+        (when (and (eq display t) (not short))
+          (display-buffer buf clime-invoke-output-display-action))
+        (when (and (not (string-empty-p output))
+                   (or short (eq display 'message)))
           (message "%s" (string-trim output)))))))
 
 ;;; ─── Event Loop ─────────────────────────────────────────────────────
@@ -1199,11 +1218,14 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
 ;;; ─── Public API ─────────────────────────────────────────────────────
 
 ;;;###autoload
-(defun clime-invoke (app &optional path params)
+(cl-defun clime-invoke (app &optional path params &key display)
   "Open an interactive menu for clime APP.
 APP is a `clime-app' struct, or nil to select from registered apps.
 PATH is an optional list of strings naming a node to navigate to.
 PARAMS is an optional plist of initial param values.
+
+DISPLAY controls how command output is shown (see
+`clime-invoke--display-output' for values).  Default is t.
 
 Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
   :params  — final parameter values
@@ -1252,7 +1274,7 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
       (let ((final-params (car loop-result))
             (last-output (cadr loop-result)))
         (when last-output
-          (clime-invoke--display-output (cdr last-output) (car last-output)))
+          (clime-invoke--display-output (cdr last-output) (car last-output) display))
         (list :params final-params
               :exit (and last-output (car last-output))
               :output (and last-output (cdr last-output)))))))

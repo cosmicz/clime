@@ -1876,12 +1876,103 @@
                (lambda (_app _node _path _params _top)
                  (list '() '(0 . "shown") nil)))
               ((symbol-function 'clime-invoke--display-output)
-               (lambda (output &optional exit-code)
+               (lambda (output &optional exit-code _display)
                  (setq displayed (cons exit-code output)))))
       (clime-invoke app)
       (should displayed)
       (should (= 0 (car displayed)))
       (should (equal "shown" (cdr displayed))))))
+
+;;; ─── Output Display Tests ───────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/display-output-short-uses-message-only ()
+  "Short output (≤3 lines) only calls message, not display-buffer."
+  (let ((displayed nil)
+        (messaged nil))
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (&rest _) (setq displayed t) nil))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq messaged (apply #'format fmt args)))))
+      (clime-invoke--display-output "short output" 0 t))
+    (should-not displayed)
+    (should (equal "short output" messaged))))
+
+(ert-deftest clime-test-invoke/display-output-long-calls-display-buffer ()
+  "Long output (>3 lines) opens a window via display-buffer."
+  (let ((displayed nil)
+        (action-used nil))
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (_buf action) (setq displayed t action-used action) nil)))
+      (let ((clime-invoke-output-display-action '(display-buffer-reuse-window)))
+        (clime-invoke--display-output "line1\nline2\nline3\nline4\n" 0 t)))
+    (should displayed)
+    (should (equal '(display-buffer-reuse-window) action-used))))
+
+(ert-deftest clime-test-invoke/display-output-custom-action ()
+  "Output display respects clime-invoke-output-display-action."
+  (let ((action-used nil))
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (_buf action) (setq action-used action) nil)))
+      (let ((clime-invoke-output-display-action
+             '(display-buffer-in-side-window (side . right))))
+        (clime-invoke--display-output "a\nb\nc\nd\ne\n" 0 t)))
+    (should (equal '(display-buffer-in-side-window (side . right)) action-used))))
+
+(ert-deftest clime-test-invoke/display-output-silent-suppresses-all ()
+  "Display mode silent suppresses all output display."
+  (let ((displayed nil)
+        (messaged nil))
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (&rest _) (setq displayed t) nil))
+              ((symbol-function 'message)
+               (lambda (&rest _) (setq messaged t))))
+      (clime-invoke--display-output "hello" 0 'silent))
+    (should-not displayed)
+    (should-not messaged)
+    ;; Buffer should still be populated
+    (should (equal "hello"
+                   (with-current-buffer "*clime-output*"
+                     (buffer-substring-no-properties (point-min) (point-max)))))))
+
+(ert-deftest clime-test-invoke/display-output-message-mode ()
+  "Display mode message always messages, never opens a window."
+  (let ((displayed nil)
+        (messaged nil))
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (&rest _) (setq displayed t) nil))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq messaged (apply #'format fmt args)))))
+      (clime-invoke--display-output "line1\nline2\nline3\nline4\n" 0 'message))
+    (should-not displayed)
+    (should (equal "line1\nline2\nline3\nline4" messaged))))
+
+(ert-deftest clime-test-invoke/display-keyword-threads-to-display-output ()
+  "clime-invoke :display keyword is passed to display-output."
+  (let* ((app (clime-make-app :name "test" :version "1"))
+         (display-arg nil))
+    (cl-letf (((symbol-function 'clime-invoke--loop)
+               (lambda (_app _node _path _params _top)
+                 (list '() '(0 . "out") nil)))
+              ((symbol-function 'clime-invoke--display-output)
+               (lambda (_output &optional _exit-code display)
+                 (setq display-arg display))))
+      (clime-invoke app nil nil :display 'silent)
+      (should (eq 'silent display-arg)))))
+
+(ert-deftest clime-test-invoke/display-keyword-defaults-to-nil ()
+  "clime-invoke without :display passes nil (which defaults to t in display-output)."
+  (let* ((app (clime-make-app :name "test" :version "1"))
+         (display-arg 'unset))
+    (cl-letf (((symbol-function 'clime-invoke--loop)
+               (lambda (_app _node _path _params _top)
+                 (list '() '(0 . "out") nil)))
+              ((symbol-function 'clime-invoke--display-output)
+               (lambda (_output &optional _exit-code display)
+                 (setq display-arg display))))
+      (clime-invoke app)
+      (should-not display-arg))))
 
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here
