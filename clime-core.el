@@ -799,6 +799,32 @@ Walk the parent chain, collecting each ancestor's option flags into a flat list.
                           (clime-node-options ancestor)))
              (clime-node-ancestors node)))
 
+;;; ─── Params Derivation ──────────────────────────────────────────────────
+
+(defun clime--derive-params (node)
+  "Derive a flat params plist from :value/:source slots on NODE's scope.
+Walk NODE and its ancestors, collecting (name value) for params where
+:source is non-nil.  Leaf params shadow ancestor params.  Returns a plist."
+  (let ((params '())
+        (scope (cons node (clime-node-ancestors node))))
+    (dolist (node scope)
+      (dolist (opt (clime-node-all-options node))
+        (when (clime-param-source opt)
+          (let ((name (clime-param-name opt)))
+            (unless (plist-member params name)
+              (setq params (plist-put params name (clime-param-value opt)))))))
+      (dolist (arg (clime-node-args node))
+        (when (clime-param-source arg)
+          (let ((name (clime-param-name arg)))
+            (unless (plist-member params name)
+              (setq params (plist-put params name (clime-param-value arg))))))))
+    params))
+
+(defun clime-app-params (node)
+  "Return a flat params plist derived from NODE and its ancestors.
+Reads :value/:source slots on all options and args in scope."
+  (clime--derive-params node))
+
 ;;; ─── Tree Validation ────────────────────────────────────────────────────
 
 (defun clime--validate-node-options (node)

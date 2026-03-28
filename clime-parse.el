@@ -813,24 +813,5 @@ defaults, and checks required params.  Returns the updated RESULT."
     (setf (clime-parse-result-finalized result) t)
     result))
 
-(defun clime--derive-params (node)
-  "Derive a flat params plist from :value/:source slots on NODE's scope.
-Walk NODE and its ancestors, collecting (name value) for params where
-:source is non-nil.  Leaf params shadow ancestor params.  Returns a plist."
-  (let ((params '())
-        (scope (cons node (clime-node-ancestors node))))
-    (dolist (node scope)
-      (dolist (opt (clime-node-all-options node))
-        (when (clime-param-source opt)
-          (let ((name (clime-param-name opt)))
-            (unless (plist-member params name)
-              (setq params (plist-put params name (clime-param-value opt)))))))
-      (dolist (arg (clime-node-args node))
-        (when (clime-param-source arg)
-          (let ((name (clime-param-name arg)))
-            (unless (plist-member params name)
-              (setq params (plist-put params name (clime-param-value arg))))))))
-    params))
-
 (provide 'clime-parse)
 ;;; clime-parse.el ends here

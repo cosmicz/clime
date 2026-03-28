@@ -387,10 +387,9 @@ When more than 5 choices, truncate around SELECTED with ellipsis."
               (string-join parts " | ")
               (if suffix-dots " | ..." "")))))
 
-(defun clime-invoke--format-value (option params)
-  "Format the display value for OPTION given PARAMS plist."
-  (let* ((name (clime-option-name option))
-         (val (plist-get params name))
+(defun clime-invoke--format-value (option)
+  "Format the display value for OPTION from its :value slot."
+  (let* ((val (clime-param-value option))
          (default (clime-option-default option)))
     (cond
      ;; Count option
@@ -435,11 +434,10 @@ When more than 5 choices, truncate around SELECTED with ellipsis."
           (propertize (format "(%s)" d) 'face 'clime-invoke-default)))
        (t (propertize "(unset)" 'face 'clime-invoke-unset)))))))
 
-(defun clime-invoke--format-desc (option-or-arg params)
-  "Format the desc column for OPTION-OR-ARG given PARAMS.
+(defun clime-invoke--format-desc (option-or-arg)
+  "Format the desc column for OPTION-OR-ARG.
 Returns help text with long flag in parens and annotations."
-  (let* ((name (clime-param-name option-or-arg))
-         (help (clime-param-help option-or-arg))
+  (let* ((help (clime-param-help option-or-arg))
          (parts '()))
     ;; Help text or long flag as fallback
     (when help
@@ -458,7 +456,7 @@ Returns help text with long flag in parens and annotations."
       ;; Required — always show, dimmed when satisfied
       (when (and (clime-param-required option-or-arg)
                  (not (clime-param-default option-or-arg)))
-        (if (plist-get params name)
+        (if (clime-param-source option-or-arg)
             (push (propertize "(required)" 'face 'shadow) annotations)
           (push (propertize "(required)" 'face 'warning) annotations)))
       ;; Deprecated
@@ -482,15 +480,16 @@ Returns help text with long flag in parens and annotations."
         (setq parts (append parts (nreverse annotations)))))
     (string-join (nreverse parts) " ")))
 
-(defun clime-invoke--format-env (option params &optional app)
-  "Format the env column for OPTION given PARAMS, or return nil.
+(defun clime-invoke--format-env (option &optional app)
+  "Format the env column for OPTION, or return nil.
 APP is the root app (for :env-prefix resolution).
 Shows [$VAR=resolved] with active face on value when env is source."
   (when (clime-option-p option)
     (let ((env-name (clime--env-var-for-option option app)))
       (when env-name
         (let* ((env-val (getenv env-name))
-               (explicit (plist-member params (clime-option-name option)))
+               (explicit (and (clime-param-source option)
+                              (not (eq (clime-param-source option) 'env))))
                (has-val (and env-val (not (string-empty-p env-val)))))
           (if has-val
               (let ((prefix (propertize (format "[$%s=" env-name) 'face 'shadow))
@@ -503,14 +502,14 @@ Shows [$VAR=resolved] with active face on value when env is source."
 
 ;;; ─── Validation ─────────────────────────────────────────────────────
 
-(defun clime-invoke--validate-param (param params)
-  "Validate a single PARAM against PARAMS, returning nil or error string.
+(defun clime-invoke--validate-param (param)
+  "Validate a single PARAM, returning nil or error string.
 PARAM is a `clime-option' or `clime-arg'.  Skips unset values.
 Reuses `clime--transform-value' for type coercion and choices validation,
 then runs the param's `:conform' function (if any) on the coerced value."
   (let* ((name (clime-param-name param))
-         (val (plist-get params name)))
-    (when (and val (plist-member params name))
+         (val (clime-param-value param)))
+    (when (and val (clime-param-source param))
       (let* ((type (if (clime-option-p param)
                        (clime-option-type param)
                      (clime-arg-type param)))
@@ -571,49 +570,51 @@ is a list of symbols or nil if the conformer didn't attribute params."
              (push (cons msg params-attr) errors))))))
     (nreverse errors)))
 
-(defun clime-invoke--validate-all (node params)
-  "Validate PARAMS against NODE, returning (PARAM-ERRORS . GENERAL-ERRORS).
+(defun clime-invoke--validate-all (node)
+  "Validate NODE's params, returning (PARAM-ERRORS . GENERAL-ERRORS).
 PARAM-ERRORS is an alist of (NAME . error-string) for per-param issues.
-GENERAL-ERRORS is a list of strings from conformers and requires checks."
+GENERAL-ERRORS is a list of strings from conformers and requires checks.
+Derives a params plist from struct values for conformer/requires checks."
   (let ((param-errors nil)
         (general-errors nil))
     ;; Per-param validation: own options (including inline groups) + ancestor options + args
     ;; Skip locked options — their values are not user-settable
     (dolist (opt (clime-node-all-options node))
       (unless (clime-option-locked opt)
-        (when-let ((err (clime-invoke--validate-param opt params)))
+        (when-let ((err (clime-invoke--validate-param opt)))
           (push (cons (clime-option-name opt) err) param-errors))))
     (dolist (opt (clime-help--collect-ancestor-options node))
-      (when-let ((err (clime-invoke--validate-param opt params)))
+      (when-let ((err (clime-invoke--validate-param opt)))
         (push (cons (clime-option-name opt) err) param-errors)))
     (dolist (arg (clime-node-args node))
-      (when-let ((err (clime-invoke--validate-param arg params)))
+      (when-let ((err (clime-invoke--validate-param arg)))
         (push (cons (clime-arg-name arg) err) param-errors)))
-    ;; Requires checks
-    (let* ((ancestors (clime-node-ancestors node))
-           (visited (cons node (reverse ancestors))))
-      (dolist (err (clime--find-unsatisfied-requires visited params))
-        (push err general-errors)))
-    ;; Conformer checks — inject locked vals so mutex/zip checks see them
-    ;; Skip locked options with nil value (excluded siblings, not set values)
-    (let ((check-params (copy-sequence params)))
-      (dolist (opt (clime-node-all-options node))
-        (when (and (clime-option-locked opt)
-                   (not (null (clime-param-value opt))))
-          (let ((name (clime-option-name opt)))
-            (unless (plist-member check-params name)
-              (setq check-params (plist-put check-params name
-                                            (clime-param-value opt)))))))
-      ;; Unpack (MESSAGE . PARAM-NAMES) pairs
-      (dolist (entry (clime-invoke--run-conformer-checks node check-params))
-        (let ((msg (car entry))
-              (attr-params (cdr entry)))
-          (if attr-params
-              ;; Attributed: inline only (like type errors)
-              (dolist (name attr-params)
-                (push (cons name msg) param-errors))
-            ;; Unattributed: header
-            (push msg general-errors)))))
+    ;; Derive params plist for conformer/requires checks
+    (let ((params (clime-app-params node)))
+      ;; Requires checks
+      (let* ((scope (cons node (clime-node-ancestors node))))
+        (dolist (err (clime--find-unsatisfied-requires scope params))
+          (push err general-errors)))
+      ;; Conformer checks — inject locked vals so mutex/zip checks see them
+      ;; Skip locked options with nil value (excluded siblings, not set values)
+      (let ((check-params (copy-sequence params)))
+        (dolist (opt (clime-node-all-options node))
+          (when (and (clime-option-locked opt)
+                     (not (null (clime-param-value opt))))
+            (let ((name (clime-option-name opt)))
+              (unless (plist-member check-params name)
+                (setq check-params (plist-put check-params name
+                                              (clime-param-value opt)))))))
+        ;; Unpack (MESSAGE . PARAM-NAMES) pairs
+        (dolist (entry (clime-invoke--run-conformer-checks node check-params))
+          (let ((msg (car entry))
+                (attr-params (cdr entry)))
+            (if attr-params
+                ;; Attributed: inline only (like type errors)
+                (dolist (name attr-params)
+                  (push (cons name msg) param-errors))
+              ;; Unattributed: header
+              (push msg general-errors))))))
     (cons (nreverse param-errors) (nreverse general-errors))))
 
 ;;; ─── Rendering ──────────────────────────────────────────────────────
@@ -669,10 +670,10 @@ At root, shows appname vVERSION."
           (push (format "\n  $ %s" ex) parts)))))
     (string-join (nreverse parts))))
 
-(defun clime-invoke--render-to-string (node params key-map error-msg
+(defun clime-invoke--render-to-string (node key-map error-msg
                                             &optional at-root validation-result
                                             prefix-state)
-  "Render the menu for NODE with PARAMS, KEY-MAP, and ERROR-MSG.
+  "Render the menu for NODE with KEY-MAP and ERROR-MSG.
 When KEY-MAP is nil, builds one automatically from NODE.
 AT-ROOT non-nil means this is the entry-point node (q exits entirely).
 VALIDATION-RESULT is (PARAM-ERRORS . GENERAL-ERRORS) from `clime-invoke--validate-all'.
@@ -717,7 +718,7 @@ Uses 4-column layout: Key | Desc | Value | Env."
           (dolist (opt opts)
             (if (clime-option-locked opt)
                 ;; Locked option: show full flags dimmed, value in locked face
-                (let* ((desc (clime-invoke--format-desc opt params))
+                (let* ((desc (clime-invoke--format-desc opt))
                        (locked-val (clime-param-value opt))
                        (has-val (not (null locked-val)))
                        (val-str (if has-val
@@ -740,9 +741,9 @@ Uses 4-column layout: Key | Desc | Value | Env."
                                   (and (eq (cadr entry) :option)
                                        (eq (clime-option-name (caddr entry)) name)))
                                 key-map)))
-                     (desc (clime-invoke--format-desc opt params))
-                     (val-str (clime-invoke--format-value opt params))
-                     (env-str (clime-invoke--format-env opt params root))
+                     (desc (clime-invoke--format-desc opt))
+                     (val-str (clime-invoke--format-value opt))
+                     (env-str (clime-invoke--format-env opt root))
                      (param-err (cdr (assq name param-errors))))
                 (when key
                   (let ((display-key (if prefix-state
@@ -773,8 +774,8 @@ Uses 4-column layout: Key | Desc | Value | Env."
                               (and (eq (cadr entry) :arg)
                                    (eq (clime-arg-name (caddr entry)) name)))
                             key-map)))
-                 (desc (clime-invoke--format-desc arg params))
-                 (val (plist-get params name))
+                 (desc (clime-invoke--format-desc arg))
+                 (val (clime-param-value arg))
                  (val-str (if val
                               (propertize (format "%s" val) 'face 'clime-invoke-active)
                             (propertize "(unset)" 'face 'clime-invoke-unset)))
@@ -872,7 +873,7 @@ Extracts the letter from \"- v\" and prepends PREFIX (e.g. \"=v\")."
       str
     (concat str (make-string (- width (length str)) ?\s))))
 
-(defun clime-invoke--render (node params key-map error-msg buffer
+(defun clime-invoke--render (node key-map error-msg buffer
                                   &optional at-root validation-result
                                   prefix-state)
   "Render menu for NODE into BUFFER.
@@ -882,7 +883,7 @@ PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active."
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (clime-invoke--render-to-string
-               node params key-map error-msg at-root validation-result
+               node key-map error-msg at-root validation-result
                prefix-state))
       (goto-char (point-min))))
   ;; Fit window to content
@@ -892,18 +893,46 @@ PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active."
 
 ;;; ─── Option Interaction ─────────────────────────────────────────────
 
-(defun clime-invoke--handle-option (option params)
-  "Handle user interaction for OPTION, updating PARAMS.
-Returns the updated params plist."
-  (let* ((name (clime-option-name option))
-         (current (plist-get params name)))
+(defun clime-invoke--seed-params (tree params)
+  "Seed initial PARAMS plist onto TREE's option/arg structs.
+Walks all nodes setting :value/:source for matching params."
+  (let ((work (list tree)))
+    (while work
+      (let ((node (pop work)))
+        (dolist (opt (clime-node-options node))
+          (let ((val (plist-member params (clime-param-name opt))))
+            (when val
+              (setf (clime-param-value opt) (cadr val)
+                    (clime-param-source opt) 'user))))
+        (dolist (arg (clime-node-args node))
+          (let ((val (plist-member params (clime-param-name arg))))
+            (when val
+              (setf (clime-param-value arg) (cadr val)
+                    (clime-param-source arg) 'user))))
+        (when (clime-group-p node)
+          (dolist (entry (clime-group-children node))
+            (push (cdr entry) work)))))))
+
+(defun clime-invoke--set-param (param value)
+  "Set PARAM's :value to VALUE and :source to 'user."
+  (setf (clime-param-value param) value
+        (clime-param-source param) 'user))
+
+(defun clime-invoke--clear-param (param)
+  "Clear PARAM's :value and :source (unset)."
+  (setf (clime-param-value param) nil
+        (clime-param-source param) nil))
+
+(defun clime-invoke--handle-option (option)
+  "Handle user interaction for OPTION, mutating its :value/:source slots."
+  (let ((current (clime-param-value option)))
     (cond
      ;; Count
      ((clime-option-count option)
       (let ((n (clime-invoke--read-count (or current 0) nil)))
         (if (zerop n)
-            (clime-invoke--plist-remove params name)
-          (plist-put params name n))))
+            (clime-invoke--clear-param option)
+          (clime-invoke--set-param option n))))
      ;; Negatable (ternary)
      ((clime-option-negatable option)
       (let* ((pos-flag (cl-find-if (lambda (f) (string-prefix-p "--" f))
@@ -911,20 +940,20 @@ Returns the updated params plist."
              (neg-flag (and pos-flag (concat "--no-" (substring pos-flag 2))))
              (next (clime-invoke--cycle-ternary current pos-flag neg-flag)))
         (if next
-            (plist-put params name next)
-          (clime-invoke--plist-remove params name))))
+            (clime-invoke--set-param option next)
+          (clime-invoke--clear-param option))))
      ;; Boolean flag
      ((clime-option-boolean-p option)
       (if current
-          (clime-invoke--plist-remove params name)
-        (plist-put params name t)))
+          (clime-invoke--clear-param option)
+        (clime-invoke--set-param option t)))
      ;; Choices
      ((clime-option-choices option)
       (let* ((choices (clime--resolve-value (clime-option-choices option)))
              (next (clime-invoke--cycle-choice current choices)))
         (if next
-            (plist-put params name next)
-          (clime-invoke--plist-remove params name))))
+            (clime-invoke--set-param option next)
+          (clime-invoke--clear-param option))))
      ;; Multiple
      ((clime-option-multiple option)
       (let* ((choices (and (clime-option-choices option)
@@ -933,30 +962,22 @@ Returns the updated params plist."
                       (completing-read "Add value: " choices nil t)
                     (read-string "Add value (empty to clear): "))))
         (if (string-empty-p val)
-            (clime-invoke--plist-remove params name)
-          (plist-put params name (append (or current '()) (list val))))))
+            (clime-invoke--clear-param option)
+          (clime-invoke--set-param option (append (or current '()) (list val))))))
      ;; Plain value
      (t
       (let ((val (read-string (format "%s: " (or (clime-option-help option)
-                                                 (symbol-name name)))
+                                                 (symbol-name (clime-option-name option))))
                               (and current (format "%s" current)))))
         (if (string-empty-p val)
-            (clime-invoke--plist-remove params name)
-          (plist-put params name val)))))))
+            (clime-invoke--clear-param option)
+          (clime-invoke--set-param option val)))))))
 
-(defun clime-invoke--plist-remove (plist key)
-  "Return PLIST with KEY removed."
-  (let ((result '()))
-    (cl-loop for (k v) on plist by #'cddr
-             unless (eq k key)
-             do (push k result) (push v result))
-    (nreverse result)))
 
-(defun clime-invoke--handle-arg (arg params)
-  "Handle user interaction for positional ARG, updating PARAMS.
-Returns the updated params plist."
+(defun clime-invoke--handle-arg (arg)
+  "Handle user interaction for positional ARG, mutating its :value/:source slots."
   (let* ((name (clime-arg-name arg))
-         (current (plist-get params name))
+         (current (clime-param-value arg))
          (choices (and (clime-arg-choices arg)
                        (clime--resolve-value (clime-arg-choices arg))))
          (val (if choices
@@ -967,15 +988,14 @@ Returns the updated params plist."
                  (format "%s: " (or (clime-arg-help arg) (symbol-name name)))
                  current))))
     (if (string-empty-p val)
-        (clime-invoke--plist-remove params name)
-      (plist-put params name val))))
+        (clime-invoke--clear-param arg)
+      (clime-invoke--set-param arg val))))
 
-(defun clime-invoke--handle-option-direct (option params)
-  "Handle direct-input interaction for OPTION, updating PARAMS.
-Unlike cycling, this prompts the user for an explicit value.
-Returns the updated params plist."
+(defun clime-invoke--handle-option-direct (option)
+  "Handle direct-input interaction for OPTION, mutating its :value/:source slots.
+Unlike cycling, this prompts the user for an explicit value."
   (let* ((name (clime-option-name option))
-         (current (plist-get params name)))
+         (current (clime-param-value option)))
     (cond
      ;; Choices: completing-read
      ((clime-option-choices option)
@@ -984,8 +1004,8 @@ Returns the updated params plist."
                    (format "%s: " (or (clime-option-help option) (symbol-name name)))
                    choices nil t (and current (format "%s" current)))))
         (if (string-empty-p val)
-            (clime-invoke--plist-remove params name)
-          (plist-put params name val))))
+            (clime-invoke--clear-param option)
+          (clime-invoke--set-param option val))))
      ;; Count: prompt for number
      ((clime-option-count option)
       (let* ((prompt (format "%s (0-5, current %s): "
@@ -997,10 +1017,10 @@ Returns the updated params plist."
         (unless (and n (<= 0 n) (<= n 5))
           (error "Invalid count: %s (expected 0-5)" input))
         (if (zerop n)
-            (clime-invoke--plist-remove params name)
-          (plist-put params name n))))
+            (clime-invoke--clear-param option)
+          (clime-invoke--set-param option n))))
      ;; Boolean/negatable/plain: delegate to cycling handler
-     (t (clime-invoke--handle-option option params)))))
+     (t (clime-invoke--handle-option option)))))
 
 ;;; ─── Run Handler ────────────────────────────────────────────────────
 ;;;
@@ -1085,12 +1105,11 @@ Returns the full key string (e.g. \"- v\") or nil on timeout/C-g."
      ((memq ch '(?\C-g 7)) nil)
      (t (concat prefix " " (key-description (vector ch)))))))
 
-(defun clime-invoke--loop (app node path params &optional at-root)
+(defun clime-invoke--loop (app node path &optional at-root)
   "Run the menu event loop for NODE.
 APP is the root app.  PATH is the current command path.
-PARAMS is the shared params plist.
 AT-ROOT non-nil means this is the entry-point node.
-Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
+Returns (LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
 \(EXIT-CODE . STRING) or nil, and QUIT-ALL non-nil means ESC was pressed."
   (let ((buf (get-buffer-create clime-invoke--buffer-name))
         (key-map (clime-invoke--build-key-map node))
@@ -1101,16 +1120,16 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
         (running t))
     (display-buffer buf clime-invoke-display-buffer-action)
     ;; Initial validation
-    (setq validation-result (clime-invoke--validate-all node params))
+    (setq validation-result (clime-invoke--validate-all node))
     (while running
-      (clime-invoke--render node params key-map error-msg buf
+      (clime-invoke--render node key-map error-msg buf
                             at-root validation-result)
       (let* ((ch (read-key))
              (key (key-description (vector ch)))
              (key (if (member key '("-" "="))
                       (progn
                         ;; Re-render with prefix state visible, show hint in echo area
-                        (clime-invoke--render node params key-map error-msg buf
+                        (clime-invoke--render node key-map error-msg buf
                                               at-root validation-result key)
                         (message (if (equal key "-") "- cycle" "= direct"))
                         (let ((ch2 (read-event nil nil clime-invoke-prefix-timeout)))
@@ -1155,9 +1174,9 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
                  (let ((opt (cadr action)))
                    (condition-case err
                        (progn
-                         (setq params (clime-invoke--handle-option opt params))
+                         (clime-invoke--handle-option opt)
                          (setq validation-result
-                               (clime-invoke--validate-all node params)))
+                               (clime-invoke--validate-all node)))
                      (quit nil)
                      (error
                       (setq error-msg (error-message-string err))))))
@@ -1165,9 +1184,9 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
                  (let ((opt (cadr action)))
                    (condition-case err
                        (progn
-                         (setq params (clime-invoke--handle-option-direct opt params))
+                         (clime-invoke--handle-option-direct opt)
                          (setq validation-result
-                               (clime-invoke--validate-all node params)))
+                               (clime-invoke--validate-all node)))
                      (quit nil)
                      (error
                       (setq error-msg (error-message-string err))))))
@@ -1175,9 +1194,9 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
                  (let ((arg (cadr action)))
                    (condition-case err
                        (progn
-                         (setq params (clime-invoke--handle-arg arg params))
+                         (clime-invoke--handle-arg arg)
                          (setq validation-result
-                               (clime-invoke--validate-all node params)))
+                               (clime-invoke--validate-all node)))
                      (quit nil)
                      (error
                       (setq error-msg (error-message-string err))))))
@@ -1186,19 +1205,19 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
                         (child-node (caddr action))
                         (child-path (append path (list child-name))))
                    (let ((child-result
-                          (clime-invoke--loop app child-node child-path params)))
-                     (setq params (car child-result))
+                          (clime-invoke--loop app child-node child-path)))
                      (setq validation-result
-                           (clime-invoke--validate-all node params))
-                     (when (caddr child-result)
+                           (clime-invoke--validate-all node))
+                     (when (cadr child-result)
                        ;; Propagate quit-all from child
                        (setq running nil quit-all t))
-                     (when-let ((child-output (cadr child-result)))
+                     (when-let ((child-output (car child-result)))
                        ;; Propagate: close parent loop too, show output
                        (setq last-output child-output
                              running nil)))))
                 (:run
-                 (let* ((run-result (clime-invoke--run-handler app node path params))
+                 (let* ((params (clime-app-params node))
+                        (run-result (clime-invoke--run-handler app node path params))
                         (exit-code (car run-result))
                         (cmd-output (cdr run-result)))
                    (if (zerop exit-code)
@@ -1212,7 +1231,7 @@ Returns (PARAMS LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
     ;; Re-display parent after returning from child
     (when (buffer-live-p buf)
       (display-buffer buf clime-invoke-display-buffer-action))
-    (list params last-output quit-all)))
+    (list last-output quit-all)))
 
 ;;; ─── Public API ─────────────────────────────────────────────────────
 
@@ -1245,38 +1264,42 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
       (let ((result (clime-parse app '() t)))
         (funcall setup app result)
         (clime-parse-finalize result))))
-  ;; Navigate to starting node
-  (let ((node app)
-        (nav-path '()))
-    (when path
-      (dolist (step path)
-        (let ((child (and (clime-group-p node)
-                          (clime-group-find-child node step))))
-          (unless child
-            (user-error "Command not found: %s" step))
-          (setq node child)
-          (push step nav-path)))
-      (setq nav-path (nreverse nav-path)))
-    ;; Enter the loop
-    (let ((clime-invoke--show-mode 'normal)
-          loop-result)
-      (unwind-protect
-          (setq loop-result
-                (clime-invoke--loop app node (or nav-path '())
-                                    (or params '()) t))
-        ;; Clean up invoke buffer regardless of how we exit
-        (when-let ((buf (get-buffer clime-invoke--buffer-name)))
-          (let ((win (get-buffer-window buf)))
-            (when win (delete-window win)))
-          (kill-buffer buf)))
-      ;; Show output after invoke buffer is gone
-      (let ((final-params (car loop-result))
-            (last-output (cadr loop-result)))
-        (when last-output
-          (clime-invoke--display-output (cdr last-output) (car last-output) display))
-        (list :params final-params
-              :exit (and last-output (car last-output))
-              :output (and last-output (cdr last-output)))))))
+  ;; Deep-copy tree so struct mutations don't persist on the registered app
+  (clime--set-parent-refs app)
+  (let ((tree (clime--deep-copy-tree app)))
+    ;; Seed initial params onto tree structs
+    (when params
+      (clime-invoke--seed-params tree params))
+    ;; Navigate to starting node
+    (let ((node tree)
+          (nav-path '()))
+      (when path
+        (dolist (step path)
+          (let ((child (and (clime-group-p node)
+                            (clime-group-find-child node step))))
+            (unless child
+              (user-error "Command not found: %s" step))
+            (setq node child)
+            (push step nav-path)))
+        (setq nav-path (nreverse nav-path)))
+      ;; Enter the loop
+      (let ((clime-invoke--show-mode 'normal)
+            loop-result)
+        (unwind-protect
+            (setq loop-result
+                  (clime-invoke--loop tree node (or nav-path '()) t))
+          ;; Clean up invoke buffer regardless of how we exit
+          (when-let ((buf (get-buffer clime-invoke--buffer-name)))
+            (let ((win (get-buffer-window buf)))
+              (when win (delete-window win)))
+            (kill-buffer buf)))
+        ;; Show output after invoke buffer is gone
+        (let ((last-output (car loop-result)))
+          (when last-output
+            (clime-invoke--display-output (cdr last-output) (car last-output) display))
+          (list :params (clime-app-params node)
+                :exit (and last-output (car last-output))
+                :output (and last-output (cdr last-output))))))))
 
 ;;;###autoload
 (defun clime-invoke-command (app command-path)
