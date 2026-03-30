@@ -398,15 +398,18 @@
       ;; format is locked
       (should fmt-opt)
       (should (clime-option-locked fmt-opt))
-      (should (equal "csv" (clime-param-value fmt-opt)))
-      (should (eq 'app (clime-param-source fmt-opt)))
+      ;; Value stored in value-entries, not on struct
+      (let* ((entries (clime-node-value-entries resolved))
+             (fmt-entry (cdr (assq 'format entries))))
+        (should (equal "csv" (plist-get fmt-entry :value)))
+        (should (eq 'app (plist-get fmt-entry :source))))
       ;; verbose is not locked
       (should-not (clime-option-locked
                    (cl-find-if (lambda (o) (eq (clime-option-name o) 'verbose))
                                (clime-node-options resolved)))))))
 
-(ert-deftest clime-test-alias-for/vals-stored-as-locked-vals ()
-  "alias :vals are stored as locked-vals on the resolved command."
+(ert-deftest clime-test-alias-for/vals-stored-as-value-entries ()
+  "alias :vals are stored as value-entries on the resolved command."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")))
          (cmd (clime-make-command :name "show" :handler #'ignore
                                    :options (list opt)))
@@ -421,7 +424,8 @@
                                               (cons "show-csv" alias)))))
     (clime--resolve-aliases app)
     (let ((resolved (cdr (assoc "show-csv" (clime-group-children app)))))
-      (should (equal '((format . "csv")) (clime-node-locked-vals resolved))))))
+      (should (equal '((format :value "csv" :source app))
+                     (clime-node-value-entries resolved))))))
 
 (ert-deftest clime-test-alias-for/vals-injected-into-params ()
   "alias :vals value appears in parsed params."
@@ -610,13 +614,13 @@
            (params (clime-parse-result-params result)))
       (should (eq t (plist-get params 'verbose))))))
 
-;;; ─── Ancestor locked-vals inheritance ────────────────────────────────
+;;; ─── Ancestor value-entries inheritance ─────────────────────────────
 
-(ert-deftest clime-test-alias-for/ancestor-locked-vals-inherited ()
-  "locked-vals on ancestor group are injected into child command params."
+(ert-deftest clime-test-alias-for/ancestor-value-entries-inherited ()
+  "value-entries on ancestor group are injected into child command params."
   (let* ((cmd (clime-make-command :name "show" :handler #'ignore))
          (grp (clime-make-group :name "report"
-                                :locked-vals '((format . "csv"))
+                                :value-entries '((format :value "csv" :source app))
                                 :children (list (cons "show" cmd))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)))))
@@ -624,12 +628,12 @@
            (params (clime-parse-result-params result)))
       (should (equal "csv" (plist-get params 'format))))))
 
-(ert-deftest clime-test-alias-for/leaf-locked-vals-override-ancestor ()
-  "Leaf locked-vals take priority over ancestor locked-vals for same key."
+(ert-deftest clime-test-alias-for/leaf-value-entries-override-ancestor ()
+  "Leaf value-entries take priority over ancestor value-entries for same key."
   (let* ((cmd (clime-make-command :name "show" :handler #'ignore
-                                    :locked-vals '((format . "json"))))
+                                    :value-entries '((format :value "json" :source app))))
          (grp (clime-make-group :name "report"
-                                :locked-vals '((format . "csv"))
+                                :value-entries '((format :value "csv" :source app))
                                 :children (list (cons "show" cmd))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)))))
@@ -637,12 +641,12 @@
            (params (clime-parse-result-params result)))
       (should (equal "json" (plist-get params 'format))))))
 
-(ert-deftest clime-test-alias-for/ancestor-locked-vals-merge-with-leaf ()
-  "Ancestor and leaf locked-vals for different keys both appear in params."
+(ert-deftest clime-test-alias-for/ancestor-value-entries-merge-with-leaf ()
+  "Ancestor and leaf value-entries for different keys both appear in params."
   (let* ((cmd (clime-make-command :name "show" :handler #'ignore
-                                    :locked-vals '((limit . 10))))
+                                    :value-entries '((limit :value 10 :source app))))
          (grp (clime-make-group :name "report"
-                                :locked-vals '((format . "csv"))
+                                :value-entries '((format :value "csv" :source app))
                                 :children (list (cons "show" cmd))))
          (app (clime-make-app :name "myapp"
                               :children (list (cons "report" grp)))))
@@ -684,8 +688,9 @@
              (cl-find-if (lambda (o) (eq (clime-option-name o) 'todo))
                           (clime-node-all-options resolved))))
     (should (memq 'sexp all-opt-names))
-    ;; locked-vals stored
-    (should (equal '((todo . "WAITING")) (clime-node-locked-vals resolved))))
+    ;; value-entries stored
+    (should (equal '((todo :value "WAITING" :source app))
+                   (clime-node-value-entries resolved))))
   ;; Parse works — locked val injected
   (let* ((result (clime-parse clime-test--af-vals-mutex '("waiting")))
          (params (clime-parse-result-params result)))
@@ -787,16 +792,17 @@
          (app (clime-make-app :name "myapp"
                               :children (list (cons "root" grp)
                                               (cons "both-locked" alias)))))
-    (let* ((resolved (cdr (assoc "both-locked" (clime-group-children app)))))
-      ;; Both locked with their values
+    (let* ((resolved (cdr (assoc "both-locked" (clime-group-children app))))
+           (entries (clime-node-value-entries resolved)))
+      ;; Both locked with their values in value-entries
       (let ((todo (cl-find-if (lambda (o) (eq (clime-option-name o) 'todo))
                               (clime-node-all-options resolved)))
             (sexp (cl-find-if (lambda (o) (eq (clime-option-name o) 'sexp))
                               (clime-node-all-options resolved))))
         (should (clime-option-locked todo))
-        (should (equal "WAITING" (clime-param-value todo)))
+        (should (equal "WAITING" (plist-get (cdr (assq 'todo entries)) :value)))
         (should (clime-option-locked sexp))
-        (should (equal "(active)" (clime-param-value sexp)))))))
+        (should (equal "(active)" (plist-get (cdr (assq 'sexp entries)) :value)))))))
 
 (ert-deftest clime-test-alias-for/vals-zip-locks-siblings ()
   "alias :vals locking a zip member locks all siblings in the group."

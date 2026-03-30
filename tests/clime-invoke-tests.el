@@ -1643,7 +1643,7 @@
                                  :locked t :value "WAITING" :source 'app))
          (cmd (clime-make-command :name "waiting" :handler #'ignore
                                   :options (list opt)
-                                  :locked-vals '((todo . "WAITING"))))
+                                  :value-entries '((todo :value "WAITING" :source app))))
          (app (clime-make-app :name "test" :version "1"
                               :children `(("waiting" . ,cmd))))
          (_ (setf (clime-node-parent cmd) app))
@@ -1756,7 +1756,7 @@
                                      :conform (list exclusive)))
          (cmd (clime-make-command :name "waiting" :handler #'ignore
                                   :children (list (cons "qm" mutex))
-                                  :locked-vals '((todo . "WAITING"))))
+                                  :value-entries '((todo :value "WAITING" :source app))))
          (app (clime-make-app :name "test" :version "1"
                               :children `(("waiting" . ,cmd))))
          (_ (setf (clime-node-parent cmd) app))

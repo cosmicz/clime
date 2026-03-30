@@ -342,7 +342,6 @@ under GROUP-NAME."
   (examples nil :type list :documentation "List of example invocations for help output.
 Each element is (INVOCATION . DESCRIPTION), (INVOCATION), or a bare INVOCATION string.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
-  (locked-vals nil :type list :documentation "Deprecated: use :vals instead.  Alist of (name . value) injected into params during finalize.")
   (value-entries nil :type list :documentation "Alist of (NAME . PLIST) entries.
 Declarative values a node contributes to the values map during finalize.
 Each PLIST has :value and :source keys.  Alias vals have source `app'.")
@@ -538,12 +537,9 @@ resolved command copies."
                 (unless opt
                   (error "Alias %s: :vals names unknown option `%s'"
                          (clime-node-name child) name))
-                (setf (clime-option-locked opt) t
-                      (clime-param-value opt) val
-                      (clime-param-source opt) 'app)))
-            ;; Store vals for injection during finalize (both formats during migration)
+                (setf (clime-option-locked opt) t)))
+            ;; Store vals for injection during finalize
             (when vals
-              (setf (clime-node-locked-vals resolved) vals)
               (setf (clime-node-value-entries resolved)
                     (mapcar (lambda (e) (cons (car e) (list :value (cdr e) :source 'app)))
                             vals)))

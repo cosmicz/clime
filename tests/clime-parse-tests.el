@@ -1383,8 +1383,8 @@
 
 ;;; ─── Derive Params / Value-on-Struct Tests ─────────────────────────
 
-(ert-deftest clime-test-parse/derive-params-matches-plist ()
-  "Derived plist from struct :value/:source matches incrementally-built plist."
+(ert-deftest clime-test-parse/values-map-matches-params-plist ()
+  "Values map and derived params plist contain the same data."
   (let* ((app (clime-make-app
                :name "test" :version "1"
                :options (list (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0)
@@ -1394,15 +1394,14 @@
                                       :name "run" :handler #'ignore
                                       :args (list (clime-make-arg :name 'file)))))))
          (result (clime-parse app '("--verbose" "--format" "csv" "run" "test.el")))
-         (plist-params (clime-parse-result-params result))
-         (derived (clime--derive-params (clime-parse-result-node result))))
-    ;; All values present in both
-    (should (equal (plist-get plist-params 'verbose) (plist-get derived 'verbose)))
-    (should (equal (plist-get plist-params 'format) (plist-get derived 'format)))
-    (should (equal (plist-get plist-params 'file) (plist-get derived 'file)))))
+         (params (clime-parse-result-params result))
+         (values (clime-parse-result-values result)))
+    (should (equal (plist-get params 'verbose) (clime-values-value values 'verbose)))
+    (should (equal (plist-get params 'format) (clime-values-value values 'format)))
+    (should (equal (plist-get params 'file) (clime-values-value values 'file)))))
 
-(ert-deftest clime-test-parse/struct-source-set-for-cli-values ()
-  "Options/args parsed from CLI have :source 'user."
+(ert-deftest clime-test-parse/values-source-set-for-cli-values ()
+  "Options/args parsed from CLI have :source 'user in values map."
   (let* ((app (clime-make-app
                :name "test" :version "1"
                :options (list (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
@@ -1411,17 +1410,14 @@
                                       :name "run" :handler #'ignore
                                       :args (list (clime-make-arg :name 'file)))))))
          (result (clime-parse app '("--verbose" "run" "test.el")))
-         (tree (clime-parse-result-tree result))
-         (opt (car (clime-node-options tree)))
-         (cmd (cdr (car (clime-group-children tree))))
-         (arg (car (clime-node-args cmd))))
-    (should (eq 'user (clime-param-source opt)))
-    (should (eq t (clime-param-value opt)))
-    (should (eq 'user (clime-param-source arg)))
-    (should (equal "test.el" (clime-param-value arg)))))
+         (values (clime-parse-result-values result)))
+    (should (eq 'user (clime-values-source values 'verbose)))
+    (should (eq t (clime-values-value values 'verbose)))
+    (should (eq 'user (clime-values-source values 'file)))
+    (should (equal "test.el" (clime-values-value values 'file)))))
 
-(ert-deftest clime-test-parse/struct-source-default ()
-  "Options with defaults get :source 'default when not set by user."
+(ert-deftest clime-test-parse/values-source-default ()
+  "Options with defaults get :source 'default in values map."
   (let* ((app (clime-make-app
                :name "test" :version "1"
                :options (list (clime-make-option :name 'format :flags '("--format")
@@ -1429,10 +1425,9 @@
                :children (list (cons "run"
                                      (clime-make-command :name "run" :handler #'ignore)))))
          (result (clime-parse app '("run")))
-         (tree (clime-parse-result-tree result))
-         (opt (car (clime-node-options tree))))
-    (should (eq 'default (clime-param-source opt)))
-    (should (equal "text" (clime-param-value opt)))))
+         (values (clime-parse-result-values result)))
+    (should (eq 'default (clime-values-source values 'format)))
+    (should (equal "text" (clime-values-value values 'format)))))
 
 (ert-deftest clime-test-parse/tree-isolated-from-original ()
   "Parse result tree is a deep copy — original app is unmodified."
@@ -1447,8 +1442,8 @@
     (should-not (clime-param-value orig-opt))
     (should-not (clime-param-source orig-opt))))
 
-(ert-deftest clime-test-parse/struct-source-env ()
-  "Options set from env vars have :source 'env on the struct."
+(ert-deftest clime-test-parse/values-source-env ()
+  "Options set from env vars have :source 'env in values map."
   (let* ((opt (clime-make-option :name 'token :flags '("--token") :env t))
          (cmd (clime-make-command :name "deploy" :handler #'ignore))
          (app (clime-make-app :name "myapp" :version "1" :env-prefix "TST"
@@ -1456,13 +1451,12 @@
                               :children (list (cons "deploy" cmd)))))
     (let ((process-environment (append '("TST_TOKEN=secret") process-environment)))
       (let* ((result (clime-parse app '("deploy")))
-             (tree (clime-parse-result-tree result))
-             (tree-opt (car (clime-node-options tree))))
-        (should (eq 'env (clime-param-source tree-opt)))
-        (should (equal "secret" (clime-param-value tree-opt)))))))
+             (values (clime-parse-result-values result)))
+        (should (eq 'env (clime-values-source values 'token)))
+        (should (equal "secret" (clime-values-value values 'token)))))))
 
-(ert-deftest clime-test-parse/struct-source-preserved-after-conform ()
-  "Conformer transforms :value but does not change :source."
+(ert-deftest clime-test-parse/values-source-preserved-after-conform ()
+  "Conformer transforms value but does not change source in values map."
   (let* ((opt (clime-make-option :name 'name :flags '("--name")
                                   :conform #'upcase))
          (cmd (clime-make-command :name "run" :handler #'ignore))
@@ -1470,66 +1464,60 @@
                               :options (list opt)
                               :children (list (cons "run" cmd)))))
     (let* ((result (clime-parse app '("--name" "hello" "run")))
-           (tree (clime-parse-result-tree result))
-           (tree-opt (car (clime-node-options tree))))
-      (should (eq 'user (clime-param-source tree-opt)))
-      (should (equal "HELLO" (clime-param-value tree-opt))))))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'name)))
+      (should (equal "HELLO" (clime-values-value values 'name))))))
 
-(ert-deftest clime-test-parse/struct-negated-flag-nil-value-user-source ()
-  "Negated --no-X flag sets :value nil with :source 'user."
+(ert-deftest clime-test-parse/values-negated-flag-nil-value-user-source ()
+  "Negated --no-X flag sets nil value with :source 'user in values map."
   (let* ((opt (clime-make-option :name 'color :flags '("--color") :negatable t))
          (cmd (clime-make-command :name "run" :handler #'ignore))
          (app (clime-make-app :name "test" :version "1"
                               :options (list opt)
                               :children (list (cons "run" cmd)))))
     (let* ((result (clime-parse app '("--no-color" "run")))
-           (tree (clime-parse-result-tree result))
-           (tree-opt (car (clime-node-options tree))))
-      (should (eq 'user (clime-param-source tree-opt)))
-      (should (null (clime-param-value tree-opt))))))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'color)))
+      (should (null (clime-values-value values 'color))))))
 
-(ert-deftest clime-test-parse/struct-count-option-source ()
-  "Count option incremented twice has :source 'user and :value 2."
+(ert-deftest clime-test-parse/values-count-option-source ()
+  "Count option incremented twice has :source 'user and value 2 in values map."
   (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :count t))
          (cmd (clime-make-command :name "run" :handler #'ignore))
          (app (clime-make-app :name "test" :version "1"
                               :options (list opt)
                               :children (list (cons "run" cmd)))))
     (let* ((result (clime-parse app '("-v" "-v" "run")))
-           (tree (clime-parse-result-tree result))
-           (tree-opt (car (clime-node-options tree))))
-      (should (eq 'user (clime-param-source tree-opt)))
-      (should (equal 2 (clime-param-value tree-opt))))))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'verbose)))
+      (should (equal 2 (clime-values-value values 'verbose))))))
 
-(ert-deftest clime-test-parse/struct-multiple-option-source ()
-  "Multiple option collects values into list with :source 'user."
+(ert-deftest clime-test-parse/values-multiple-option-source ()
+  "Multiple option collects values into list with :source 'user in values map."
   (let* ((opt (clime-make-option :name 'tag :flags '("--tag") :multiple t))
          (cmd (clime-make-command :name "run" :handler #'ignore))
          (app (clime-make-app :name "test" :version "1"
                               :options (list opt)
                               :children (list (cons "run" cmd)))))
     (let* ((result (clime-parse app '("--tag" "a" "--tag" "b" "run")))
-           (tree (clime-parse-result-tree result))
-           (tree-opt (car (clime-node-options tree))))
-      (should (eq 'user (clime-param-source tree-opt)))
-      (should (equal '("a" "b") (clime-param-value tree-opt))))))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'tag)))
+      (should (equal '("a" "b") (clime-values-value values 'tag))))))
 
-(ert-deftest clime-test-parse/struct-rest-arg-source ()
-  "Rest arg collects values into list with :source 'user."
+(ert-deftest clime-test-parse/values-rest-arg-source ()
+  "Rest arg collects values into list with :source 'user in values map."
   (let* ((cmd (clime-make-command
                :name "run" :handler #'ignore
                :args (list (clime-make-arg :name 'files :nargs :rest))))
          (app (clime-make-app :name "test" :version "1"
                               :children (list (cons "run" cmd)))))
     (let* ((result (clime-parse app '("run" "a.el" "b.el")))
-           (tree (clime-parse-result-tree result))
-           (run-cmd (cdr (car (clime-group-children tree))))
-           (arg (car (clime-node-args run-cmd))))
-      (should (eq 'user (clime-param-source arg)))
-      (should (equal '("a.el" "b.el") (clime-param-value arg))))))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'files)))
+      (should (equal '("a.el" "b.el") (clime-values-value values 'files))))))
 
-(ert-deftest clime-test-parse/derive-params-includes-defaults ()
-  "derive-params includes params sourced from :default."
+(ert-deftest clime-test-parse/params-includes-defaults ()
+  "Parse result params include default-sourced values."
   (let* ((app (clime-make-app
                :name "test" :version "1"
                :options (list (clime-make-option :name 'format :flags '("--format")
@@ -1537,11 +1525,11 @@
                :children (list (cons "run"
                                      (clime-make-command :name "run" :handler #'ignore)))))
          (result (clime-parse app '("run")))
-         (derived (clime--derive-params (clime-parse-result-node result))))
-    (should (equal "text" (plist-get derived 'format)))))
+         (params (clime-parse-result-params result)))
+    (should (equal "text" (plist-get params 'format)))))
 
-(ert-deftest clime-test-parse/derive-params-includes-locked ()
-  "derive-params includes locked params with :source 'app."
+(ert-deftest clime-test-parse/params-includes-locked ()
+  "Parse result params include locked alias vals with :source 'app."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")))
          (cmd (clime-make-command :name "list" :handler #'ignore
                                    :options (list opt)))
@@ -1553,8 +1541,8 @@
                               :children (list (cons "list" cmd)
                                               (cons "csv" alias)))))
     (let* ((result (clime-parse app '("csv")))
-           (derived (clime--derive-params (clime-parse-result-node result))))
-      (should (equal "csv" (plist-get derived 'format))))))
+           (params (clime-parse-result-params result)))
+      (should (equal "csv" (plist-get params 'format))))))
 
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

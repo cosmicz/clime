@@ -255,8 +255,6 @@ When NEGATED is non-nil, explicitly set the param to nil (for --no-X flags)."
      (t
       (setq val (clime--transform-value token-value type choices coerce
                                         (car (clime-option-flags opt))))))
-    (setf (clime-param-value opt) val
-          (clime-param-source opt) 'user)
     (clime-values-set values name val 'user)))
 
 (defun clime--required-args-satisfied-p (node values)
@@ -369,8 +367,6 @@ APP is the root app node (for :env-prefix).  Returns updated VALUES."
                     env-var)))))
             ;; Boolean falsy returns nil from parse-boolean-env — skip
             (when (or env-val (not (clime-option-boolean-p opt)))
-              (setf (clime-param-value opt) env-val
-                    (clime-param-source opt) 'env)
               (setq values (clime-values-set values name env-val 'env))))))))
   values)
 
@@ -385,8 +381,6 @@ Walks inline group children to reach options in mutex/zip groups."
           (let ((default (clime-option-default opt)))
             (when default
               (let ((val (clime--resolve-value default)))
-                (setf (clime-param-value opt) val
-                      (clime-param-source opt) 'default)
                 (setq values (clime-values-set values name val 'default))))))))
     (dolist (arg (clime-node-args node))
       (let ((name (clime-arg-name arg)))
@@ -394,8 +388,6 @@ Walks inline group children to reach options in mutex/zip groups."
           (let ((default (clime-arg-default arg)))
             (when default
               (let ((val (clime--resolve-value default)))
-                (setf (clime-param-value arg) val
-                      (clime-param-source arg) 'default)
                 (setq values (clime-values-set values name val 'default)))))))))
   values)
 
@@ -555,8 +547,6 @@ This enables a setup hook to run between passes."
                   (cl-incf i))))
             (let ((val (nreverse rest-values))
                   (name (clime-arg-name arg-spec)))
-              (setf (clime-param-value arg-spec) val
-                    (clime-param-source arg-spec) 'user)
               (setq values (clime-values-set values name val 'user)))))
 
          ;; 4. Option-like token
@@ -604,8 +594,6 @@ This enables a setup hook to run between passes."
                                   (clime-arg-coerce arg-spec)
                                   (format "<%s>" (clime-arg-name arg-spec)))))
                     (let ((name (clime-arg-name arg-spec)))
-                      (setf (clime-param-value arg-spec) coerced
-                            (clime-param-source arg-spec) 'user)
                       (setq values (clime-values-set values name coerced 'user))))
                   (cl-incf arg-index)
                   (cl-incf i))
@@ -706,7 +694,6 @@ conformed value; signaled errors are written as :error entries."
               (condition-case err
                   (let* ((conformed (clime--call-conform cfn val opt))
                          (src (or (clime-values-source values name) 'user)))
-                    (setf (clime-param-value opt) conformed)
                     (setq values (clime-values-set values name conformed src)))
                 (error
                  (setq values
@@ -724,7 +711,6 @@ conformed value; signaled errors are written as :error entries."
               (condition-case err
                   (let* ((conformed (clime--call-conform cfn val arg))
                          (src (or (clime-values-source values name) 'user)))
-                    (setf (clime-param-value arg) conformed)
                     (setq values (clime-values-set values name conformed src)))
                 (error
                  (setq values
@@ -801,19 +787,13 @@ defaults, and checks required params.  Returns the updated RESULT."
          (values (or (clime-parse-result-values result) '()))
          (display-path (clime-parse-result-display-path result))
          (root (clime-parse-result-tree result)))
-    ;; Inject locked vals (from alias :vals resolution).
-    ;; Walk leaf→root; two sources:
-    ;; (1) locked options with :source 'app (from alias :vals),
-    ;; (2) locked-vals alist on nodes (for group-level locked vals).
+    ;; Inject locked vals (from alias :vals resolution) via value-entries.
+    ;; Walk leaf→root; user-set values take priority (merge respects precedence).
     (dolist (n scope)
-      (dolist (opt (clime-node-all-options n))
-        (when (and (clime-option-locked opt)
-                   (eq (clime-param-source opt) 'app))
-          (setq values (clime-values-merge values (clime-param-name opt)
-                                           (clime-param-value opt) 'app))))
-      (dolist (entry (clime-node-locked-vals n))
+      (dolist (entry (clime-node-value-entries n))
         (setq values (clime-values-merge values (car entry)
-                                         (cdr entry) 'app))))
+                                         (plist-get (cdr entry) :value)
+                                         (plist-get (cdr entry) :source)))))
     ;; Validate dynamic choices (functions resolved now, after setup)
     (clime--validate-dynamic-choices scope values)
     ;; Apply env vars (external input, needs conforming)
