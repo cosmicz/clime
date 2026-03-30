@@ -1541,8 +1541,12 @@
                               :children (list (cons "list" cmd)
                                               (cons "csv" alias)))))
     (let* ((result (clime-parse app '("csv")))
-           (params (clime-parse-result-params result)))
-      (should (equal "csv" (plist-get params 'format))))))
+           (params (clime-parse-result-params result))
+           (values (clime-parse-result-values result)))
+      (should (equal "csv" (plist-get params 'format)))
+      ;; Values map entry has app source from alias :vals
+      (should (equal "csv" (clime-values-value values 'format)))
+      (should (eq 'app (clime-values-source values 'format))))))
 
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here
