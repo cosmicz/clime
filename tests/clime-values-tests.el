@@ -171,34 +171,59 @@
 
 (ert-deftest clime-test-values/conform-errors-accumulate ()
   "Multiple per-param conformer errors accumulate in values map."
+  (let* ((opt-port (clime-make-option :name 'port :flags '("--port")
+                                       :type 'number
+                                       :conform (lambda (v _p)
+                                                  (when (< v 0)
+                                                    (error "must be positive"))
+                                                  v)))
+         (opt-count (clime-make-option :name 'count :flags '("--count")
+                                        :type 'number
+                                        :conform (lambda (v _p)
+                                                   (when (< v 1)
+                                                     (error "must be >= 1"))
+                                                   v)))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                   :options (list opt-port opt-count)))
+         (values (clime-values-set '() 'port -5 'user))
+         (values (clime-values-set values 'count 0 'user))
+         (result (clime--run-conformers (list cmd) values)))
+    ;; Both errors accumulated, not just the first one
+    (should (clime-values-error result 'port))
+    (should (clime-values-error result 'count))))
+
+(ert-deftest clime-test-values/conform-errors-signal-compound ()
+  "Parse signals compound error when multiple conformers fail."
   (let* ((app (clime-make-app
                :name "test"
                :handler #'ignore
-               :options (list (clime-make-option :name 'port :type 'number
+               :options (list (clime-make-option :name 'port :flags '("--port")
+                                                 :type 'number
                                                  :conform (lambda (v _p)
                                                             (when (< v 0)
                                                               (error "must be positive"))
                                                             v))
-                              (clime-make-option :name 'count :type 'number
+                              (clime-make-option :name 'count :flags '("--count")
+                                                 :type 'number
                                                  :conform (lambda (v _p)
                                                             (when (< v 1)
                                                               (error "must be >= 1"))
-                                                            v)))))
-         (result (condition-case err
-                     (clime-parse app '("--port" "-5" "--count" "0"))
-                   (clime-usage-error err))))
-    ;; Both errors should be reported, not just the first one
-    (let ((values (clime-parse-result-values result)))
-      (should (clime-values-error values 'port))
-      (should (clime-values-error values 'count)))))
+                                                            v))))))
+    ;; Signal contains both error messages
+    (condition-case err
+        (progn (clime-parse app '("--port" "-5" "--count" "0"))
+               (ert-fail "Expected clime-usage-error"))
+      (clime-usage-error
+       (let ((msg (cadr err)))
+         (should (string-match-p "must be positive" msg))
+         (should (string-match-p "must be >= 1" msg)))))))
 
 (ert-deftest clime-test-values/node-conform-error-in-map ()
-  "Node conformer error is written to values map before signaling."
-  (let* ((app (clime-make-app
-               :name "test"
-               :handler #'ignore
-               :options (list (clime-make-option :name 'min :type 'number)
-                              (clime-make-option :name 'max :type 'number))
+  "Node conformer error with :params attribution writes to values map."
+  (let* ((cmd (clime-make-command
+               :name "test" :handler #'ignore
+               :options (list (clime-make-option :name 'min :flags '("--min") :type 'number)
+                              (clime-make-option :name 'max :flags '("--max") :type 'number))
                :conform (lambda (values _node)
                           (when (and (clime-values-value values 'min)
                                      (clime-values-value values 'max)
@@ -207,12 +232,11 @@
                             (signal 'clime-usage-error
                                     '("min must be <= max" :params (min max))))
                           values)))
-         (result (condition-case err
-                     (clime-parse app '("--min" "10" "--max" "5"))
-                   (clime-usage-error err))))
-    (let ((values (clime-parse-result-values result)))
-      (should (clime-values-error values 'min))
-      (should (clime-values-error values 'max)))))
+         (values (clime-values-set '() 'min 10 'user))
+         (values (clime-values-set values 'max 5 'user))
+         (result (clime--apply-node-conform cmd values)))
+    (should (clime-values-error result 'min))
+    (should (clime-values-error result 'max))))
 
 (provide 'clime-values-tests)
 ;;; clime-values-tests.el ends here

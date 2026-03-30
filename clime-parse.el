@@ -721,67 +721,77 @@ Otherwise call (CFN VAL PARAM) for backward compatibility."
         (funcall cfn val)
       (funcall cfn val param))))
 
-(defun clime--run-conformers (nodes params)
-  "Run :conform functions for options and args in NODES against PARAMS.
+(defun clime--run-conformers (nodes values)
+  "Run :conform functions for options and args in NODES against VALUES.
 Called in pass 2 after dynamic choices validation and env var application.
-Skips nil values.  Returns updated PARAMS plist.  Each conformer receives
-\(value) or (value, param) depending on arity, and returns the conformed
-value; signaled errors become `clime-usage-error'."
+Skips params with no value.  Returns updated VALUES map.  Each conformer
+receives (value) or (value, param) depending on arity, and returns the
+conformed value; signaled errors are written as :error entries."
   (dolist (node nodes)
     (dolist (opt (clime-node-options node))
       (let ((cfn (clime-option-conform opt)))
         (when cfn
           (let* ((name (clime-option-name opt))
-                 (val (plist-get params name)))
+                 (val (clime-values-value values name)))
             (when val
               (condition-case err
-                  (let ((conformed (clime--call-conform cfn val opt)))
+                  (let* ((conformed (clime--call-conform cfn val opt))
+                         (src (or (clime-values-source values name) 'user)))
                     (setf (clime-param-value opt) conformed)
-                    (setq params (plist-put params name conformed))
-                    (when clime--building-values
-                      (let ((src (or (clime-values-source clime--parse-values name) 'user)))
-                        (setq clime--parse-values
-                              (clime-values-set clime--parse-values name conformed src)))))
+                    (setq values (clime-values-set values name conformed src)))
                 (error
-                 (signal 'clime-usage-error
-                         (list (format "Invalid value for %s: %s"
-                                       (car (clime-option-flags opt))
-                                       (error-message-string err)))))))))))
+                 (setq values
+                       (clime-values-set-error
+                        values name
+                        (format "Invalid value for %s: %s"
+                                (car (clime-option-flags opt))
+                                (error-message-string err)))))))))))
     (dolist (arg (clime-node-args node))
       (let ((cfn (clime-arg-conform arg)))
         (when cfn
           (let* ((name (clime-arg-name arg))
-                 (val (plist-get params name)))
+                 (val (clime-values-value values name)))
             (when val
               (condition-case err
-                  (let ((conformed (clime--call-conform cfn val arg)))
+                  (let* ((conformed (clime--call-conform cfn val arg))
+                         (src (or (clime-values-source values name) 'user)))
                     (setf (clime-param-value arg) conformed)
-                    (setq params (plist-put params name conformed))
-                    (when clime--building-values
-                      (let ((src (or (clime-values-source clime--parse-values name) 'user)))
-                        (setq clime--parse-values
-                              (clime-values-set clime--parse-values name conformed src)))))
+                    (setq values (clime-values-set values name conformed src)))
                 (error
-                 (signal 'clime-usage-error
-                         (list (format "Invalid value for <%s>: %s"
-                                       (clime-arg-name arg)
-                                       (error-message-string err))))))))))))
-  params)
+                 (setq values
+                       (clime-values-set-error
+                        values name
+                        (format "Invalid value for <%s>: %s"
+                                (clime-arg-name arg)
+                                (error-message-string err))))))))))))
+  values)
 
 (defun clime--apply-node-conform (node values)
   "Run NODE's :conform functions on VALUES, return updated VALUES.
 :conform is a list of functions, each taking (values, node).
-Signaled errors become `clime-usage-error'."
+Signaled errors are written as :error entries on attributed params,
+or on a synthetic :conform-error/NODE-NAME key for unattributed errors."
   (let ((fns (clime-node-conform node)))
     (when fns
       (when (functionp fns) (setq fns (list fns)))
       (dolist (fn fns)
         (condition-case err
             (setq values (funcall fn values node))
-          (clime-usage-error (signal (car err) (cdr err)))
+          (clime-usage-error
+           (let* ((data (cdr err))
+                  (msg (car data))
+                  (plist (cdr data))
+                  (params-attr (plist-get plist :params)))
+             (if params-attr
+                 ;; Attributed: write error on each named param
+                 (dolist (name params-attr)
+                   (setq values (clime-values-set-error values name msg)))
+               ;; Unattributed: write on synthetic key
+               (let ((key (intern (format ":conform-error/%s" (clime-node-name node)))))
+                 (setq values (clime-values-set-error values key msg))))))
           (error
-           (signal 'clime-usage-error
-                   (list (error-message-string err))))))))
+           (let ((key (intern (format ":conform-error/%s" (clime-node-name node)))))
+             (setq values (clime-values-set-error values key (error-message-string err)))))))))
   values)
 
 (defun clime--conform-inline-children (node dispatch-nodes values)
@@ -851,11 +861,19 @@ defaults, and checks required params.  Returns the updated RESULT."
     (setq params (clime--apply-env scope params root))
     ;; Run option/arg :conform functions (after env, before defaults —
     ;; defaults are developer-authored and should already be valid)
-    (setq params (clime--run-conformers scope params))
+    (setq clime--parse-values
+          (clime--run-conformers scope clime--parse-values))
     ;; Run node-level :conform (leaf→root walk, operates on values map)
     (setq clime--parse-values
           (clime--run-node-conformers scope clime--parse-values))
-    ;; Sync node-conform results back to params plist
+    ;; Store values on result before error check (so errors are inspectable)
+    (setf (clime-parse-result-values result) clime--parse-values)
+    ;; Check for accumulated conformer errors before proceeding
+    (let ((errors (clime-values-errors clime--parse-values)))
+      (when errors
+        (signal 'clime-usage-error
+                (list (mapconcat #'cdr errors "; ")))))
+    ;; Sync conform results back to params plist
     (setq params (clime-values-plist clime--parse-values))
     ;; Check :requires constraints
     (clime--check-requires scope params)
