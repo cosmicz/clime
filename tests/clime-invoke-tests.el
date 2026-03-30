@@ -1318,10 +1318,10 @@
   (let* ((opt (clime-make-option :name 'fmt :flags '("--fmt")
                                  :locked t
                                  :conform (lambda (_v)
-                                            (error "Should not be called"))
-                                 :value "json" :source 'app))
+                                            (error "Should not be called"))))
          (cmd (clime-make-command :name "test" :handler #'ignore
-                                  :options (list opt))))
+                                  :options (list opt)))
+         (clime-invoke--values (clime-values-set '() 'fmt "json" 'app)))
     (let ((result (clime-invoke--validate-all cmd)))
       (should-not (car result)))))
 
@@ -2086,18 +2086,6 @@
 
 ;;; ─── Tree-Only Write Specs (clime-nqo) ─────────────────────────────
 
-(ert-deftest clime-test-invoke/app-params-derives-plist ()
-  "clime-app-params derives a flat plist from node scope."
-  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0
-                                  :value t :source 'user))
-         (cmd (clime-make-command :name "run" :handler #'ignore
-                                   :options (list opt)))
-         (app (clime-make-app :name "test" :version "1"
-                              :children (list (cons "run" cmd)))))
-    (clime--set-parent-refs app)
-    (let ((params (clime-app-params cmd)))
-      (should (eq t (plist-get params 'verbose))))))
-
 (ert-deftest clime-test-invoke/handle-option-sets-values-map ()
   "handle-option sets value in the values map."
   (let ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
@@ -2179,46 +2167,8 @@
     (cl-letf (((symbol-function 'clime-invoke--loop)
                (lambda (_app _node _path &optional _top) (list nil nil))))
       (clime-invoke app '("cmd") '(verbose t)))
-    ;; Original struct is untouched
-    (should-not (clime-param-value opt))
-    (should-not (clime-param-source opt))))
-
-(ert-deftest clime-test-invoke/app-params-includes-args ()
-  "clime-app-params includes arg values in derived plist."
-  (let* ((arg (clime-make-arg :name 'file :value "a.txt" :source 'user))
-         (cmd (clime-make-command :name "run" :handler #'ignore
-                                   :args (list arg)))
-         (app (clime-make-app :name "test" :version "1"
-                              :children (list (cons "run" cmd)))))
-    (clime--set-parent-refs app)
-    (let ((params (clime-app-params cmd)))
-      (should (equal "a.txt" (plist-get params 'file))))))
-
-(ert-deftest clime-test-invoke/app-params-leaf-shadows-ancestor ()
-  "Leaf option value shadows same-named ancestor option."
-  (let* ((parent-opt (clime-make-option :name 'verbose :flags '("-V") :nargs 0
-                                         :value nil :source 'default))
-         (child-opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0
-                                        :value t :source 'user))
-         (cmd (clime-make-command :name "run" :handler #'ignore
-                                   :options (list child-opt)))
-         (app (clime-make-app :name "test" :version "1"
-                              :options (list parent-opt)
-                              :children (list (cons "run" cmd)))))
-    (clime--set-parent-refs app)
-    (let ((params (clime-app-params cmd)))
-      (should (eq t (plist-get params 'verbose))))))
-
-(ert-deftest clime-test-invoke/app-params-skips-unset ()
-  "clime-app-params omits options with nil :source."
-  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
-         (cmd (clime-make-command :name "run" :handler #'ignore
-                                   :options (list opt)))
-         (app (clime-make-app :name "test" :version "1"
-                              :children (list (cons "run" cmd)))))
-    (clime--set-parent-refs app)
-    (let ((params (clime-app-params cmd)))
-      (should-not (plist-member params 'verbose)))))
+    ;; Original struct metadata is untouched
+    (should-not (clime-param-help opt))))
 
 ;;; ─── Values Map Coverage (clime-33d2) ────────────────────────────────
 

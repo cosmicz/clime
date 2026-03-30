@@ -1438,9 +1438,8 @@
                                      (clime-make-command :name "run" :handler #'ignore)))))
          (_result (clime-parse app '("--verbose" "run")))
          (orig-opt (car (clime-node-options app))))
-    ;; Original option unmodified
-    (should-not (clime-param-value orig-opt))
-    (should-not (clime-param-source orig-opt))))
+    ;; Original option unmodified (help slot untouched as proxy for struct isolation)
+    (should-not (clime-param-help orig-opt))))
 
 (ert-deftest clime-test-parse/values-source-env ()
   "Options set from env vars have :source 'env in values map."
