@@ -593,11 +593,13 @@ Derives a params plist from struct values for conformer/requires checks."
     (dolist (arg (clime-node-args node))
       (when-let ((err (clime-invoke--validate-param arg)))
         (push (cons (clime-arg-name arg) err) param-errors)))
-    ;; Derive params plist for conformer/requires checks
-    (let ((params (clime-app-params node)))
+    ;; Build values map from struct slots for requires/conformer checks
+    (let* ((params (clime-app-params node))
+           (values (cl-loop for (k v) on params by #'cddr
+                            collect (list k :value v :source 'user))))
       ;; Requires checks
       (let* ((scope (cons node (clime-node-ancestors node))))
-        (dolist (err (clime--find-unsatisfied-requires scope params))
+        (dolist (err (clime--find-unsatisfied-requires scope values))
           (push err general-errors)))
       ;; Conformer checks — inject locked vals so mutex/zip checks see them
       ;; Skip locked options with nil value (excluded siblings, not set values)
