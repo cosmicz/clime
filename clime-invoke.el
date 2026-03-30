@@ -552,7 +552,7 @@ is a list of symbols or nil if the conformer didn't attribute params."
   (let ((errors nil)
         ;; Convert params plist to values map for conformers
         (values (cl-loop for (k v) on params by #'cddr
-                         collect (cons k (cons v 'user)))))
+                         collect (list k :value v :source 'user))))
     ;; Walk inline group children first (postorder)
     (when (clime-group-p node)
       (dolist (entry (clime-group-children node))
@@ -1035,7 +1035,7 @@ APP is the root app.  PATH is the command path list.
 Runs the full parse finalization pipeline (defaults, env vars,
 conformers, required checks) before calling the handler."
   (let* ((values (cl-loop for (k v) on params by #'cddr
-                          collect (cons k (cons v 'user))))
+                          collect (list k :value v :source 'user)))
          (result (clime-parse-result--create
                   :command node
                   :node node

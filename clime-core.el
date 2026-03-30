@@ -140,9 +140,11 @@ Always returns a list."
 
 ;;; ─── Values Map API ─────────────────────────────────────────────────────
 ;;
-;; A values map is an alist of (NAME . (VALUE . SOURCE)) entries.
-;; NAME is a symbol (param name).  VALUE is the resolved value.
-;; SOURCE is a symbol indicating provenance: user, app, env, default, conform.
+;; A values map is an alist of (NAME . PLIST) entries.
+;; NAME is a symbol (param name).  PLIST has keys:
+;;   :value  — the resolved value (absent when no value set)
+;;   :source — provenance symbol: user, app, env, default, conform
+;;   :error  — error string (optional, present when validation failed)
 ;;
 ;; Source precedence (highest first): user > app > env > default > conform.
 ;; `clime-values-merge' respects this ordering.
@@ -151,22 +153,44 @@ Always returns a list."
   "Source precedence order, highest first.")
 
 (defun clime-values-get (values name)
-  "Return (VALUE . SOURCE) for NAME in VALUES, or nil."
+  "Return the plist for NAME in VALUES, or nil."
   (cdr (assq name values)))
 
 (defun clime-values-value (values name)
   "Return the resolved value for NAME in VALUES."
-  (car (clime-values-get values name)))
+  (plist-get (clime-values-get values name) :value))
 
 (defun clime-values-source (values name)
   "Return the source symbol for NAME in VALUES."
-  (cdr (clime-values-get values name)))
+  (plist-get (clime-values-get values name) :source))
+
+(defun clime-values-error (values name)
+  "Return the error string for NAME in VALUES, or nil."
+  (plist-get (clime-values-get values name) :error))
 
 (defun clime-values-set (values name value source)
-  "Set NAME to (VALUE . SOURCE) in VALUES, unconditionally replacing.
+  "Set NAME to (:value VALUE :source SOURCE) in VALUES, unconditionally.
 Returns the updated alist."
-  (cons (cons name (cons value source))
+  (cons (cons name (list :value value :source source))
         (assq-delete-all name values)))
+
+(defun clime-values-set-error (values name error)
+  "Set :error on NAME's entry in VALUES.
+If NAME exists, add/replace :error while preserving other keys.
+If NAME is absent, create an error-only entry with :error and :source nil.
+Returns the updated alist."
+  (let ((existing (clime-values-get values name)))
+    (if existing
+        (cons (cons name (plist-put (copy-sequence existing) :error error))
+              (assq-delete-all name values))
+      (cons (cons name (list :error error))
+            values))))
+
+(defun clime-values-errors (values)
+  "Return alist of (NAME . ERROR-STRING) for entries with :error."
+  (cl-loop for (name . plist) in values
+           when (plist-get plist :error)
+           collect (cons name (plist-get plist :error))))
 
 (defun clime-values-merge (values name value source)
   "Merge NAME into VALUES, respecting source precedence.
@@ -175,19 +199,22 @@ has strictly higher precedence than the existing entry's source.
 Returns the updated alist."
   (let ((existing (assq name values)))
     (if (not existing)
-        (cons (cons name (cons value source)) values)
-      (let ((existing-source (cddr existing))
-            (new-rank (cl-position source clime--source-precedence))
-            (old-rank (cl-position (cddr existing) clime--source-precedence)))
+        (cons (cons name (list :value value :source source)) values)
+      (let* ((existing-source (plist-get (cdr existing) :source))
+             (new-rank (cl-position source clime--source-precedence))
+             (old-rank (cl-position existing-source clime--source-precedence)))
         (if (and new-rank old-rank (< new-rank old-rank))
-            (cons (cons name (cons value source))
+            (cons (cons name (list :value value :source source))
                   (assq-delete-all name values))
           values)))))
 
 (defun clime-values-plist (values)
-  "Derive a flat plist (NAME VALUE ...) from VALUES for backward compat."
+  "Derive a flat plist (NAME VALUE ...) from VALUES for backward compat.
+Skips entries that have :error but no :value."
   (mapcan (lambda (entry)
-            (list (car entry) (cadr entry)))
+            (let ((plist (cdr entry)))
+              (when (plist-member plist :value)
+                (list (car entry) (plist-get plist :value)))))
           values))
 
 ;;; ─── Node-Level Conform Checks ──────────────────────────────────────────
@@ -316,9 +343,9 @@ under GROUP-NAME."
 Each element is (INVOCATION . DESCRIPTION), (INVOCATION), or a bare INVOCATION string.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
   (locked-vals nil :type list :documentation "Deprecated: use :vals instead.  Alist of (name . value) injected into params during finalize.")
-  (value-entries nil :type list :documentation "Alist of (NAME . (VALUE . SOURCE)) pairs.
+  (value-entries nil :type list :documentation "Alist of (NAME . PLIST) entries.
 Declarative values a node contributes to the values map during finalize.
-Generalizes locked-vals: alias vals have source `app', resolved defaults have source `default'.")
+Each PLIST has :value and :source keys.  Alias vals have source `app'.")
   (conform nil :type (or function list null)
            :documentation "Transform/validate hook (run during finalization).
 Single function or list of functions, each: (values, node) → values.
@@ -518,7 +545,7 @@ resolved command copies."
             (when vals
               (setf (clime-node-locked-vals resolved) vals)
               (setf (clime-node-value-entries resolved)
-                    (mapcar (lambda (e) (cons (car e) (cons (cdr e) 'app)))
+                    (mapcar (lambda (e) (cons (car e) (list :value (cdr e) :source 'app)))
                             vals)))
             ;; Replace alias with resolved command in children
             (setcdr entry resolved)

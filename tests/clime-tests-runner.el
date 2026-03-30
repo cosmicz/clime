@@ -41,6 +41,7 @@ Configure project-specific settings for clean test execution."
 (require 'clime-negatable-tests)
 (require 'clime-requires-tests)
 (require 'clime-conform-tests)
+(require 'clime-values-tests)
 (require 'clime-integration-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────

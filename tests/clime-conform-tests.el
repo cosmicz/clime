@@ -1397,7 +1397,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                                val))))
          (cmd (clime-make-command :name "run" :handler #'ignore
                                    :options (list opt)))
-         (values (list (cons 'port (cons 8080 'user)))))
+         (values (list (list 'port :value 8080 :source 'user))))
     ;; Call with nodes and values map
     (let ((result (clime--run-conformers (list cmd) values)))
       ;; Conformed value in returned values map
@@ -1409,7 +1409,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                   :conform #'upcase))
          (cmd (clime-make-command :name "run" :handler #'ignore
                                    :options (list opt)))
-         (values (list (cons 'name (cons "alice" 'user)))))
+         (values (list (list 'name :value "alice" :source 'user))))
     (let ((result (clime--run-conformers (list cmd) values)))
       ;; Values map updated with conformed value
       (should (equal "ALICE" (clime-values-value result 'name)))
@@ -1432,7 +1432,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
 
 (ert-deftest clime-test-conform/exclusive-writes-values-map ()
   "check-exclusive writes group-name entry to values map."
-  (let* ((values (list (cons 'json (cons t 'user))))
+  (let* ((values (list (list 'json :value t :source 'user)))
          (grp (clime-make-group :name "format" :inline t
                                  :options (list (clime-make-option :name 'json :flags '("--json") :nargs 0)
                                                (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
@@ -1444,8 +1444,8 @@ satisfy the at-least-one requirement — user must explicitly choose."
 
 (ert-deftest clime-test-conform/paired-writes-values-map ()
   "check-paired writes zipped alist to values map."
-  (let* ((values (list (cons 'skip (cons '("a") 'user))
-                       (cons 'reason (cons '("why") 'user))))
+  (let* ((values (list (list 'skip :value '("a") :source 'user)
+                       (list 'reason :value '("why") :source 'user)))
          (grp (clime-make-group :name "pairs" :inline t
                                  :options (list (clime-make-option :name 'skip :flags '("--skip") :multiple t)
                                                (clime-make-option :name 'reason :flags '("--reason") :multiple t))
