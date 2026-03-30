@@ -544,11 +544,15 @@ then runs the param's `:conform' function (if any) on the coerced value."
                 (error (error-message-string err))))))))))
 
 (defun clime-invoke--run-conformer-checks (node params)
-  "Run NODE's conformers on a copy of PARAMS, returning attributed errors.
+  "Run NODE's conformers on PARAMS, returning attributed errors.
+PARAMS is a plist; it is converted to a values map for conformers.
 Also walks inline group children (postorder) to collect their errors.
 Returns a list of (MESSAGE . PARAM-NAMES) cons cells, where PARAM-NAMES
 is a list of symbols or nil if the conformer didn't attribute params."
-  (let ((errors nil))
+  (let ((errors nil)
+        ;; Convert params plist to values map for conformers
+        (values (cl-loop for (k v) on params by #'cddr
+                         collect (cons k (cons v 'user)))))
     ;; Walk inline group children first (postorder)
     (when (clime-group-p node)
       (dolist (entry (clime-group-children node))
@@ -561,7 +565,7 @@ is a list of symbols or nil if the conformer didn't attribute params."
       (when (functionp fns) (setq fns (list fns)))
       (dolist (conform fns)
         (condition-case err
-            (funcall conform (copy-sequence params) node)
+            (funcall conform (copy-sequence values) node)
           (clime-usage-error
            (let* ((data (cdr err))
                   (msg (car data))
@@ -1030,12 +1034,15 @@ Unlike cycling, this prompts the user for an explicit value."
 APP is the root app.  PATH is the command path list.
 Runs the full parse finalization pipeline (defaults, env vars,
 conformers, required checks) before calling the handler."
-  (let* ((result (clime-parse-result--create
+  (let* ((values (cl-loop for (k v) on params by #'cddr
+                          collect (cons k (cons v 'user))))
+         (result (clime-parse-result--create
                   :command node
                   :node node
                   :path path
                   :display-path path
                   :params (copy-sequence params)
+                  :values values
                   :tree app))
          (exit-code nil)
          (output (with-output-to-string

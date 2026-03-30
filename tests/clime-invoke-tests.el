@@ -1095,10 +1095,10 @@
                    (clime-invoke--run-conformer-checks cmd '())))))
 
 (ert-deftest clime-test-invoke/run-conformer-checks-copies-params ()
-  "Conformers receive a copy; original params are not mutated."
+  "Conformers receive a copy of values; original params are not mutated."
   (let* ((original '(foo "bar"))
-         (conform (lambda (params _node)
-                    (plist-put params 'foo "mutated")))
+         (conform (lambda (values _node)
+                    (clime-values-set values 'foo "mutated" 'conform)))
          (cmd (clime-make-command :name "test" :handler #'ignore :conform (list conform))))
     (clime-invoke--run-conformer-checks cmd original)
     (should (equal "bar" (plist-get original 'foo)))))

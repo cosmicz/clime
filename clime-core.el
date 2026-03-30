@@ -138,6 +138,58 @@ Always returns a list."
    ((functionp existing) (list existing fn))
    (t (append existing (list fn)))))
 
+;;; ─── Values Map API ─────────────────────────────────────────────────────
+;;
+;; A values map is an alist of (NAME . (VALUE . SOURCE)) entries.
+;; NAME is a symbol (param name).  VALUE is the resolved value.
+;; SOURCE is a symbol indicating provenance: user, app, env, default, conform.
+;;
+;; Source precedence (highest first): user > app > env > default > conform.
+;; `clime-values-merge' respects this ordering.
+
+(defconst clime--source-precedence '(user app env default conform)
+  "Source precedence order, highest first.")
+
+(defun clime-values-get (values name)
+  "Return (VALUE . SOURCE) for NAME in VALUES, or nil."
+  (cdr (assq name values)))
+
+(defun clime-values-value (values name)
+  "Return the resolved value for NAME in VALUES."
+  (car (clime-values-get values name)))
+
+(defun clime-values-source (values name)
+  "Return the source symbol for NAME in VALUES."
+  (cdr (clime-values-get values name)))
+
+(defun clime-values-set (values name value source)
+  "Set NAME to (VALUE . SOURCE) in VALUES, unconditionally replacing.
+Returns the updated alist."
+  (cons (cons name (cons value source))
+        (assq-delete-all name values)))
+
+(defun clime-values-merge (values name value source)
+  "Merge NAME into VALUES, respecting source precedence.
+Insert if NAME is absent.  If present, overwrite only when SOURCE
+has strictly higher precedence than the existing entry's source.
+Returns the updated alist."
+  (let ((existing (assq name values)))
+    (if (not existing)
+        (cons (cons name (cons value source)) values)
+      (let ((existing-source (cddr existing))
+            (new-rank (cl-position source clime--source-precedence))
+            (old-rank (cl-position (cddr existing) clime--source-precedence)))
+        (if (and new-rank old-rank (< new-rank old-rank))
+            (cons (cons name (cons value source))
+                  (assq-delete-all name values))
+          values)))))
+
+(defun clime-values-plist (values)
+  "Derive a flat plist (NAME VALUE ...) from VALUES for backward compat."
+  (mapcan (lambda (entry)
+            (list (car entry) (cadr entry)))
+          values))
+
 ;;; ─── Node-Level Conform Checks ──────────────────────────────────────────
 
 (defun clime-check-exclusive (group-name member-names &optional default required)
@@ -146,13 +198,13 @@ GROUP-NAME is a symbol for the derived value key.  MEMBER-NAMES is a list
 of param name symbols (e.g. \\='(json csv)).  DEFAULT, when non-nil, is
 injected under GROUP-NAME when no member is set.  REQUIRED, when non-nil,
 signals an error if no member is set.  The returned callable takes
-\(params, node) and returns updated PARAMS with the winner's name
+\(values, node) and returns updated VALUES with the winner's name
 injected under GROUP-NAME.
 
 The returned symbol is a named function for debugging convenience."
-  (let* ((fn (lambda (params _node)
+  (let* ((fn (lambda (values _node)
     (let ((set-names (cl-remove-if-not
-                      (lambda (k) (plist-member params k))
+                      (lambda (k) (assq k values))
                       member-names)))
       (when (> (length set-names) 1)
         (signal 'clime-usage-error
@@ -163,16 +215,16 @@ The returned symbol is a named function for debugging convenience."
       (cond
        ((= (length set-names) 1)
         (let ((winner (car set-names)))
-          (if (plist-get params winner)
+          (if (clime-values-value values winner)
               ;; Truthy winner: suppress defaults on siblings, set derived key
               (progn
                 (dolist (k member-names)
-                  (unless (or (eq k winner) (plist-member params k))
-                    (setq params (plist-put params k nil))))
-                (plist-put params group-name winner))
+                  (unless (or (eq k winner) (assq k values))
+                    (setq values (clime-values-set values k nil 'conform))))
+                (clime-values-set values group-name winner 'conform))
             ;; Falsy (e.g. negated flag): explicitly set but not a winner —
             ;; don't suppress siblings or inject derived key
-            params)))
+            values)))
        (required
         (signal 'clime-usage-error
                 (list (format "One of %s is required"
@@ -180,8 +232,8 @@ The returned symbol is a named function for debugging convenience."
                                          member-names ", "))
                       :params member-names)))
        (default
-        (plist-put params group-name default))
-       (t params)))))
+        (clime-values-set values group-name default 'conform))
+       (t values)))))
          (sym (make-symbol (format "clime-exclusive-%s" group-name))))
     (fset sym fn)
     sym))
@@ -191,11 +243,11 @@ The returned symbol is a named function for debugging convenience."
 GROUP-NAME is a symbol for the zipped value key.  MEMBER-NAMES is a list
 of param name symbols (e.g. \\='(skip reason)).  REQUIRED, when non-nil,
 signals an error if no members are set.  The returned function takes
-\(params, node) and returns updated PARAMS with a zipped alist injected
+\(values, node) and returns updated VALUES with a zipped alist injected
 under GROUP-NAME."
-  (lambda (params _node)
+  (lambda (values _node)
     (let* ((set-names (cl-remove-if-not
-                       (lambda (k) (plist-member params k))
+                       (lambda (k) (assq k values))
                        member-names))
            (any-set (> (length set-names) 0))
            (all-set (= (length set-names) (length member-names))))
@@ -209,7 +261,7 @@ under GROUP-NAME."
       ;; Partial presence check
       (when (and any-set (not all-set))
         (let ((missing (cl-remove-if
-                        (lambda (k) (plist-member params k))
+                        (lambda (k) (assq k values))
                         member-names)))
           (signal 'clime-usage-error
                   (list (format "%s requires %s"
@@ -220,13 +272,13 @@ under GROUP-NAME."
       ;; Cardinality check
       (when all-set
         (let ((counts (mapcar (lambda (k)
-                                (let ((val (plist-get params k)))
+                                (let ((val (clime-values-value values k)))
                                   (if (listp val) (length val) 0)))
                               member-names)))
           (unless (apply #'= counts)
             (let ((parts (mapcar (lambda (k)
                                    (format "%s (%d)" k
-                                           (let ((val (plist-get params k)))
+                                           (let ((val (clime-values-value values k)))
                                              (if (listp val) (length val) 0))))
                                  member-names)))
               (signal 'clime-usage-error
@@ -239,10 +291,10 @@ under GROUP-NAME."
             (dotimes (i n)
               (let ((row '()))
                 (dolist (k member-names)
-                  (let ((vals (plist-get params k)))
+                  (let ((vals (clime-values-value values k)))
                     (push (cons k (nth i vals)) row)))
                 (push (nreverse row) zipped)))
-            (plist-put params group-name (nreverse zipped))))))))
+            (clime-values-set values group-name (nreverse zipped) 'conform)))))))
 
 ;;; ─── Node (base) ────────────────────────────────────────────────────────
 
@@ -263,10 +315,13 @@ under GROUP-NAME."
   (examples nil :type list :documentation "List of example invocations for help output.
 Each element is (INVOCATION . DESCRIPTION), (INVOCATION), or a bare INVOCATION string.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
-  (locked-vals nil :type list :documentation "Alist of (name . value) injected into params during finalize.  Locked vals hide their options from CLI and help.")
+  (locked-vals nil :type list :documentation "Deprecated: use :vals instead.  Alist of (name . value) injected into params during finalize.")
+  (value-entries nil :type list :documentation "Alist of (NAME . (VALUE . SOURCE)) pairs.
+Declarative values a node contributes to the values map during finalize.
+Generalizes locked-vals: alias vals have source `app', resolved defaults have source `default'.")
   (conform nil :type (or function list null)
            :documentation "Transform/validate hook (run during finalization).
-Single function or list of functions, each: (params, node) → params.
+Single function or list of functions, each: (values, node) → values.
 For lists, functions are called in sequence, threading params."))
 
 ;;; ─── Alias ──────────────────────────────────────────────────────────────
@@ -459,9 +514,12 @@ resolved command copies."
                 (setf (clime-option-locked opt) t
                       (clime-param-value opt) val
                       (clime-param-source opt) 'app)))
-            ;; Store vals for injection during finalize
+            ;; Store vals for injection during finalize (both formats during migration)
             (when vals
-              (setf (clime-node-locked-vals resolved) vals))
+              (setf (clime-node-locked-vals resolved) vals)
+              (setf (clime-node-value-entries resolved)
+                    (mapcar (lambda (e) (cons (car e) (cons (cdr e) 'app)))
+                            vals)))
             ;; Replace alias with resolved command in children
             (setcdr entry resolved)
             ;; Set parent ref (set-parent-refs ran before resolution)

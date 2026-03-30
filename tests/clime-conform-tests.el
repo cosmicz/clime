@@ -8,7 +8,7 @@
 
 ;; Tests for the unified :conform model:
 ;; - Option/arg :conform signature: (value, param) → value
-;; - Node :conform signature: (params, node) → params
+;; - Node :conform signature: (values, node) → values
 ;; - Leaf→root walk order during finalization
 ;; - Composition (list of conform fns on a node)
 ;; - Exclusive/paired checks as node conform functions
@@ -137,20 +137,21 @@
     (should (equal (plist-get (clime-parse-result-params result) 'name)
                    "world"))))
 
-;;; ─── Node :conform (params, node) → params ──────────────────────────
+;;; ─── Node :conform (values, node) → values ──────────────────────────
 
 (ert-deftest clime-test-conform/node-conform-on-command ()
-  "Command-level :conform receives (params, node) and transforms params."
+  "Command-level :conform receives (values, node) and transforms values."
   (let* ((opt-a (clime-make-option :name 'a :flags '("--aa") :nargs 0))
          (opt-b (clime-make-option :name 'b :flags '("--bb") :nargs 0))
          (cmd (clime-make-command :name "run"
                                   :handler (lambda (ctx)
                                              (format "%s" (clime-ctx-get ctx 'derived)))
                                   :options (list opt-a opt-b)
-                                  :conform (lambda (params _node)
+                                  :conform (lambda (values _node)
                                              ;; Inject a derived value
-                                             (plist-put params 'derived
-                                                        (if (plist-get params 'a) "got-a" "no-a")))))
+                                             (clime-values-set values 'derived
+                                                               (if (clime-values-value values 'a) "got-a" "no-a")
+                                                               'conform))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
@@ -242,12 +243,12 @@
   "Node :conform accepts a list of functions, run in sequence."
   (let* ((order '())
          (cmd (clime-make-command :name "run" :handler #'ignore
-                                  :conform (list (lambda (params _node)
+                                  :conform (list (lambda (values _node)
                                                    (push 'first order)
-                                                   (plist-put params 'x 1))
-                                                 (lambda (params _node)
+                                                   (clime-values-set values 'x 1 'conform))
+                                                 (lambda (values _node)
                                                    (push 'second order)
-                                                   (plist-put params 'y 2)))))
+                                                   (clime-values-set values 'y 2 'conform)))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd))))
          (result (clime-parse app '("run"))))
@@ -256,14 +257,15 @@
     (should (= (plist-get (clime-parse-result-params result) 'y) 2))))
 
 (ert-deftest clime-test-conform/node-conform-list-threads-params ()
-  "List of conform fns threads params: output of first is input to second."
+  "List of conform fns threads values: output of first is input to second."
   (let* ((cmd (clime-make-command :name "run" :handler #'ignore
-                                  :conform (list (lambda (params _node)
-                                                   (plist-put params 'x 10))
-                                                 (lambda (params _node)
+                                  :conform (list (lambda (values _node)
+                                                   (clime-values-set values 'x 10 'conform))
+                                                 (lambda (values _node)
                                                    ;; Second fn sees x=10 from first
-                                                   (plist-put params 'y
-                                                              (* 2 (plist-get params 'x)))))))
+                                                   (clime-values-set values 'y
+                                                                     (* 2 (clime-values-value values 'x))
+                                                                     'conform)))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd))))
          (result (clime-parse app '("run"))))
@@ -642,17 +644,18 @@ satisfy the at-least-one requirement — user must explicitly choose."
   (let* ((opt-v (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
          (cmd (clime-make-command :name "run" :handler (lambda (ctx)
                                                           (format "%s" (clime-ctx-get ctx 'log-level)))
-                                  :conform (lambda (params _node)
+                                  :conform (lambda (values _node)
                                              ;; Command conform runs first
-                                             (plist-put params 'cmd-seen t))))
+                                             (clime-values-set values 'cmd-seen t 'conform))))
          (app (clime-make-app :name "t" :version "1"
                                :options (list opt-v)
                                :children (list (cons "run" cmd))
-                               :conform (lambda (params _node)
+                               :conform (lambda (values _node)
                                            ;; App conform runs second, can see cmd-seen
-                                           (plist-put params 'log-level
-                                                      (if (plist-get params 'cmd-seen)
-                                                          "debug" "info"))))))
+                                           (clime-values-set values 'log-level
+                                                             (if (clime-values-value values 'cmd-seen)
+                                                                 "debug" "info")
+                                                             'conform)))))
     (let ((result (clime-parse app '("run"))))
       (should (equal (plist-get (clime-parse-result-params result) 'log-level)
                      "debug")))))
@@ -955,9 +958,9 @@ satisfy the at-least-one requirement — user must explicitly choose."
   (let* ((conform-ran nil)
          (cmd (clime-make-command :name "run" :handler (lambda (_ctx) "ok")))
          (sibling-grp (clime-make-group :name "meta" :inline t
-                                         :conform (lambda (params _node)
+                                         :conform (lambda (values _node)
                                                     (setq conform-ran t)
-                                                    (plist-put params 'meta-seen t))))
+                                                    (clime-values-set values 'meta-seen t 'conform))))
          (parent-grp (clime-make-group :name "cmds"
                                         :children (list (cons "meta" sibling-grp)
                                                         (cons "run" cmd))))
@@ -1129,10 +1132,10 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                   :conform (lambda (v _p) (string-to-number v))))
          (cmd (clime-make-command :name "run" :handler #'ignore
                                   :options (list opt)
-                                  :conform (lambda (params _node)
+                                  :conform (lambda (values _node)
                                              ;; Should see the number, not the string
-                                             (should (numberp (plist-get params 'port)))
-                                             params)))
+                                             (should (numberp (clime-values-value values 'port)))
+                                             values)))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd)))))
     (clime-parse app '("run" "--port" "3000"))))
@@ -1143,9 +1146,9 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :conform (lambda (v _p) (string-to-number v))))
          (cmd (clime-make-command :name "run" :handler #'ignore
                                   :args (list arg)
-                                  :conform (lambda (params _node)
-                                             (should (numberp (plist-get params 'count)))
-                                             params)))
+                                  :conform (lambda (values _node)
+                                             (should (numberp (clime-values-value values 'count)))
+                                             values)))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd)))))
     (clime-parse app '("run" "42"))))
@@ -1184,8 +1187,8 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                  :handler (lambda (ctx)
                                             (format "val=%s"
                                                     (clime-ctx-get ctx 'derived)))
-                                 :conform (lambda (params _node)
-                                            (plist-put params 'derived "injected"))))
+                                 :conform (lambda (values _node)
+                                            (clime-values-set values 'derived "injected" 'conform))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "config" grp)))))
     (should (equal (with-output-to-string (clime-run app '("config")))
@@ -1382,6 +1385,92 @@ satisfy the at-least-one requirement — user must explicitly choose."
     (should (= 2 (length received-args)))
     (should (equal "val" (car received-args)))
     (should (clime-option-p (cadr received-args)))))
+
+;;; ─── Values-Map Conformer Specs (clime-7je) ─────────────────────────
+
+(ert-deftest clime-test-conform/run-conformers-reads-values-map ()
+  "clime--run-conformers reads value from values map, not struct."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port")
+                                  :conform (lambda (val _param)
+                                             (if (< val 1024)
+                                                 (error "Port too low")
+                                               val))))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (values (list (cons 'port (cons 8080 'user)))))
+    ;; Call with nodes and values map
+    (let ((result (clime--run-conformers (list cmd) values)))
+      ;; Conformed value in returned values map
+      (should (= 8080 (clime-values-value result 'port))))))
+
+(ert-deftest clime-test-conform/run-conformers-writes-values-map ()
+  "clime--run-conformers writes conformed value to values map, returns updated map."
+  (let* ((opt (clime-make-option :name 'name :flags '("--name")
+                                  :conform #'upcase))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (values (list (cons 'name (cons "alice" 'user)))))
+    (let ((result (clime--run-conformers (list cmd) values)))
+      ;; Values map updated with conformed value
+      (should (equal "ALICE" (clime-values-value result 'name)))
+      ;; Source unchanged
+      (should (eq 'user (clime-values-source result 'name))))))
+
+(ert-deftest clime-test-conform/node-conform-receives-values-and-node ()
+  "Node :conform receives (values, node), returns updated values."
+  (let* ((received-args nil)
+         (cmd (clime-make-command
+               :name "run" :handler #'ignore
+               :conform (lambda (values node)
+                          (setq received-args (list values node))
+                          values)))
+         (values '()))
+    (clime--apply-node-conform cmd values)
+    (should (= 2 (length received-args)))
+    (should (listp (car received-args)))
+    (should (clime-command-p (cadr received-args)))))
+
+(ert-deftest clime-test-conform/exclusive-writes-values-map ()
+  "check-exclusive writes group-name entry to values map."
+  (let* ((values (list (cons 'json (cons t 'user))))
+         (grp (clime-make-group :name "format" :inline t
+                                 :options (list (clime-make-option :name 'json :flags '("--json") :nargs 0)
+                                               (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+                                 :conform (clime-check-exclusive 'format '(json csv)))))
+    (let ((result (clime--apply-node-conform grp values)))
+      ;; Winner written under group-name key with source 'conform
+      (should (eq 'json (clime-values-value result 'format)))
+      (should (eq 'conform (clime-values-source result 'format))))))
+
+(ert-deftest clime-test-conform/paired-writes-values-map ()
+  "check-paired writes zipped alist to values map."
+  (let* ((values (list (cons 'skip (cons '("a") 'user))
+                       (cons 'reason (cons '("why") 'user))))
+         (grp (clime-make-group :name "pairs" :inline t
+                                 :options (list (clime-make-option :name 'skip :flags '("--skip") :multiple t)
+                                               (clime-make-option :name 'reason :flags '("--reason") :multiple t))
+                                 :conform (clime-check-paired 'pairs '(skip reason)))))
+    (let ((result (clime--apply-node-conform grp values)))
+      (let ((pairs (clime-values-value result 'pairs)))
+        (should (= 1 (length pairs)))
+        (should (equal '((skip . "a") (reason . "why")) (car pairs)))
+        (should (eq 'conform (clime-values-source result 'pairs)))))))
+
+(ert-deftest clime-test-conform/finalize-produces-values-map ()
+  "parse-finalize populates :values slot on parse-result."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port") :type 'integer
+                                  :conform (lambda (val _p) (1+ val))))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "run" cmd))))
+         (result (clime-parse app '("run" "--port" "80"))))
+    ;; Values map has conformed value
+    (let ((values (clime-parse-result-values result)))
+      (should (= 81 (clime-values-value values 'port)))
+      (should (eq 'user (clime-values-source values 'port))))
+    ;; Params plist also has it (derived for backward compat)
+    (should (= 81 (plist-get (clime-parse-result-params result) 'port)))))
 
 (provide 'clime-conform-tests)
 ;;; clime-conform-tests.el ends here
