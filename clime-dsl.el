@@ -31,7 +31,7 @@
 
 (defconst clime--boolean-keywords
   '(:bool :flag :count :multiple :negatable :hidden :required
-    :optional :rest :inline :json-mode :streaming :deprecated :env)
+          :optional :rest :inline :json-mode :streaming :deprecated :env)
   "DSL keywords that accept bare form as shorthand for t.
 A bare boolean keyword (not followed by a non-keyword, non-cons value)
 is normalized to keyword t before further processing.")
@@ -182,7 +182,8 @@ Returns the updated plist with :bool/:flag removed and :nargs 0 set."
     (when (and has-bool has-flag)
       (error "clime-option: use :bool or :flag, not both"))
     (when has-flag
-      (display-warning 'clime ":flag is deprecated, use :bool instead")
+      (display-warning
+       'clime ":flag is deprecated, use :bool instead")
       (setq plist (cl-copy-list plist))
       (cl-remf plist :flag)
       (setq plist (plist-put plist :nargs 0)))
@@ -200,7 +201,7 @@ Returns the updated plist with :bool/:flag removed and :nargs 0 set."
 Expands to (defvar clime--opt-NAME PLIST).
 PLIST contains default option slot values (evaluated at load time).
 Must not contain :name or :flags (those are per-instance).
-Supports DSL shorthands: :bool t normalizes to :nargs 0,
+Supports DSL shorthands: :bool normalizes to :nargs 0,
 :separator implies :multiple t."
   (declare (indent 1))
   (setq plist (clime--normalize-bare-booleans plist clime--boolean-keywords))
@@ -425,17 +426,19 @@ Resolves DSL aliases via `macroexpand'."
                    name (car form))))))
     (setq member-names (nreverse member-names))
     (when (and required default)
-      (display-warning 'clime
-        (format "clime-mutex `%s': :default is vacuous when :required is set"
-                name)))
+      (display-warning
+       'clime
+       (format "clime-mutex `%s': :default is vacuous when :required is set"
+               name)))
     (when required
       (dolist (opt-form (reverse option-forms))
         (let ((plist (clime--expanded-option-plist opt-form)))
           (when (and plist (plist-get plist :default))
-            (display-warning 'clime
-              (format "clime-mutex `%s': option `%s' has :default, \
+            (display-warning
+             'clime
+             (format "clime-mutex `%s': option `%s' has :default, \
 which is vacuous — defaults apply after exclusivity check"
-                      name (cadr (plist-get plist :name))))))))
+                     name (cadr (plist-get plist :name))))))))
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
@@ -478,10 +481,11 @@ Resolves DSL aliases via `macroexpand'."
       (dolist (opt-form (reverse option-forms))
         (let ((plist (clime--expanded-option-plist opt-form)))
           (when (and plist (plist-get plist :default))
-            (display-warning 'clime
-              (format "clime-zip `%s': option `%s' has :default, \
+            (display-warning
+             'clime
+             (format "clime-zip `%s': option `%s' has :default, \
 which is vacuous — defaults apply after paired check"
-                      name (cadr (plist-get plist :name))))))))
+                     name (cadr (plist-get plist :name))))))))
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
@@ -508,7 +512,7 @@ ARGS is (NAME &rest BODY)."
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:help :doc :aliases :hidden :epilog :examples :category :deprecated
-                       :options :args)))
+                             :options :args)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms))
@@ -535,7 +539,7 @@ Supports :defaults and :vals alists for preset/locked option values."
          (extracted (clime--extract-keywords
                      (cddr args)
                      '(:help :doc :aliases :hidden :category :deprecated
-                       :defaults :vals)))
+                             :defaults :vals)))
          (keywords (car extracted)))
     (setq keywords (clime--prepare-aliases keywords))
     `(cons ,name-str
@@ -552,7 +556,7 @@ ARGS is (NAME &rest BODY)."
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:help :doc :aliases :hidden :inline :epilog :examples :category :deprecated
-                       :options :args :children)))
+                             :options :args :children)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -588,7 +592,7 @@ Child forms:
          (extracted (clime--extract-keywords
                      body
                      '(:version :env-prefix :help :doc :json-mode :epilog :examples :setup
-                       :options :args :children :output-formats)))
+                                :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -613,7 +617,8 @@ Child forms:
 ;; Container forms use `defmacro' with &rest body (keywords interleaved
 ;; with child forms prevent &key usage).
 
-(cl-defmacro clime-opt (name flags
+(cl-defmacro clime-opt (name
+                        flags
                         &rest plist
                         &key bool flag from type help required optional
                         default nargs env count multiple choices coerce
@@ -701,7 +706,8 @@ Child forms:
   (declare (indent 1))
   (clime--build-command (cons name body)))
 
-(cl-defmacro clime-alias-for (name path
+(cl-defmacro clime-alias-for (name
+                              path
                               &rest plist
                               &key help doc aliases hidden category
                               deprecated defaults vals
@@ -745,7 +751,8 @@ Child forms:
   (declare (indent 1))
   (clime--build-group (cons name body)))
 
-(cl-defmacro clime-output-format (name flags
+(cl-defmacro clime-output-format (name
+                                  flags
                                   &rest plist
                                   &key help finalize streaming encoder error-handler
                                   hidden category deprecated
