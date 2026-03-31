@@ -475,12 +475,8 @@ This enables a setup hook to run between passes."
         (i 0)
         (len (length argv))
         (clime--stdin-app app))
-    ;; Set parent refs for direct children (if not already set)
-    (clime--set-parent-refs app)
-    ;; Resolve alias commands (idempotent)
-    (clime--resolve-aliases app)
-    ;; Deep-copy tree so :value/:source mutations are isolated
-    (let ((tree-copy (clime--deep-copy-tree app)))
+    ;; Prepare tree: parent refs, alias resolution, deep copy
+    (let ((tree-copy (clime--prepare-tree app)))
       (setq app tree-copy
             current-node tree-copy
             root tree-copy))
@@ -677,6 +673,38 @@ Otherwise call (CFN VAL PARAM) for backward compatibility."
     (if (and (numberp max-args) (= max-args 1))
         (funcall cfn val)
       (funcall cfn val param))))
+
+(defun clime--validate-param-value (param values)
+  "Validate PARAM's value in VALUES, returning nil or error string.
+Skips if no value is set.  For string values, runs type coercion,
+choices validation, and coerce.  Then runs param :conform if present.
+Non-string values (already coerced) skip type/choices/coerce."
+  (let* ((name (clime-param-name param))
+         (val (clime-values-value values name)))
+    (when (and val (clime-values-source values name))
+      (let* ((type (if (clime-option-p param) (clime-option-type param) (clime-arg-type param)))
+             (choices (if (clime-option-p param) (clime-option-choices param) (clime-arg-choices param)))
+             (coerce (if (clime-option-p param) (clime-option-coerce param) (clime-arg-coerce param)))
+             (cfn (if (clime-option-p param) (clime-option-conform param) (clime-arg-conform param)))
+             (flag-or-name (if (clime-option-p param)
+                               (car (clime-option-flags param))
+                             (symbol-name name)))
+             (resolved-choices (and choices (clime--resolve-value choices))))
+        (if (stringp val)
+            ;; String values: type-coerce first, then conform
+            (condition-case err
+                (let ((coerced (clime--transform-value
+                                val type resolved-choices coerce flag-or-name)))
+                  (when cfn
+                    (condition-case err
+                        (progn (clime--call-conform cfn coerced param) nil)
+                      (error (error-message-string err)))))
+              (clime-usage-error (cadr err)))
+          ;; Non-string values (pre-filled already coerced): run conform only
+          (when cfn
+            (condition-case err
+                (progn (clime--call-conform cfn val param) nil)
+              (error (error-message-string err)))))))))
 
 (defun clime--run-conformers (nodes values)
   "Run :conform functions for options and args in NODES against VALUES.

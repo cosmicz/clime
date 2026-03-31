@@ -509,45 +509,9 @@ Shows [$VAR=resolved] with active face on value when env is source."
 ;;; ─── Validation ─────────────────────────────────────────────────────
 
 (defun clime-invoke--validate-param (param)
-  "Validate a single PARAM, returning nil or error string.
-PARAM is a `clime-option' or `clime-arg'.  Skips unset values.
-Reuses `clime--transform-value' for type coercion and choices validation,
-then runs the param's `:conform' function (if any) on the coerced value."
-  (let* ((name (clime-param-name param))
-         (val (clime-values-value clime-invoke--values name)))
-    (when (and val (clime-values-source clime-invoke--values name))
-      (let* ((type (if (clime-option-p param)
-                       (clime-option-type param)
-                     (clime-arg-type param)))
-             (choices (if (clime-option-p param)
-                          (clime-option-choices param)
-                        (clime-arg-choices param)))
-             (coerce (if (clime-option-p param)
-                         (clime-option-coerce param)
-                       (clime-arg-coerce param)))
-             (cfn (if (clime-option-p param)
-                      (clime-option-conform param)
-                    (clime-arg-conform param)))
-             (flag-or-name (if (clime-option-p param)
-                               (car (clime-option-flags param))
-                             (symbol-name name))))
-        ;; Resolve dynamic choices eagerly (safe in invoke context)
-        (let ((resolved-choices (and choices (clime--resolve-value choices))))
-          (if (stringp val)
-              ;; String values: type-coerce first, then conform
-              (condition-case err
-                  (let ((coerced (clime--transform-value
-                                  val type resolved-choices coerce flag-or-name)))
-                    (when cfn
-                      (condition-case err
-                          (progn (clime--call-conform cfn coerced param) nil)
-                        (error (error-message-string err)))))
-                (clime-usage-error (cadr err)))
-            ;; Non-string values (pre-filled already coerced): run conform only
-            (when cfn
-              (condition-case err
-                  (progn (clime--call-conform cfn val param) nil)
-                (error (error-message-string err))))))))))
+  "Validate a single PARAM against `clime-invoke--values'.
+Delegates to `clime--validate-param-value'."
+  (clime--validate-param-value param clime-invoke--values))
 
 (defun clime-invoke--run-conformer-checks (node)
   "Run NODE's conformers using `clime-invoke--values', returning attributed errors.
@@ -1262,9 +1226,8 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
       (let ((result (clime-parse app '() t)))
         (funcall setup app result)
         (clime-parse-finalize result))))
-  ;; Deep-copy tree so struct mutations don't persist on the registered app
-  (clime--set-parent-refs app)
-  (let ((tree (clime--deep-copy-tree app)))
+  ;; Prepare tree: parent refs, alias resolution, deep copy
+  (let ((tree (clime--prepare-tree app)))
     ;; Build initial values map from tree value-entries and user params
     (let ((clime-invoke--values nil))
       (clime-invoke--seed-values tree params)

@@ -828,5 +828,60 @@
     ;; Copy inline group parent points to copy cmd
     (should (eq copy-cmd (clime-node-parent copy-grp)))))
 
+;;; ─── Prepare Tree Tests ───────────────────────────────────────────────
+
+(ert-deftest clime-test-prepare-tree/sets-parent-refs ()
+  "Prepare-tree sets parent refs on child nodes."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd))))
+         (copy (clime--prepare-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (should (eq copy (clime-node-parent copy-cmd)))))
+
+(ert-deftest clime-test-prepare-tree/resolves-aliases ()
+  "Prepare-tree resolves alias nodes into full commands."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                   :options (list opt)))
+         (alias (clime-alias--create :name "csv" :target '("list")
+                                      :vals '((format . "csv"))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "list" cmd)
+                                              (cons "csv" alias))))
+         (copy (clime--prepare-tree app))
+         (csv-node (cdr (assoc "csv" (clime-group-children copy)))))
+    ;; Alias resolved: csv is now a command with handler, not an alias
+    (should (clime-command-p csv-node))
+    (should (clime-node-handler csv-node))))
+
+(ert-deftest clime-test-prepare-tree/deep-copy-isolated ()
+  "Prepare-tree returns an isolated copy; mutations don't affect original."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore
+                                   :args (list (clime-make-arg :name 'file))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd))))
+         (copy (clime--prepare-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (setf (clime-param-help (car (clime-node-args copy-cmd))) "mutated")
+    (should-not (clime-param-help (car (clime-node-args cmd))))))
+
+(ert-deftest clime-test-prepare-tree/idempotent-on-original ()
+  "Calling prepare-tree twice on same app produces equivalent results."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (alias (clime-alias--create :name "go" :target '("run")))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd)
+                                              (cons "go" alias))))
+         (copy1 (clime--prepare-tree app))
+         (copy2 (clime--prepare-tree app))
+         (go1 (cdr (assoc "go" (clime-group-children copy1))))
+         (go2 (cdr (assoc "go" (clime-group-children copy2)))))
+    ;; Both copies resolved the alias
+    (should (clime-command-p go1))
+    (should (clime-command-p go2))
+    ;; But they are distinct structs
+    (should-not (eq go1 go2))))
+
 (provide 'clime-core-tests)
 ;;; clime-core-tests.el ends here

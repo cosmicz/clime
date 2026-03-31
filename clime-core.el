@@ -387,6 +387,14 @@ ARGS is a plist of slot values."
     (error "clime-make-command: :handler is required"))
   (apply #'clime-command--create args))
 
+(defun clime--prepare-tree (app)
+  "Return a deep copy of APP ready for parsing or invoke.
+Set parent refs, resolve aliases (idempotent), then deep-copy.
+Mutations on the returned tree do not affect APP."
+  (clime--set-parent-refs app)
+  (clime--resolve-aliases app)
+  (clime--deep-copy-tree app))
+
 (defun clime--deep-copy-tree (node)
   "Return a deep copy of NODE and its descendants.
 Options, args, and child nodes are copied; parent refs are fixed up.
@@ -877,9 +885,6 @@ Walk the parent chain, collecting each ancestor's option flags into a flat list.
                             (copy-sequence (clime-option-flags opt)))
                           (clime-node-options ancestor)))
              (clime-node-ancestors node)))
-
-;;; ─── Params Derivation ──────────────────────────────────────────────────
-
 
 ;;; ─── Tree Validation ────────────────────────────────────────────────────
 

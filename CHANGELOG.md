@@ -7,6 +7,18 @@
   `:optional t` sets `:required nil`; `:optional nil` sets `:required t`.
   Mutually exclusive with `:required` (error if both present).
 
+- **Values map as single source of truth**: the runtime data carrier for
+  both parse and invoke pipelines is now a values map — an alist of
+  `(NAME :value V :source S)` entries with optional `:error` key.
+  Struct slots `:value` and `:source` removed from `clime-param`.
+  `locked-vals` slot removed from `clime-node` (replaced by
+  `value-entries`).  Dynamic vars `clime--building-values` and
+  `clime--parse-values` removed; values map threaded as a local through
+  parse functions.  `clime-app-params` and `clime--derive-params`
+  removed (no production callers).  Conformer errors accumulate in the
+  values map as `:error` entries before signaling a compound error.
+  Node conformer contract: `(values, node) → values`.
+
 ## 0.5.0 — 2026-03-25
 
 ### Breaking changes

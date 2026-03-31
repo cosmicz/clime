@@ -1,7 +1,7 @@
 #+title: clime
 #+options: toc:nil num:nil
 
-*clime* is a declarative CLI framework for Emacs Lisp.  Write your
+*clime* is a universal declarative command router framework for Emacs Lisp.  Write your
 app's commands, options, and arguments once with a structured DSL
 then run it from the shell as an executable script or interactively from
 Emacs via =clime-invoke=.
@@ -185,11 +185,20 @@ In ~--help~, inherited options appear in a "Global Options:" section.
 ** Two-pass parameter parse
 
 Parsing happens in two passes with an optional ~:setup~ hook between
-them.  Pass 1 extracts values from argv (type coercion, static
-~:choices~, ~:coerce~).  Pass 2 applies env vars, dynamic ~:choices~,
-~:conform~, and defaults.  The ~:setup~ hook runs between
-passes, letting apps load configuration that influences pass-2
-behavior.
+them.  Both passes operate on a *values map* --- an alist of
+~(NAME . (:value V :source S))~ entries that tracks each parameter's
+resolved value and its provenance (~user~, ~app~, ~env~, ~default~,
+~conform~).
+
+Pass 1 extracts values from argv (type coercion, static ~:choices~,
+~:coerce~) into the values map with source ~user~.  Pass 2 merges
+env vars, runs ~:conform~ hooks (accumulating errors as ~:error~
+entries), applies defaults, and checks required params.  The ~:setup~
+hook runs between passes, letting apps load configuration that
+influences pass-2 behavior.
+
+Handlers receive a flat params plist derived from the values map
+(via ~clime-values-plist~), so existing handler code is unaffected.
 
 * Interactive (~clime-invoke~)
 
@@ -772,8 +781,9 @@ raw string → :type → :choices → :coerce → env vars → :conform → node
   #+end_src
 
   Node-level ~:conform~ (on commands, groups, apps) receives
-  ~(params, node)~ and returns updated params.  ~clime-mutex~ and
-  ~clime-zip~ use this mechanism internally.
+  ~(values, node)~ where ~values~ is the values map, and returns the
+  updated values map.  ~clime-mutex~ and ~clime-zip~ use this
+  mechanism internally.
 
 The key distinction between ~:coerce~ and ~:conform~ is /when/ they
 run: ~:coerce~ runs immediately in pass 1 (CLI input only), while

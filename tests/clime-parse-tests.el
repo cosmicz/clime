@@ -1547,5 +1547,93 @@
       (should (equal "csv" (clime-values-value values 'format)))
       (should (eq 'app (clime-values-source values 'format))))))
 
+;;; ─── validate-param-value (shared) ─────────────────────────────────
+
+(ert-deftest clime-test-validate-param-value/valid-string-nil ()
+  "Valid string value returns nil."
+  (let* ((opt (clime-make-option :name 'name :flags '("--name")))
+         (values (clime-values-set '() 'name "hello" 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/valid-integer ()
+  "Valid integer string returns nil."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer))
+         (values (clime-values-set '() 'count "42" 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/invalid-integer ()
+  "Non-numeric string for integer type returns error string."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer))
+         (values (clime-values-set '() 'count "abc" 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
+(ert-deftest clime-test-validate-param-value/valid-choice ()
+  "Value matching choices returns nil."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                  :choices '("json" "text")))
+         (values (clime-values-set '() 'fmt "json" 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/invalid-choice ()
+  "Value not in choices returns error string."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                  :choices '("json" "text")))
+         (values (clime-values-set '() 'fmt "xml" 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
+(ert-deftest clime-test-validate-param-value/unset-skipped ()
+  "Unset param returns nil (no validation)."
+  (let ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer)))
+    (should-not (clime--validate-param-value opt '()))))
+
+(ert-deftest clime-test-validate-param-value/non-string-skips-type ()
+  "Non-string value (e.g. boolean t) skips type coercion."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (values (clime-values-set '() 'verbose t 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/dynamic-choices ()
+  "Dynamic choice function is resolved and validated."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                  :choices (lambda () '("json" "text"))))
+         (valid (clime-values-set '() 'fmt "json" 'user))
+         (invalid (clime-values-set '() 'fmt "xml" 'user)))
+    (should-not (clime--validate-param-value opt valid))
+    (should (stringp (clime--validate-param-value opt invalid)))))
+
+(ert-deftest clime-test-validate-param-value/conform-pass ()
+  "Conform that succeeds returns nil."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :conform (lambda (v _p)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
+         (values (clime-values-set '() 'id "42" 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/conform-fail ()
+  "Conform that signals error returns error string."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :conform (lambda (v _p)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
+         (values (clime-values-set '() 'id "abc" 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
+(ert-deftest clime-test-validate-param-value/arg-works ()
+  "Works with arg structs, not just options."
+  (let* ((arg (clime-make-arg :name 'count :type 'integer))
+         (values (clime-values-set '() 'count "5" 'user)))
+    (should-not (clime--validate-param-value arg values))))
+
+(ert-deftest clime-test-validate-param-value/non-string-conform-runs ()
+  "Non-string value still runs conform (skipping type/choices)."
+  (let* ((opt (clime-make-option :name 'count :flags '("-n") :nargs 0
+                                  :conform (lambda (_v _p)
+                                             (error "conform ran"))))
+         (values (clime-values-set '() 'count t 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here
