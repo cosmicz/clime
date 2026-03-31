@@ -42,8 +42,8 @@
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
-  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.  Errors are wrapped as `clime-usage-error'.")
-  (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error.")
+  (coerce nil :type list :documentation "List of transform functions applied after type coercion (in order).  Errors are wrapped as `clime-usage-error'.")
+  (conform nil :type list :documentation "List of pass-2 conformer functions; each receives value (and optionally param), returns conformed value or signals error.")
   (separator nil :type (or string null) :documentation "Split each value by this string; implies :multiple t.")
   (category nil :type (or string null) :documentation "Help display category label.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
@@ -69,7 +69,17 @@ ARGS is a plist of slot values."
       (when (plist-get args :count)
         (error "clime-make-option: :negatable is incompatible with :count")))
     (clime--check-required-default "Option" args)
+    (setq args (clime--normalize-fn-lists args))
     (apply #'clime-option--create args)))
+
+(defun clime--normalize-fn-lists (args)
+  "Normalize :conform and :coerce in ARGS plist to lists.
+A bare function is wrapped in a one-element list."
+  (dolist (key '(:conform :coerce))
+    (let ((val (plist-get args key)))
+      (when val
+        (setq args (plist-put args key (clime--ensure-list val))))))
+  args)
 
 (defun clime--check-required-default (kind args)
   "Warn if ARGS plist has both :required and :default.
@@ -79,12 +89,45 @@ KIND is a string like \"Option\" or \"Arg\" for the warning message."
       (format "%s `%s': :required is vacuous when :default is set"
               kind (plist-get args :name)))))
 
+(defun clime--conform-call (cfn val param)
+  "Call conform function CFN with VAL and optionally PARAM.
+If CFN accepts exactly 1 argument, call (CFN VAL).
+Otherwise call (CFN VAL PARAM)."
+  (let ((max-args (cdr (func-arity cfn))))
+    (if (and (numberp max-args) (= max-args 1))
+        (funcall cfn val)
+      (funcall cfn val param))))
+
+(defun clime--ensure-list (val)
+  "Return VAL as a list.  If VAL is a function, wrap it."
+  (cond ((null val) nil)
+        ((and (listp val) (not (functionp val))) val)
+        (t (list val))))
+
 (defun clime--merge-template (template &rest overrides)
   "Merge option TEMPLATE plist with OVERRIDES plist.
-OVERRIDES take precedence over TEMPLATE values."
+OVERRIDES take precedence over TEMPLATE values.  For :conform and
+:coerce, when both template and override provide a value, they are
+concatenated (template fns first, override fns after)."
   (let ((result (copy-sequence template)))
     (cl-loop for (key val) on overrides by #'cddr
              do (setq result (plist-put result key val)))
+    ;; Concatenate :conform lists when both sides provide one
+    (let ((tmpl-conform (plist-get template :conform))
+          (over-conform (plist-get overrides :conform)))
+      (when (and tmpl-conform over-conform)
+        (setq result
+              (plist-put result :conform
+                         (append (clime--ensure-list tmpl-conform)
+                                 (clime--ensure-list over-conform))))))
+    ;; Concatenate :coerce lists when both sides provide one
+    (let ((tmpl-coerce (plist-get template :coerce))
+          (over-coerce (plist-get overrides :coerce)))
+      (when (and tmpl-coerce over-coerce)
+        (setq result
+              (plist-put result :coerce
+                         (append (clime--ensure-list tmpl-coerce)
+                                 (clime--ensure-list over-coerce))))))
     result))
 
 (defun clime-option-boolean-p (option)
@@ -108,8 +151,8 @@ Used for lazy slots like :choices and :default."
   (type 'string :type (or symbol function) :documentation "Type converter: symbol (`string', `integer', `number') or function (string → value).")
   (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
-  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.  Errors are wrapped as `clime-usage-error'.")
-  (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error.")
+  (coerce nil :type list :documentation "List of transform functions applied after type coercion (in order).  Errors are wrapped as `clime-usage-error'.")
+  (conform nil :type list :documentation "List of pass-2 conformer functions; each receives value (and optionally param), returns conformed value or signals error.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning)."))
 
 (defun clime-make-arg (&rest args)
@@ -123,6 +166,7 @@ Defaults :required to t (unlike options which default to nil)."
   (unless (plist-member args :required)
     (setq args (plist-put (cl-copy-list args) :required t)))
   (clime--check-required-default "Arg" args)
+  (setq args (clime--normalize-fn-lists args))
   (apply #'clime-arg--create args))
 
 ;;; ─── Conform Helpers ────────────────────────────────────────────────────

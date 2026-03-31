@@ -652,6 +652,50 @@
     (clime--merge-template tpl :help "changed")
     (should (equal (plist-get tpl :help) "orig"))))
 
+(ert-deftest clime-test-merge-template/conform-compose ()
+  "Both template and override :conform are concatenated into a list."
+  (let* ((fn-a (lambda (v _p) (upcase v)))
+         (fn-b (lambda (v _p) (concat v "!")))
+         (tpl (list :conform fn-a))
+         (result (clime--merge-template tpl :conform fn-b)))
+    (should (= 2 (length (plist-get result :conform))))
+    (should (eq (car (plist-get result :conform)) fn-a))
+    (should (eq (cadr (plist-get result :conform)) fn-b))))
+
+(ert-deftest clime-test-merge-template/coerce-compose ()
+  "Both template and override :coerce are concatenated into a list."
+  (let* ((fn-a (lambda (n) (* n 10)))
+         (fn-b (lambda (n) (+ n 1)))
+         (tpl (list :coerce fn-a))
+         (result (clime--merge-template tpl :coerce fn-b)))
+    (should (= 2 (length (plist-get result :coerce))))
+    (should (eq (car (plist-get result :coerce)) fn-a))
+    (should (eq (cadr (plist-get result :coerce)) fn-b))))
+
+(ert-deftest clime-test-merge-template/conform-compose-lists ()
+  "Merging list :conform values concatenates them."
+  (let* ((fn-a (lambda (v _p) (upcase v)))
+         (fn-b (lambda (v _p) (concat v "!")))
+         (tpl (list :conform (list fn-a)))
+         (result (clime--merge-template tpl :conform (list fn-b))))
+    (should (= 2 (length (plist-get result :conform))))
+    (should (eq (car (plist-get result :conform)) fn-a))
+    (should (eq (cadr (plist-get result :conform)) fn-b))))
+
+;;; ─── Conform Call ───────────────────────────────────────────────────────
+
+(ert-deftest clime-test-conform-call/2-arg ()
+  "clime--conform-call passes both val and param to 2-arg function."
+  (should (equal (clime--conform-call (lambda (v p) (format "%s:%s" v p))
+                                      "val" "param")
+                 "val:param")))
+
+(ert-deftest clime-test-conform-call/1-arg ()
+  "clime--conform-call passes only val to 1-arg function."
+  (should (equal (clime--conform-call (lambda (v) (upcase v))
+                                      "abc" "ignored")
+                 "ABC")))
+
 ;;; ─── Tree Validation ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-validate/duplicate-flag-error ()

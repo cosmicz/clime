@@ -616,7 +616,7 @@
     (should (eq (clime-option-name opt) 'id))
     (should (equal (clime-option-flags opt) '("--id")))
     (should (eq (clime-option-type opt) 'string))
-    (should (functionp (clime-option-conform opt)))
+    (should (= 1 (length (clime-option-conform opt))))
     (should (equal (clime-option-help opt) "A verified ID"))))
 
 (ert-deftest clime-test-dsl/from-override ()
@@ -675,8 +675,8 @@
     ;; move --src does not
     (should-not (clime-option-multiple move-src))
     ;; All share the conform from template
-    (should (functionp (clime-option-conform copy-src)))
-    (should (functionp (clime-option-conform move-src)))))
+    (should (= 1 (length (clime-option-conform copy-src))))
+    (should (= 1 (length (clime-option-conform move-src))))))
 
 (ert-deftest clime-test-dsl/from-parse-integration ()
   ":from options parse correctly end-to-end."
@@ -738,7 +738,7 @@
          (arg (car (clime-command-args cmd))))
     (should (eq (clime-arg-name arg) 'id))
     (should (eq (clime-arg-type arg) 'string))
-    (should (functionp (clime-arg-conform arg)))
+    (should (= 1 (length (clime-arg-conform arg))))
     (should (equal (clime-arg-help arg) "A verified ID"))))
 
 (ert-deftest clime-test-dsl/defarg-from-override ()
@@ -776,6 +776,169 @@
         t)
   (let ((result (clime-parse clime-test--arg-from-parse '("show" "abc"))))
     (should (equal (plist-get (clime-parse-result-params result) 'id) "abc"))))
+
+;;; ─── :from compose :conform and :coerce ────────────────────────────────
+
+(ert-deftest clime-test-dsl/from-conform-compose ()
+  ":from with both template and instance :conform runs both (template first)."
+  (eval '(progn
+           (clime-defopt test-conform-compose
+             :type 'string
+             :conform (lambda (v _p) (upcase v))
+             :help "Template with conform")
+           (defvar clime-test--conform-compose
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-option id ("--id") :from test-conform-compose
+                   :conform (lambda (v _p) (concat v "!")))
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--conform-compose '("show" "--id" "abc")))
+         (val (plist-get (clime-parse-result-params result) 'id)))
+    ;; Template upcases first → "ABC", then instance appends "!" → "ABC!"
+    (should (equal val "ABC!"))))
+
+(ert-deftest clime-test-dsl/from-coerce-compose ()
+  ":from with both template and instance :coerce runs both (template first)."
+  (eval '(progn
+           (clime-defopt test-coerce-compose
+             :type 'integer
+             :coerce (lambda (n) (* n 10))
+             :help "Template with coerce")
+           (defvar clime-test--coerce-compose
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-option port ("--port") :from test-coerce-compose
+                   :coerce (lambda (n) (+ n 1)))
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--coerce-compose '("show" "--port" "8")))
+         (val (plist-get (clime-parse-result-params result) 'port)))
+    ;; Type coerces "8" → 8, template coerce *10 → 80, instance coerce +1 → 81
+    (should (= val 81))))
+
+(ert-deftest clime-test-dsl/from-conform-template-only ()
+  ":from preserves template :conform when instance has none."
+  (eval '(progn
+           (clime-defopt test-conform-tmpl-only
+             :type 'string
+             :conform (lambda (v _p) (upcase v))
+             :help "Template with conform")
+           (defvar clime-test--conform-tmpl-only
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-option id ("--id") :from test-conform-tmpl-only)
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--conform-tmpl-only '("show" "--id" "abc")))
+         (val (plist-get (clime-parse-result-params result) 'id)))
+    (should (equal val "ABC"))))
+
+(ert-deftest clime-test-dsl/from-conform-instance-only ()
+  ":from works when only instance has :conform (template has none)."
+  (eval '(progn
+           (clime-defopt test-conform-inst-only
+             :type 'string
+             :help "Template without conform")
+           (defvar clime-test--conform-inst-only
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-option id ("--id") :from test-conform-inst-only
+                   :conform (lambda (v _p) (downcase v)))
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--conform-inst-only '("show" "--id" "ABC")))
+         (val (plist-get (clime-parse-result-params result) 'id)))
+    (should (equal val "abc"))))
+
+(ert-deftest clime-test-dsl/from-coerce-template-only ()
+  ":from preserves template :coerce when instance has none."
+  (eval '(progn
+           (clime-defopt test-coerce-tmpl-only
+             :type 'integer
+             :coerce (lambda (n) (* n 10))
+             :help "Template with coerce")
+           (defvar clime-test--coerce-tmpl-only
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-option port ("--port") :from test-coerce-tmpl-only)
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--coerce-tmpl-only '("show" "--port" "8")))
+         (val (plist-get (clime-parse-result-params result) 'port)))
+    (should (= val 80))))
+
+(ert-deftest clime-test-dsl/from-coerce-instance-only ()
+  ":from works when only instance has :coerce (template has none)."
+  (eval '(progn
+           (clime-defopt test-coerce-inst-only
+             :type 'integer
+             :help "Template without coerce")
+           (defvar clime-test--coerce-inst-only
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-option port ("--port") :from test-coerce-inst-only
+                   :coerce (lambda (n) (+ n 1)))
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--coerce-inst-only '("show" "--port" "8")))
+         (val (plist-get (clime-parse-result-params result) 'port)))
+    (should (= val 9))))
+
+(ert-deftest clime-test-dsl/from-arg-coerce-compose ()
+  ":from coerce compose works for args too."
+  (eval '(progn
+           (clime-defarg test-arg-coerce-comp
+             :type 'integer
+             :coerce (lambda (n) (* n 2))
+             :help "Template with coerce")
+           (defvar clime-test--arg-coerce-comp
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-arg count :from test-arg-coerce-comp
+                   :coerce (lambda (n) (+ n 100)))
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--arg-coerce-comp '("show" "5")))
+         (val (plist-get (clime-parse-result-params result) 'count)))
+    ;; Type: "5" → 5, template *2 → 10, instance +100 → 110
+    (should (= val 110))))
+
+(ert-deftest clime-test-dsl/from-conform-compose-1-arg ()
+  ":from conform compose works with 1-arg conformers."
+  (eval '(progn
+           (clime-defopt test-conform-1arg
+             :type 'string
+             :conform (lambda (v) (upcase v))
+             :help "Template with 1-arg conform")
+           (defvar clime-test--conform-1arg
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-option id ("--id") :from test-conform-1arg
+                   :conform (lambda (v) (concat v "!")))
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--conform-1arg '("show" "--id" "abc")))
+         (val (plist-get (clime-parse-result-params result) 'id)))
+    (should (equal val "ABC!"))))
+
+(ert-deftest clime-test-dsl/from-arg-conform-compose ()
+  ":from compose works for args too."
+  (eval '(progn
+           (clime-defarg test-arg-conform-comp
+             :type 'string
+             :conform (lambda (v _p) (upcase v))
+             :help "Template with conform")
+           (defvar clime-test--arg-conform-comp
+             (clime-app test :version "1"
+               (clime-command show :help "Show"
+                 (clime-arg id :from test-arg-conform-comp
+                   :conform (lambda (v _p) (concat v "?")))
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((result (clime-parse clime-test--arg-conform-comp '("show" "abc")))
+         (val (plist-get (clime-parse-result-params result) 'id)))
+    (should (equal val "ABC?"))))
 
 ;;; ─── Standalone Macro Evaluation ────────────────────────────────────────
 

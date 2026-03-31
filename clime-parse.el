@@ -148,11 +148,12 @@ TYPE is a symbol (`string', `integer', `number', nil) or a function
                (list (format "Unknown type %s for %s" type flag-or-name))))))
 
 (defun clime--transform-value (value type choices coerce flag-or-name)
-  "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE.
+  "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE fns.
 CHOICES may be a list or a function returning a list.
 Dynamic choices (functions) are skipped here and deferred to
 `clime-parse-finalize' (pass 2), enabling a setup hook to
 configure state before validation.
+COERCE is a list of functions applied in order.
 FLAG-OR-NAME is used in error messages."
   (let* ((result (clime--coerce-value value type flag-or-name))
          ;; Only validate static choices in pass 1; defer dynamic (functionp)
@@ -163,14 +164,14 @@ FLAG-OR-NAME is used in error messages."
                             result flag-or-name
                             (mapconcat (lambda (c) (format "%s" c))
                                        resolved ", ")))))
-    (if coerce
-        (condition-case err
-            (funcall coerce result)
-          (error (signal 'clime-usage-error
-                         (list (format "%s for %s"
-                                       (error-message-string err)
-                                       flag-or-name)))))
-      result)))
+    (dolist (fn coerce)
+      (condition-case err
+          (setq result (funcall fn result))
+        (error (signal 'clime-usage-error
+                       (list (format "%s for %s"
+                                     (error-message-string err)
+                                     flag-or-name))))))
+    result))
 
 (defun clime--try-consume-option (tok argv i len values option-parsing
                                       current-node root path)
@@ -682,12 +683,8 @@ since static choices were already validated in pass 1."
 
 (defun clime--call-conform (cfn val param)
   "Call conform function CFN with VAL and optionally PARAM.
-If CFN accepts exactly 1 argument, call (CFN VAL).
-Otherwise call (CFN VAL PARAM) for backward compatibility."
-  (let ((max-args (cdr (func-arity cfn))))
-    (if (and (numberp max-args) (= max-args 1))
-        (funcall cfn val)
-      (funcall cfn val param))))
+Delegates to `clime--conform-call' in clime-core."
+  (clime--conform-call cfn val param))
 
 (defun clime--validate-param-value (param values)
   "Validate PARAM's value in VALUES, returning nil or error string.
@@ -712,13 +709,19 @@ Non-string values (already coerced) skip type/choices/coerce."
                                 val type resolved-choices coerce flag-or-name)))
                   (when cfn
                     (condition-case err
-                        (progn (clime--call-conform cfn coerced param) nil)
+                        (let ((result coerced))
+                          (dolist (fn cfn)
+                            (setq result (clime--call-conform fn result param)))
+                          nil)
                       (error (error-message-string err)))))
               (clime-usage-error (cadr err)))
           ;; Non-string values (pre-filled already coerced): run conform only
           (when cfn
             (condition-case err
-                (progn (clime--call-conform cfn val param) nil)
+                (let ((result val))
+                  (dolist (fn cfn)
+                    (setq result (clime--call-conform fn result param)))
+                  nil)
               (error (error-message-string err)))))))))
 
 (defun clime--run-conformers (nodes values)
@@ -729,15 +732,17 @@ receives (value) or (value, param) depending on arity, and returns the
 conformed value; signaled errors are written as :error entries."
   (dolist (node nodes)
     (dolist (opt (clime-node-options node))
-      (let ((cfn (clime-option-conform opt)))
-        (when cfn
+      (let ((fns (clime-option-conform opt)))
+        (when fns
           (let* ((name (clime-option-name opt))
                  (val (clime-values-value values name)))
             (when val
               (condition-case err
-                  (let* ((conformed (clime--call-conform cfn val opt))
-                         (src (or (clime-values-source values name) 'user)))
-                    (setq values (clime-values-set values name conformed src)))
+                  (let ((result val))
+                    (dolist (cfn fns)
+                      (setq result (clime--call-conform cfn result opt)))
+                    (let ((src (or (clime-values-source values name) 'user)))
+                      (setq values (clime-values-set values name result src))))
                 (error
                  (setq values
                        (clime-values-set-error
@@ -746,15 +751,17 @@ conformed value; signaled errors are written as :error entries."
                                 (car (clime-option-flags opt))
                                 (error-message-string err)))))))))))
     (dolist (arg (clime-node-args node))
-      (let ((cfn (clime-arg-conform arg)))
-        (when cfn
+      (let ((fns (clime-arg-conform arg)))
+        (when fns
           (let* ((name (clime-arg-name arg))
                  (val (clime-values-value values name)))
             (when val
               (condition-case err
-                  (let* ((conformed (clime--call-conform cfn val arg))
-                         (src (or (clime-values-source values name) 'user)))
-                    (setq values (clime-values-set values name conformed src)))
+                  (let ((result val))
+                    (dolist (cfn fns)
+                      (setq result (clime--call-conform cfn result arg)))
+                    (let ((src (or (clime-values-source values name) 'user)))
+                      (setq values (clime-values-set values name result src))))
                 (error
                  (setq values
                        (clime-values-set-error
