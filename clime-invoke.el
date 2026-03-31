@@ -936,11 +936,23 @@ then merges user-provided PARAMS on top.  Sets `clime-invoke--values'."
              do (setq values (clime-values-set values k v 'user)))
     (setq clime-invoke--values values)))
 
-(defun clime-invoke--collect-ask-params (node ask)
+(defun clime-invoke--param-satisfied-p (param app)
+  "Return non-nil if PARAM already has a value from user or environment.
+Checks `clime-invoke--values' for a user-sourced value, then falls
+back to checking the environment variable (if PARAM is an option
+with :env configured under APP)."
+  (or (eq 'user (clime-values-source clime-invoke--values
+                                     (clime-param-name param)))
+      (and (clime-option-p param)
+           (when-let ((env-name (clime--env-var-for-option param app)))
+             (getenv env-name)))))
+
+(defun clime-invoke--collect-ask-params (node ask &optional app)
   "Return list of param structs to prompt for based on ASK.
 ASK is t (all required), a list of symbols (specific params), or nil.
-Skips params that already have a user-provided value in
-`clime-invoke--values'."
+APP is the root app (for env var resolution).
+Skips params already satisfied by user-provided values or
+environment variables."
   (when ask
     (let ((params nil))
       (if (eq ask t)
@@ -967,12 +979,10 @@ Skips params that already have a user-provided value in
                              (cl-find name all-args
                                       :key #'clime-param-name))))
               (when found (push found params))))))
-      ;; Filter out params already set with source 'user
+      ;; Filter out params already satisfied (user value or env)
       (setq params (nreverse params))
       (cl-remove-if
-       (lambda (p)
-         (eq 'user (clime-values-source clime-invoke--values
-                                        (clime-param-name p))))
+       (lambda (p) (clime-invoke--param-satisfied-p p app))
        params))))
 
 (defun clime-invoke--prompt-params (params)
@@ -987,20 +997,23 @@ Returns t if all prompts completed, nil if user quit (C-g)."
         t)
     (quit nil)))
 
-(defun clime-invoke--all-required-satisfied-p (node)
+(defun clime-invoke--all-required-satisfied-p (node &optional app)
   "Return non-nil if all required params of NODE have values.
-Checks own options (non-locked), ancestor options, and args."
+Checks own options (non-locked), ancestor options, and args.
+APP is the root app (for env var resolution)."
   (let ((satisfied t))
     (dolist (opt (clime-node-all-options node))
       (when (and (clime-param-required opt)
                  (not (clime-option-locked opt))
-                 (not (clime-values-value
-                       clime-invoke--values (clime-param-name opt))))
+                 (not (or (clime-values-value
+                           clime-invoke--values (clime-param-name opt))
+                          (clime-invoke--param-satisfied-p opt app))))
         (setq satisfied nil)))
     (dolist (opt (clime-help--collect-ancestor-options node))
       (when (and (clime-param-required opt)
-                 (not (clime-values-value
-                       clime-invoke--values (clime-param-name opt))))
+                 (not (or (clime-values-value
+                           clime-invoke--values (clime-param-name opt))
+                          (clime-invoke--param-satisfied-p opt app))))
         (setq satisfied nil)))
     (dolist (arg (clime-node-args node))
       (when (and (clime-param-required arg)
@@ -1396,7 +1409,7 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
               (immediate-result nil))
           (when effective-ask
             (setq ask-params
-                  (clime-invoke--collect-ask-params node effective-ask))
+                  (clime-invoke--collect-ask-params node effective-ask tree))
             (when ask-params
               (setq ask-completed
                     (clime-invoke--prompt-params ask-params))))
@@ -1404,7 +1417,7 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
           (when (and immediate ask-completed (clime-node-handler node))
             (let ((valid (clime-invoke--validate-all node)))
               (when (and (null (car valid)) (null (cdr valid))
-                         (clime-invoke--all-required-satisfied-p node))
+                         (clime-invoke--all-required-satisfied-p node tree))
                 ;; All valid — run immediately (with y-or-n-p if nothing was asked)
                 (if (or ask-params
                         (y-or-n-p (format "Run %s? "

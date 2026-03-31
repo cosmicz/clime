@@ -2611,6 +2611,56 @@
                    (lambda (&rest _) (signal 'quit nil))))
           (should-not (clime-invoke--prompt-params params)))))))
 
+;; ─── Env-aware tests ────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/collect-ask-params-skips-env-satisfied ()
+  "collect-ask-params with t skips params satisfied by env var."
+  (let* ((opt-output (clime-make-option :name 'output
+                                         :flags '("--output" "-o")
+                                         :required t
+                                         :env "OUTPUT"
+                                         :help "Output file"))
+         (arg-name (clime-make-arg :name 'name :help "Name"))
+         (cmd (clime-make-command :name "run" :help "Run"
+                                   :handler #'ignore
+                                   :options (list opt-output)
+                                   :args (list arg-name)))
+         (app (clime-make-app :name "testapp" :version "1"
+                               :env-prefix "TEST"
+                               :children (list (cons "run" cmd))))
+         (tree (clime--prepare-tree app))
+         (node (cdr (assoc "run" (clime-group-children tree))))
+         (clime-invoke--values nil))
+    (clime-invoke--seed-values tree nil)
+    ;; Set env var that satisfies the required option
+    (let ((process-environment (cons "TEST_OUTPUT=/env/out" process-environment)))
+      (let ((params (clime-invoke--collect-ask-params node t tree)))
+        ;; Only name (required arg) — output satisfied by env
+        (should (= 1 (length params)))
+        (should (eq 'name (clime-param-name (car params))))))))
+
+(ert-deftest clime-test-invoke/all-required-satisfied-env ()
+  "all-required-satisfied-p considers env-provided values."
+  (let* ((opt-output (clime-make-option :name 'output
+                                         :flags '("--output" "-o")
+                                         :required t
+                                         :env "OUTPUT"
+                                         :help "Output file"))
+         (arg-name (clime-make-arg :name 'name :help "Name"))
+         (cmd (clime-make-command :name "run" :help "Run"
+                                   :handler #'ignore
+                                   :options (list opt-output)
+                                   :args (list arg-name)))
+         (app (clime-make-app :name "testapp" :version "1"
+                               :env-prefix "TEST"
+                               :children (list (cons "run" cmd))))
+         (tree (clime--prepare-tree app))
+         (node (cdr (assoc "run" (clime-group-children tree))))
+         (clime-invoke--values nil))
+    (clime-invoke--seed-values tree '(name "foo"))
+    (let ((process-environment (cons "TEST_OUTPUT=/env/out" process-environment)))
+      (should (clime-invoke--all-required-satisfied-p node tree)))))
+
 ;; ─── Integration: immediate with conformer error falls to menu ──────
 
 (ert-deftest clime-test-invoke/immediate-conformer-error-falls-to-menu ()
