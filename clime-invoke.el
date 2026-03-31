@@ -377,16 +377,23 @@ Returns an alist of (KEY . ACTION) where ACTION is one of:
 
 ;;; ─── Value Formatting ───────────────────────────────────────────────
 
-(defun clime-invoke--format-choices (choices selected default)
-  "Format CHOICES list with SELECTED highlighted, DEFAULT in parens.
-When more than 5 choices, truncate around SELECTED with ellipsis."
-  (let* ((active (or selected default))
+(defun clime-invoke--format-choices (choices selected default &optional env-val)
+  "Format CHOICES list compactly with SELECTED highlighted, DEFAULT in parens.
+Uses compact `a|b|c' format.  Inactive choices are in shadow face,
+the active/selected choice is in active face, and unselected defaults
+show as `(d)'.  When ENV-VAL is non-nil and nothing is selected, a
+choice matching ENV-VAL shows as `($=v)'; if ENV-VAL is not in the
+choices list, it is appended as `($=v)' in error face.
+When more than 5 choices, truncate around the active choice with ellipsis."
+  (let* ((active (or selected env-val default))
          (idx (and active (cl-position active choices :test #'equal)))
          (max-visible 5)
          (truncate-p (> (length choices) max-visible))
          (visible choices)
          (prefix-dots nil)
-         (suffix-dots nil))
+         (suffix-dots nil)
+         ;; env-val is only relevant when nothing is explicitly selected
+         (show-env (and env-val (null selected))))
     (when truncate-p
       (let* ((center (or idx 0))
              (half (/ (1- max-visible) 2))
@@ -397,21 +404,35 @@ When more than 5 choices, truncate around SELECTED with ellipsis."
         (setq visible (cl-subseq choices start end)
               prefix-dots (> start 0)
               suffix-dots (< end (length choices)))))
-    (let ((parts (mapcar
-                  (lambda (c)
-                    (cond
-                     ((and selected (equal c selected))
-                      (propertize (format "%s" c) 'face 'clime-invoke-active))
-                     ((and (null selected) default (equal c default))
-                      (propertize (format "(%s)" c) 'face 'clime-invoke-default))
-                     (t (format "%s" c))))
-                  visible)))
-      (concat (if prefix-dots "... | " "")
-              (string-join parts " | ")
-              (if suffix-dots " | ..." "")))))
+    (let* ((sep (propertize "|" 'face 'shadow))
+           (env-in-list (and show-env (member env-val choices)))
+           (parts (mapcar
+                   (lambda (c)
+                     (cond
+                      ((and selected (equal c selected))
+                       (propertize (format "%s" c) 'face 'clime-invoke-active))
+                      ((and show-env env-in-list (equal c env-val))
+                       (concat (propertize "($=" 'face 'shadow)
+                               (propertize (format "%s" c) 'face 'clime-invoke-default)
+                               (propertize ")" 'face 'shadow)))
+                      ((and (null selected) (not show-env) default (equal c default))
+                       (propertize (format "(%s)" c) 'face 'clime-invoke-default))
+                      (t (propertize (format "%s" c) 'face 'shadow))))
+                   visible))
+           ;; Append invalid env val if not in choices list
+           (suffix (when (and show-env (not env-in-list))
+                     (concat sep
+                             (propertize "($=" 'face 'shadow)
+                             (propertize (format "%s" env-val) 'face 'clime-invoke-error)
+                             (propertize ")" 'face 'shadow)))))
+      (concat (if prefix-dots (concat (propertize "..." 'face 'shadow) sep) "")
+              (string-join parts sep)
+              (or suffix "")
+              (if suffix-dots (concat sep (propertize "..." 'face 'shadow)) "")))))
 
-(defun clime-invoke--format-value (option)
-  "Format the display value for OPTION from the values map."
+(defun clime-invoke--format-value (option &optional app)
+  "Format the display value for OPTION from the values map.
+APP is the root app (for env var resolution)."
   (let* ((val (clime-values-value clime-invoke--values (clime-option-name option)))
          (default (clime-option-default option)))
     (cond
@@ -439,9 +460,12 @@ When more than 5 choices, truncate around SELECTED with ellipsis."
         (propertize "off" 'face 'clime-invoke-unset)))
      ;; Choices — show all inline
      ((clime-option-choices option)
-      (let ((choices (clime--resolve-value (clime-option-choices option)))
-            (d (and default (clime--resolve-value default))))
-        (clime-invoke--format-choices choices val d)))
+      (let* ((choices (clime--resolve-value (clime-option-choices option)))
+             (d (and default (clime--resolve-value default)))
+             (env-name (and app (clime--env-var-for-option option app)))
+             (env-val (and (null val) env-name (getenv env-name)))
+             (env-val (and env-val (not (string-empty-p env-val)) env-val)))
+        (clime-invoke--format-choices choices val d env-val)))
      ;; Multiple
      ((clime-option-multiple option)
       (if (and val (listp val) val)
@@ -455,11 +479,19 @@ When more than 5 choices, truncate around SELECTED with ellipsis."
        (default
         (let ((d (clime--resolve-value default)))
           (propertize (format "(%s)" d) 'face 'clime-invoke-default)))
+       ;; Env-derived: show ($=value) when env provides a value
+       ((let* ((env-name (and app (clime--env-var-for-option option app)))
+               (env-val (and env-name (getenv env-name))))
+          (when (and env-val (not (string-empty-p env-val)))
+            (concat (propertize "($=" 'face 'shadow)
+                    (propertize env-val 'face 'clime-invoke-default)
+                    (propertize ")" 'face 'shadow)))))
        (t (propertize "(unset)" 'face 'clime-invoke-unset)))))))
 
-(defun clime-invoke--format-desc (option-or-arg)
+(defun clime-invoke--format-desc (option-or-arg &optional app)
   "Format the desc column for OPTION-OR-ARG.
-Returns help text with long flag in parens and annotations."
+Returns help text with long flag in parens, annotations, and env info.
+APP is the root app (for env var resolution on options)."
   (let* ((help (clime-param-help option-or-arg))
          (parts '()))
     ;; Help text or long flag as fallback
@@ -499,29 +531,23 @@ Returns help text with long flag in parens and annotations."
       (when (and (clime-option-p option-or-arg)
                  (clime-option-multiple option-or-arg))
         (push (propertize "(multi)" 'face 'shadow) annotations))
+      ;; Env var info (options only)
+      (when (clime-option-p option-or-arg)
+        (let ((env-str (clime-invoke--format-env option-or-arg app)))
+          (when env-str
+            (push env-str annotations))))
       (when annotations
-        (setq parts (append parts (nreverse annotations)))))
+        (setq parts (nconc (nreverse annotations) parts))))
     (string-join (nreverse parts) " ")))
 
 (defun clime-invoke--format-env (option &optional app)
-  "Format the env column for OPTION, or return nil.
+  "Format the env annotation for OPTION, or return nil.
 APP is the root app (for :env-prefix resolution).
-Shows [$VAR=resolved] with active face on value when env is source."
+Shows [$VAR] in shadow face when an env var is configured."
   (when (clime-option-p option)
     (let ((env-name (clime--env-var-for-option option app)))
       (when env-name
-        (let* ((env-val (getenv env-name))
-               (src (clime-values-source clime-invoke--values (clime-option-name option)))
-               (explicit (and src (not (eq src 'env))))
-               (has-val (and env-val (not (string-empty-p env-val)))))
-          (if has-val
-              (let ((prefix (propertize (format "[$%s=" env-name) 'face 'shadow))
-                    (value (if explicit
-                               (propertize env-val 'face 'shadow)
-                             (propertize env-val 'face 'clime-invoke-active)))
-                    (suffix (propertize "]" 'face 'shadow)))
-                (concat prefix value suffix))
-            (propertize (format "[$%s]" env-name) 'face 'shadow)))))))
+        (propertize (format "[$%s]" env-name) 'face 'shadow)))))
 
 ;;; ─── Validation ─────────────────────────────────────────────────────
 
@@ -592,6 +618,26 @@ Reads from `clime-invoke--values' for all value lookups."
           (push msg general-errors))))
     (cons (nreverse param-errors) (nreverse general-errors))))
 
+;;; ─── Value Column Width ─────────────────────────────────────────
+
+(defconst clime-invoke--max-value-width 15
+  "Maximum width for the value column in the 3-column layout.")
+
+(defun clime-invoke--compute-value-width (options args &optional app)
+  "Compute the value column width from OPTIONS and ARGS.
+APP is the root app (for env var resolution in format-value).
+Returns the max string-length of formatted values, capped at
+`clime-invoke--max-value-width'.  Minimum width is 5 (for \"(unset)\"-ish)."
+  (let ((max-w 5))
+    (dolist (opt options)
+      (let ((w (length (clime-invoke--format-value opt app))))
+        (when (> w max-w) (setq max-w w))))
+    (dolist (arg args)
+      (let* ((val (clime-values-value clime-invoke--values (clime-arg-name arg)))
+             (w (length (if val (format "%s" val) "(unset)"))))
+        (when (> w max-w) (setq max-w w))))
+    (min max-w clime-invoke--max-value-width)))
+
 ;;; ─── Rendering ──────────────────────────────────────────────────────
 
 (defun clime-invoke--find-root (node)
@@ -653,7 +699,7 @@ When KEY-MAP is nil, builds one automatically from NODE.
 AT-ROOT non-nil means this is the entry-point node (q exits entirely).
 VALIDATION-RESULT is (PARAM-ERRORS . GENERAL-ERRORS) from `clime-invoke--validate-all'.
 PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active.
-Uses 4-column layout: Key | Desc | Value | Env."
+Uses 3-column layout: Key | Value | Desc."
   (unless key-map
     (setq key-map (clime-invoke--build-key-map node)))
   (let ((lines '())
@@ -675,7 +721,7 @@ Uses 4-column layout: Key | Desc | Value | Env."
                           'face 'clime-invoke-error)
               lines)
         (push "" lines)))
-    ;; Options grouped: own options by category, then ancestor as "Global Options"
+    ;; Compute value column width for all visible options + args
     (let* ((own (cl-remove-if (lambda (o)
                                 (or (and (clime-option-hidden o)
                                          (not (eq clime-invoke--show-mode 'all)))
@@ -683,32 +729,35 @@ Uses 4-column layout: Key | Desc | Value | Env."
                                          (clime-option-deprecated o))))
                               (clime-node-all-options node)))
            (ancestor (clime-help--collect-ancestor-options node))
+           (all-opts (append own ancestor))
+           (args (clime-node-args node))
+           (val-width (clime-invoke--compute-value-width all-opts args root))
            (grouped (append
                      (when own (list (cons nil own)))
                      (when ancestor (list (cons "Global Options" ancestor))))))
+      ;; Options grouped: own options by category, then ancestor as "Global Options"
       (dolist (cat-entry grouped)
         (let ((cat (or (car cat-entry) "Options"))
               (opts (cdr cat-entry)))
           (push (propertize cat 'face 'clime-invoke-heading) lines)
           (dolist (opt opts)
             (if (clime-option-locked opt)
-                ;; Locked option: show full flags dimmed, value in locked face
-                (let* ((desc (clime-invoke--format-desc opt))
+                ;; Locked option: show value in locked face, then desc
+                (let* ((desc (clime-invoke--format-desc opt root))
                        (locked-val (clime-values-value clime-invoke--values
                                                        (clime-option-name opt)))
                        (has-val (not (null locked-val)))
                        (val-str (if has-val
                                     (propertize (format "%s" locked-val)
                                                 'face 'clime-invoke-locked)
-                                  (propertize "(excluded)" 'face 'clime-invoke-dimmed))))
-                  (push (format "     %s  %s  %s"
-                                (clime-invoke--pad-to
-                                 (propertize desc 'face 'clime-invoke-dimmed)
-                                 30)
-                                val-str
-                                (if has-val
-                                    (propertize "(locked)" 'face 'clime-invoke-dimmed)
-                                  ""))
+                                  (propertize "(excluded)" 'face 'clime-invoke-dimmed)))
+                       (lock-ann (if has-val
+                                     (propertize "(locked)" 'face 'clime-invoke-dimmed)
+                                   "")))
+                  (push (format "      %s  %s %s"
+                                (clime-invoke--pad-to val-str val-width)
+                                (propertize desc 'face 'clime-invoke-dimmed)
+                                lock-ann)
                         lines))
               ;; Normal option: interactive with key binding
               (let* ((name (clime-option-name opt))
@@ -717,9 +766,8 @@ Uses 4-column layout: Key | Desc | Value | Env."
                                   (and (eq (cadr entry) :option)
                                        (eq (clime-option-name (caddr entry)) name)))
                                 key-map)))
-                     (desc (clime-invoke--format-desc opt))
-                     (val-str (clime-invoke--format-value opt))
-                     (env-str (clime-invoke--format-env opt root))
+                     (val-str (clime-invoke--format-value opt root))
+                     (desc (clime-invoke--format-desc opt root))
                      (param-err (cdr (assq name param-errors))))
                 (when key
                   (let ((display-key (if prefix-state
@@ -729,16 +777,14 @@ Uses 4-column layout: Key | Desc | Value | Env."
                            (format " %s %s  %s"
                                    (propertize (format "%3s" display-key)
                                                'face 'clime-invoke-option-key)
-                                   (clime-invoke--pad-to desc 30)
-                                   val-str)
+                                   (clime-invoke--pad-to val-str val-width)
+                                   desc)
                            (when param-err
                              (concat "  " (propertize (concat "← " param-err)
-                                                      'face 'clime-invoke-invalid)))
-                           (when env-str (concat "  " env-str)))
+                                                      'face 'clime-invoke-invalid))))
                           lines)))))))
-        (push "" lines)))
-    ;; Positional args
-    (let ((args (clime-node-args node)))
+        (push "" lines))
+      ;; Positional args
       (when args
         (push (propertize "Arguments" 'face (if dimmed 'clime-invoke-dimmed
                                               'clime-invoke-heading))
@@ -750,11 +796,11 @@ Uses 4-column layout: Key | Desc | Value | Env."
                               (and (eq (cadr entry) :arg)
                                    (eq (clime-arg-name (caddr entry)) name)))
                             key-map)))
-                 (desc (clime-invoke--format-desc arg))
                  (val (clime-values-value clime-invoke--values name))
                  (val-str (if val
                               (propertize (format "%s" val) 'face 'clime-invoke-active)
                             (propertize "(unset)" 'face 'clime-invoke-unset)))
+                 (desc (clime-invoke--format-desc arg))
                  (param-err (cdr (assq name param-errors))))
             (when key
               (push (concat
@@ -762,13 +808,13 @@ Uses 4-column layout: Key | Desc | Value | Env."
                              (propertize (format "%3s" key)
                                          'face (if dimmed 'clime-invoke-dimmed
                                                  'clime-invoke-arg-key))
-                             (clime-invoke--pad-to desc 30)
-                             val-str)
+                             (clime-invoke--pad-to val-str val-width)
+                             desc)
                      (when param-err
                        (concat "  " (propertize (concat "← " param-err)
                                                 'face 'clime-invoke-invalid))))
                     lines))))
-        (push "" lines)))
+        (push "" lines))
     ;; Children (only on branch nodes, not commands)
     (when (clime-branch-p node)
       (let ((children (clime-invoke--visible-children node)))
@@ -826,7 +872,7 @@ Uses 4-column layout: Key | Desc | Value | Env."
                     (propertize "?" 'face act-face)
                     (symbol-name clime-invoke--show-mode))
             actions)
-      (push (concat " " (string-join (nreverse actions) "    ")) lines))
+      (push (concat " " (string-join (nreverse actions) "    ")) lines)))
     (string-join (nreverse lines) "\n")))
 
 

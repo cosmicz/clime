@@ -762,13 +762,13 @@
 ;;; ─── Format Env ─────────────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/format-env-with-value ()
-  "Env column shows var name and resolved value."
+  "Env annotation shows just var name, no resolved value."
   (let ((opt (clime-make-option :name 'home :flags '("--home")
                                  :env "HOME")))
     (let ((env-str (clime-invoke--format-env opt)))
-      (should (string-match-p "\\$HOME=" env-str))
-      ;; Should have a resolved value (HOME is always set)
-      (should (string-match-p "\\$HOME=/" env-str)))))
+      (should (string-match-p "\\$HOME" env-str))
+      ;; Simplified: no resolved value in env annotation
+      (should-not (string-match-p "=" env-str)))))
 
 (ert-deftest clime-test-invoke/format-env-empty ()
   "Env column shows just var name when env is unset."
@@ -778,28 +778,23 @@
       (should (string-match-p "\\$CLIME_TEST_NONEXISTENT_VAR_XYZ" env-str))
       (should-not (string-match-p "=" env-str)))))
 
-(ert-deftest clime-test-invoke/format-env-active-source ()
-  "Env value highlighted when it's the active source."
+(ert-deftest clime-test-invoke/format-env-always-shadow ()
+  "Env annotation is always in shadow face (no active highlighting)."
   (let ((opt (clime-make-option :name 'home :flags '("--home")
                                  :env "HOME")))
-    ;; No explicit value set — env is the active source
     (let ((env-str (clime-invoke--format-env opt)))
-      (let ((eq-pos (string-match "=." env-str)))
-        (when eq-pos
-          (should (eq 'clime-invoke-active
-                      (get-text-property (1+ eq-pos) 'face env-str))))))))
+      (should (eq 'shadow (get-text-property 0 'face env-str))))))
 
-(ert-deftest clime-test-invoke/format-env-not-active-when-explicit ()
-  "Env value NOT highlighted when explicit value is set."
-  (let ((opt (clime-make-option :name 'home :flags '("--home")
-                                 :env "HOME"))
-        (clime-invoke--values (clime-values-set '() 'home "/custom" 'user)))
-    ;; Explicit value set — env is not the active source
-    (let ((env-str (clime-invoke--format-env opt)))
-      (let ((eq-pos (string-match "=." env-str)))
-        (when eq-pos
-          (should-not (eq 'clime-invoke-active
-                          (get-text-property (1+ eq-pos) 'face env-str))))))))
+(ert-deftest clime-test-invoke/format-value-env-derived ()
+  "Unset option with env var shows ($=value) in value column."
+  (let* ((opt (clime-make-option :name 'home :flags '("--home")
+                                  :env "HOME"))
+         (app (clime-make-app :name "test" :version "1" :children nil))
+         (clime-invoke--values '()))
+    (let ((val-str (clime-invoke--format-value opt app)))
+      ;; Should show env-derived value with ($=...)
+      (should (string-match-p "(\\$=" val-str))
+      (should (string-match-p "/" val-str)))))
 
 (ert-deftest clime-test-invoke/format-env-nil-when-no-env ()
   "No env column when option has no :env slot."
@@ -2315,6 +2310,172 @@
               ;; Should NOT have refreshed — still old app
               (should (eq app (gethash "testapp" clime-invoke--registry))))
           (if old-val (set sym old-val) (makunbound sym)))))))
+
+;;; ─── 3-Column Layout: Key | Value | Desc ───────────────────────────────
+
+(ert-deftest clime-test-invoke/render-option-value-before-desc ()
+  "Option value appears before help text (3-column: Key | Value | Desc)."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose" "-v")
+                                  :nargs 0 :help "Be verbose"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (clime-invoke--values (clime-values-set '() 'verbose t 'user))
+         (content (clime-invoke--render-to-string cmd nil nil)))
+    ;; Find the option line (contains "-v" key)
+    (let ((line (cl-find-if (lambda (l) (string-match-p "-v" l))
+                            (split-string content "\n"))))
+      (should line)
+      ;; On that line, "on" (value) should appear before "Be verbose" (desc)
+      (let ((val-pos (string-match-p "\\bon\\b" line))
+            (desc-pos (string-match-p "Be verbose" line)))
+        (should val-pos)
+        (should desc-pos)
+        (should (< val-pos desc-pos))))))
+
+(ert-deftest clime-test-invoke/render-option-unset-value-before-desc ()
+  "Unset option value marker appears before help text."
+  (let* ((opt (clime-make-option :name 'output :flags '("--output" "-o")
+                                  :help "Output file"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (clime-invoke--values '())
+         (content (clime-invoke--render-to-string cmd nil nil)))
+    ;; "(unset)" should appear before "Output file"
+    (let ((val-pos (string-match-p "(unset)" content))
+          (desc-pos (string-match-p "Output file" content)))
+      (should val-pos)
+      (should desc-pos)
+      (should (< val-pos desc-pos)))))
+
+(ert-deftest clime-test-invoke/render-arg-value-before-desc ()
+  "Arg value appears before help text in 3-column layout."
+  (let* ((arg (clime-make-arg :name 'file :help "The file to process"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :args (list arg)))
+         (clime-invoke--values (clime-values-set '() 'file "test.txt" 'user))
+         (content (clime-invoke--render-to-string cmd nil nil)))
+    (let ((val-pos (string-match-p "test\\.txt" content))
+          (desc-pos (string-match-p "The file to process" content)))
+      (should val-pos)
+      (should desc-pos)
+      (should (< val-pos desc-pos)))))
+
+(ert-deftest clime-test-invoke/render-env-in-desc-not-separate ()
+  "Env annotation [$VAR] appears in desc column, env value in value column."
+  (let* ((opt (clime-make-option :name 'home :flags '("--home")
+                                  :env "HOME" :help "Home directory"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (app (clime-make-app :name "test" :version "1"
+                               :children `(("run" . ,cmd))))
+         (clime-invoke--values '()))
+    (setf (clime-node-parent cmd) app)
+    (let ((content (clime-invoke--render-to-string cmd nil nil)))
+      ;; Find the option line
+      (let ((line (cl-find-if (lambda (l) (string-match-p "Home directory" l))
+                              (split-string content "\n"))))
+        (should line)
+        ;; Value ($=...) should come before "Home directory"
+        (let ((val-pos (string-match-p "(\\$=" line))
+              (desc-pos (string-match-p "Home directory" line))
+              (env-pos (string-match-p "\\[\\$HOME\\]" line)))
+          (should val-pos)
+          (should desc-pos)
+          (should env-pos)
+          ;; 3-column: env-value before desc, [$HOME] annotation after desc
+          (should (< val-pos desc-pos))
+          (should (< desc-pos env-pos)))))))
+
+(ert-deftest clime-test-invoke/render-choices-value-before-desc ()
+  "Choices render in value column, before desc."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format" "-f")
+                                  :choices '("json" "csv" "html")
+                                  :help "Output format"))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (clime-invoke--values (clime-values-set '() 'format "json" 'user))
+         (content (clime-invoke--render-to-string cmd nil nil)))
+    ;; The choices display (containing "json") should come before "Output format"
+    (let ((val-pos (string-match-p "json" content))
+          (desc-pos (string-match-p "Output format" content)))
+      (should val-pos)
+      (should desc-pos)
+      (should (< val-pos desc-pos)))))
+
+(ert-deftest clime-test-invoke/compute-value-width-basic ()
+  "Value width is at least 5 and reflects actual formatted values."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (clime-invoke--values '()))
+    ;; "off" is 3 chars, min is 5
+    (should (>= (clime-invoke--compute-value-width (list opt) nil) 5))))
+
+(ert-deftest clime-test-invoke/compute-value-width-capped ()
+  "Value width is capped at `clime-invoke--max-value-width'."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices '("json" "csv" "html" "xml" "yaml" "toml")))
+         (clime-invoke--values (clime-values-set '() 'format "json" 'user)))
+    (should (<= (clime-invoke--compute-value-width (list opt) nil)
+                clime-invoke--max-value-width))))
+
+(ert-deftest clime-test-invoke/render-locked-value-before-desc ()
+  "Locked option renders value before desc in 3-column layout."
+  (let* ((opt (clime-make-option :name 'target :flags '("--target")
+                                  :locked t :help "Target env"))
+         (cmd (clime-make-command :name "deploy" :handler #'ignore
+                                   :options (list opt)))
+         (clime-invoke--values (clime-values-set '() 'target "prod" 'app)))
+    (let* ((content (clime-invoke--render-to-string cmd nil nil))
+           (line (cl-find-if (lambda (l) (string-match-p "Target env" l))
+                             (split-string content "\n"))))
+      (should line)
+      ;; Value "prod" before desc "Target env"
+      (let ((val-pos (string-match-p "prod" line))
+            (desc-pos (string-match-p "Target env" line)))
+        (should val-pos)
+        (should desc-pos)
+        (should (< val-pos desc-pos))))))
+
+(ert-deftest clime-test-invoke/format-choices-compact ()
+  "Choices use compact pipe-separated format without spaces."
+  (let ((result (clime-invoke--format-choices '("json" "csv" "html") nil nil)))
+    ;; No spaces around pipes
+    (should (string-match-p "json|csv|html" (substring-no-properties result)))))
+
+(ert-deftest clime-test-invoke/format-choices-inactive-shadow ()
+  "Inactive choices are in shadow face."
+  (let ((result (clime-invoke--format-choices '("json" "csv" "html") "json" nil)))
+    ;; "csv" should be in shadow face
+    (let ((csv-pos (string-match "csv" result)))
+      (should csv-pos)
+      (should (eq 'shadow (get-text-property csv-pos 'face result))))))
+
+(ert-deftest clime-test-invoke/format-choices-default-parens ()
+  "Default choice shown in parens when nothing selected."
+  (let ((result (clime-invoke--format-choices '("json" "csv" "html") nil "csv")))
+    (should (string-match-p "(csv)" (substring-no-properties result)))))
+
+(ert-deftest clime-test-invoke/format-choices-env-valid ()
+  "Env-derived value in choices shows as ($=val)."
+  (let ((result (clime-invoke--format-choices '("json" "csv" "html") nil nil "csv")))
+    (should (string-match-p "(\\$=csv)" (substring-no-properties result)))))
+
+(ert-deftest clime-test-invoke/format-choices-env-invalid ()
+  "Env-derived value not in choices is appended as ($=val)."
+  (let ((result (clime-invoke--format-choices '("json" "csv" "html") nil nil "xml")))
+    ;; All original choices present
+    (should (string-match-p "json" (substring-no-properties result)))
+    ;; Invalid env val appended
+    (should (string-match-p "(\\$=xml)" (substring-no-properties result)))
+    ;; Invalid env val in error face
+    (let ((pos (string-match "xml" result)))
+      (should pos)
+      (should (eq 'clime-invoke-error (get-text-property pos 'face result))))))
+
+(ert-deftest clime-test-invoke/format-choices-env-ignored-when-selected ()
+  "Env-derived value ignored when explicit selection exists."
+  (let ((result (clime-invoke--format-choices '("json" "csv" "html") "json" nil "csv")))
+    ;; Should not show ($=csv)
+    (should-not (string-match-p "(\\$=" (substring-no-properties result)))))
 
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here
