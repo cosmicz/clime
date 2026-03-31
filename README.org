@@ -714,23 +714,43 @@ positional arguments:
 
 *** Value pipeline
 
-Each option and arg value flows through a multi-stage pipeline.  The
-stages are ordered so that each step receives the right kind of input:
+Each option and arg value flows through a multi-stage pipeline split
+across two passes.  CLI args and env vars enter through the same
+per-value stages; they differ only in /when/ they enter:
 
 #+begin_example
-raw string → :type → :choices → :coerce → env vars → :conform → node :conform → defaults
-   pass 1 (immediate, per-token)       │     pass 2 (after all input collected)
-                                       │
-                              :setup hook runs here
+                         per-value transform
+                    ┌──────────────────────────┐
+  raw string ──────┤  :type → :choices → :coerce  ├──→ values map
+                    └──────────────────────────┘
+                               ▲
+  Pass 1: CLI tokens ──────────┘
+                    :setup hook runs here
+  Pass 2: env vars ────────────┘
+          then: :conform (per-param) → node :conform → defaults → required check
 #+end_example
 
-- *:type* --- convert the raw string to a typed value.  Accepts
-  ~'integer~, ~'number~, or ~'string~ (default).  Runs first so that
-  ~:choices~ can compare typed values:
+Both CLI and env var strings flow through ~:type~ → ~:choices~ →
+~:coerce~.  The difference is timing: CLI values are transformed
+immediately during pass 1, while env vars are applied in pass 2
+(after the ~:setup~ hook).  ~:conform~ runs last, seeing the final
+value regardless of source.
+
+- *:type* --- convert the raw string to a typed value.  Accepts a
+  symbol (~'integer~, ~'number~, ~'string~) or a function
+  ~(string → value)~.  Runs first so that ~:choices~ can compare typed
+  values:
 
   #+begin_src emacs-lisp
   (clime-opt level ("--level") :type 'integer :choices '(1 2 3))
+
+  ;; Function type for custom parsing
+  (clime-opt date ("--date") :type #'parse-time-string
+    :help "Date in YYYY-MM-DD format")
   #+end_src
+
+  Errors signaled by function types are wrapped as usage errors
+  automatically.
 
 - *:choices* --- validate against an allowed set.  Runs after ~:type~
   so the comparison uses typed values.  Accepts a literal list or a
@@ -790,6 +810,21 @@ run: ~:coerce~ runs immediately in pass 1 (CLI input only), while
 ~:conform~ runs in pass 2 (CLI + env var input, after the ~:setup~
 hook).  Use ~:coerce~ for simple transforms, ~:conform~ for
 cross-source validation.
+
+All four slots chain in order --- ~:type~ → ~:choices~ → ~:coerce~ →
+~:conform~:
+
+#+begin_src emacs-lisp
+(clime-opt port ("--port" "-p")
+  :type 'integer                          ; "8080" → 8080
+  :choices '(80 443 8080 8443)            ; validate allowed ports
+  :coerce (lambda (n) (format ":%d" n))   ; 8080 → ":8080"
+  :conform (lambda (v _p)                 ; cross-check with env
+             (when (and (getenv "PROD") (equal v ":80"))
+               (error "Port 80 not allowed in PROD"))
+             v)
+  :help "Listen port")
+#+end_src
 
 *** Environment variables
 

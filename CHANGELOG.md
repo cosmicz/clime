@@ -7,6 +7,12 @@
   `:optional t` sets `:required nil`; `:optional nil` sets `:required t`.
   Mutually exclusive with `:required` (error if both present).
 
+- **Function `:type`**: `:type` now accepts a function `(string → value)`
+  in addition to keyword symbols (`'integer`, `'number`, `'string`).
+  Errors signaled by function types are wrapped as `clime-usage-error`.
+  `:coerce` errors are now also wrapped as `clime-usage-error` for
+  consistency.
+
 - **Values map as single source of truth**: the runtime data carrier for
   both parse and invoke pipelines is now a values map — an alist of
   `(NAME :value V :source S)` entries with optional `:error` key.
