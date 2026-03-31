@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **3-column invoke menu layout**: `clime-invoke` menu reordered from
+  Key|Desc|Value|Env to Key|Value|Desc for easier value scanning.
+  Compact choices format (`json|(csv)|html`), env-derived values
+  (`($=/path)`) in value column, simplified env annotation (`[$VAR]`)
+  in description.  Env+choices integration shows `($=val)` for
+  env-provided choices with error face for invalid values.
+
 - **`:optional` keyword**: `clime-arg` and `clime-opt` now accept
   `:optional` as the inverse of `:required`.  Bare `:optional` or
   `:optional t` sets `:required nil`; `:optional nil` sets `:required t`.
