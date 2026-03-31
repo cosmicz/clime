@@ -36,13 +36,13 @@
                             (:copier nil))
   "A CLI option (flag) specification."
   (flags nil :type list :documentation "List of flag strings, e.g. (\"--verbose\" \"-v\").")
-  (type 'string :type symbol :documentation "Type converter symbol.")
+  (type 'string :type (or symbol function) :documentation "Type converter: symbol (`string', `integer', `number') or function (string → value).")
   (nargs nil :type (or integer null) :documentation "Arg count: nil=1, 0=boolean, N=fixed.")
   (env nil :type (or string boolean null) :documentation "Env var name: string suffix (prefixed by app :env-prefix), t for auto-derive, or nil.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
-  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
+  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.  Errors are wrapped as `clime-usage-error'.")
   (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error.")
   (separator nil :type (or string null) :documentation "Split each value by this string; implies :multiple t.")
   (category nil :type (or string null) :documentation "Help display category label.")
@@ -105,10 +105,10 @@ Used for lazy slots like :choices and :default."
                          (:constructor clime-arg--create)
                          (:copier nil))
   "A CLI positional argument specification."
-  (type 'string :type symbol :documentation "Type converter symbol.")
+  (type 'string :type (or symbol function) :documentation "Type converter: symbol (`string', `integer', `number') or function (string → value).")
   (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
-  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
+  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.  Errors are wrapped as `clime-usage-error'.")
   (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning)."))
 

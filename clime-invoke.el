@@ -476,7 +476,7 @@ Returns help text with long flag in parens and annotations."
       ;; Type hint (non-string)
       (when (clime-option-p option-or-arg)
         (let ((type (clime-option-type option-or-arg)))
-          (when (and type (not (eq type 'string)))
+          (when (and type (symbolp type) (not (eq type 'string)))
             (push (propertize (format "(%s)" type) 'face 'shadow) annotations))))
       ;; Multiple hint
       (when (and (clime-option-p option-or-arg)

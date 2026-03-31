@@ -118,7 +118,8 @@ or nil if TOKEN is not a valid bundle."
 
 (defun clime--coerce-value (value type flag-or-name)
   "Coerce string VALUE to TYPE, signaling `clime-usage-error' on failure.
-FLAG-OR-NAME is used in error messages."
+TYPE is a symbol (`string', `integer', `number', nil) or a function
+\(string → value).  FLAG-OR-NAME is used in error messages."
   (pcase type
     ((or 'string 'nil) value)
     ('integer
@@ -136,6 +137,13 @@ FLAG-OR-NAME is used in error messages."
                  (list (format "Expected number for %s, got \"%s\""
                                flag-or-name value))))
        n))
+    ((pred functionp)
+     (condition-case err
+         (funcall type value)
+       (error (signal 'clime-usage-error
+                      (list (format "%s for %s"
+                                    (error-message-string err)
+                                    flag-or-name))))))
     (_ (signal 'clime-usage-error
                (list (format "Unknown type %s for %s" type flag-or-name))))))
 
@@ -155,7 +163,14 @@ FLAG-OR-NAME is used in error messages."
                             result flag-or-name
                             (mapconcat (lambda (c) (format "%s" c))
                                        resolved ", ")))))
-    (if coerce (funcall coerce result) result)))
+    (if coerce
+        (condition-case err
+            (funcall coerce result)
+          (error (signal 'clime-usage-error
+                         (list (format "%s for %s"
+                                       (error-message-string err)
+                                       flag-or-name)))))
+      result)))
 
 (defun clime--try-consume-option (tok argv i len values option-parsing
                                       current-node root path)

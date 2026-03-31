@@ -639,7 +639,7 @@ Keyword arguments:
   :optional t       Option is not required (exclusive with :required)
   :requires SYMS    Other options that must also be set
   :nargs N          Number of arguments (0 = boolean)
-  :type SYM         Type converter (\\='string, \\='integer, \\='number)
+  :type SYM-OR-FN   Type converter: symbol (\\='string, \\='integer, \\='number) or function
   :choices LIST     Allowed values or function
   :coerce FN        Transform after type coercion
   :conform FN       Pass-2 validation/normalization
@@ -668,7 +668,7 @@ Keyword arguments:
 NAME is a symbol — the canonical parameter name.
 
 Keyword arguments:
-  :type SYM         Type converter (\\='string, \\='integer, \\='number)
+  :type SYM-OR-FN   Type converter: symbol (\\='string, \\='integer, \\='number) or function
   :choices LIST     Allowed values or function
   :coerce FN        Transform after type coercion
   :conform FN       Pass-2 validation/normalization
