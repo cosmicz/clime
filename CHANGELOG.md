@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Invoke `:ask` and `:immediate` keywords**: `clime-invoke` now
+  accepts `:ask` and `:immediate` keyword arguments for pre-menu
+  prompting and immediate execution.  `:ask t` prompts for all
+  required params via minibuffer before showing the menu; `:ask
+  '(param ...)` prompts for specific params.  `:immediate t` runs
+  the handler directly after prompting if all requirements are
+  satisfied, bypassing the menu entirely — enabling `clime-invoke`
+  as a drop-in for interactive Emacs commands.  When all params are
+  pre-filled, confirms via `y-or-n-p`.  The menu is displayed
+  during the ask phase with live value updates.  Env-provided
+  values are considered when determining which required params need
+  prompting.
+
 - **3-column invoke menu layout**: `clime-invoke` menu reordered from
   Key|Desc|Value|Env to Key|Value|Desc for easier value scanning.
   Compact choices format (`json|(csv)|html`), env-derived values
