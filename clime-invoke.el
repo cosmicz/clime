@@ -985,15 +985,22 @@ environment variables."
        (lambda (p) (clime-invoke--param-satisfied-p p app))
        params))))
 
-(defun clime-invoke--prompt-params (params)
+(defun clime-invoke--prompt-params (params &optional node buf)
   "Prompt user for each param in PARAMS via minibuffer.
+When NODE and BUF are provided, re-renders the menu after each
+prompt so the user sees values update live.
 Returns t if all prompts completed, nil if user quit (C-g)."
   (condition-case nil
       (progn
         (dolist (p params)
           (if (clime-option-p p)
               (clime-invoke--handle-option-direct p)
-            (clime-invoke--handle-arg p)))
+            (clime-invoke--handle-arg p))
+          ;; Re-render menu to show updated value
+          (when (and node buf (buffer-live-p buf))
+            (clime-invoke--render node
+                                  (clime-invoke--build-key-map node)
+                                  nil buf t nil)))
         t)
     (quit nil)))
 
@@ -1406,13 +1413,22 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
         (let ((effective-ask (if (and immediate (not ask)) t ask))
               (ask-params nil)
               (ask-completed t)
-              (immediate-result nil))
+              (immediate-result nil)
+              (ask-buf nil))
           (when effective-ask
             (setq ask-params
                   (clime-invoke--collect-ask-params node effective-ask tree))
             (when ask-params
-              (setq ask-completed
-                    (clime-invoke--prompt-params ask-params))))
+              ;; Show menu while prompting so user sees current state
+              (let ((clime-invoke--show-mode 'normal))
+                (setq ask-buf (get-buffer-create clime-invoke--buffer-name))
+                (display-buffer ask-buf clime-invoke-display-buffer-action)
+                (clime-invoke--render node
+                                      (clime-invoke--build-key-map node)
+                                      nil ask-buf t nil)
+                (setq ask-completed
+                      (clime-invoke--prompt-params
+                       ask-params node ask-buf)))))
           ;; Immediate mode: run without menu if possible
           (when (and immediate ask-completed (clime-node-handler node))
             (let ((valid (clime-invoke--validate-all node)))
@@ -1437,6 +1453,12 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
                         (list :params (clime-values-plist
                                        clime-invoke--values)
                               :exit nil :output nil))))))
+          ;; Clean up ask-phase buffer when not entering the loop
+          (when (and ask-buf (or immediate-result (not ask-completed)))
+            (when-let ((win (get-buffer-window ask-buf)))
+              (delete-window win))
+            (when (buffer-live-p ask-buf)
+              (kill-buffer ask-buf)))
           (cond
            ;; Immediate mode handled it
            (immediate-result immediate-result)
