@@ -1873,7 +1873,7 @@
                                :children (list cmd)))
          (output (with-output-to-string
                    (clime-run app '("test-cmd" "hello")))))
-    (should (equal output "hello"))))
+    (should (equal output "hello\n"))))
 
 (ert-deftest clime-test-dsl/handler-quote-in-command ()
   "clime-command with (clime-handler 'fn) works end-to-end."
@@ -1885,7 +1885,7 @@
                                :children (list cmd)))
          (output (with-output-to-string
                    (clime-run app '("test-cmd2" "hello")))))
-    (should (equal output "hello"))))
+    (should (equal output "hello\n"))))
 
 ;;; ─── :optional keyword ─────────────────────────────────────────────────
 

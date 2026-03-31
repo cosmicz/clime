@@ -449,7 +449,7 @@
                               :children (list (cons "deploy" cmd))))
          (output (with-output-to-string
                    (clime-run app '("deploy" "--token" "abc")))))
-    (should (equal output "abc"))))
+    (should (equal output "abc\n"))))
 
 (ert-deftest clime-test-parse/required-option-satisfied-by-env ()
   "Required option satisfied via env var succeeds."
@@ -465,7 +465,7 @@
                                        process-environment)))
       (let ((output (with-output-to-string
                       (clime-run app '("deploy")))))
-        (should (equal output "from-env"))))))
+        (should (equal output "from-env\n"))))))
 
 (ert-deftest clime-test-parse/short-bundle-non-boolean-error ()
   "Short bundle with non-boolean flag signals usage error."

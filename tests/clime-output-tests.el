@@ -478,7 +478,17 @@
          (output (with-output-to-string
                    (let ((code (clime-run app '("greet"))))
                      (should (= code 0))))))
-    (should (equal output "hello"))))
+    (should (equal output "hello\n"))))
+
+(ert-deftest clime-test-output/run-text-nil-retval-no-newline ()
+  "Handler returning nil produces no output (no spurious newline)."
+  (let* ((cmd (clime-make-command :name "greet"
+                                   :handler (lambda (_ctx) nil)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "greet" cmd))))
+         (output (with-output-to-string
+                   (clime-run app '("greet")))))
+    (should (equal output ""))))
 
 (ert-deftest clime-test-output/run-no-json-mode-ignores-flag ()
   "clime-run without :json-mode t ignores --json flag."

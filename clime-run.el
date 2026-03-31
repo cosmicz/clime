@@ -71,7 +71,8 @@ Returns integer exit code: 0 success, 1 runtime error."
     (let ((has-errors (or clime-out--errors (> exit-code 0))))
       (if streaming
           (when retval
-            (princ (funcall (clime-output-format-encoder fmt) retval)))
+            (princ (funcall (clime-output-format-encoder fmt) retval))
+            (terpri))
         (clime-out--flush (clime-output-format-finalize fmt) retval))
       (if has-errors 1 0))))
 

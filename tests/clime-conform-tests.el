@@ -156,7 +156,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--aa")))))
-    (should (equal output "got-a"))))
+    (should (equal output "got-a\n"))))
 
 (ert-deftest clime-test-conform/node-conform-receives-node ()
   "Node :conform second arg is the node struct itself."
@@ -284,7 +284,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--json")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 (ert-deftest clime-test-conform/exclusive-two-error ()
   "Exclusive check via node :conform: two members signals error."
@@ -310,7 +310,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 (ert-deftest clime-test-conform/exclusive-derived-value ()
   "Exclusive check injects winner option name under group key."
@@ -325,7 +325,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--csv")))))
-    (should (equal output "csv"))))
+    (should (equal output "csv\n"))))
 
 ;;; ─── Exclusive: Default Value ───────────────────────────────────────
 
@@ -343,11 +343,11 @@
     ;; No member set → default injected
     (let ((output (with-output-to-string
                     (clime-run app '("run")))))
-      (should (equal output "text")))
+      (should (equal output "text\n")))
     ;; Member set → derived value overrides default
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--json")))))
-      (should (equal output "json")))))
+      (should (equal output "json\n")))))
 
 (ert-deftest clime-test-conform/exclusive-default-suppressed-on-sibling ()
   "Setting one exclusive member suppresses defaults on siblings."
@@ -366,11 +366,11 @@
     ;; Setting --json suppresses csv's default
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--json")))))
-      (should (equal output "json=t csv=nil")))
+      (should (equal output "json=t csv=nil\n")))
     ;; No member set: csv default applies normally
     (let ((output (with-output-to-string
                     (clime-run app '("run")))))
-      (should (equal output "json=nil csv=t")))))
+      (should (equal output "json=nil csv=t\n")))))
 
 (ert-deftest clime-test-conform/exclusive-no-default-no-injection ()
   "Without :default, no group key injected when no member set."
@@ -384,7 +384,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "nil"))))
+    (should (equal output "nil\n"))))
 
 (ert-deftest clime-test-conform/dsl-mutex-default ()
   "clime-mutex DSL :default passes through to clime-check-exclusive."
@@ -403,11 +403,11 @@
     ;; No member → default
     (let ((output (with-output-to-string
                     (clime-run app '("run")))))
-      (should (equal output "text")))
+      (should (equal output "text\n")))
     ;; Member set → derived value
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--csv")))))
-      (should (equal output "csv")))))
+      (should (equal output "csv\n")))))
 
 ;;; ─── Exclusive :required ─────────────────────────────────────────────
 
@@ -434,7 +434,7 @@
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd)))))
     (should (equal (with-output-to-string (clime-run app '("run" "--json")))
-                   "json"))))
+                   "json\n"))))
 
 (ert-deftest clime-test-conform/exclusive-required-error-message ()
   "Exclusive :required error lists all member names."
@@ -470,7 +470,7 @@
     (should (= (clime-run app '("run")) 2))
     ;; Member set → ok
     (should (equal (with-output-to-string (clime-run app '("run" "--json")))
-                   "json"))))
+                   "json\n"))))
 
 (ert-deftest clime-test-conform/exclusive-required-default-option-warns ()
   "Option inside mutex with :required t and :default triggers warning."
@@ -503,7 +503,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
     (should (= (clime-run app '("run")) 2))
     ;; Explicit choice → ok
     (should (equal (with-output-to-string (clime-run app '("run" "--csv")))
-                   "csv"))))
+                   "csv\n"))))
 
 (ert-deftest clime-test-conform/dsl-mutex-required-default-warns ()
   "clime-mutex with both :required and :default warns — :default is vacuous."
@@ -524,7 +524,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
     (let ((app (symbol-value 'clime-test--mutex-req-def-app)))
       (should (= (clime-run app '("run")) 2))
       (should (equal (with-output-to-string (clime-run app '("run" "--json")))
-                     "json")))))
+                     "json\n")))))
 
 (ert-deftest clime-test-conform/dsl-zip-required ()
   "clime-zip :required errors when no members are provided."
@@ -615,7 +615,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--csv" "--remote")))))
-    (should (equal output "csv/remote"))))
+    (should (equal output "csv/remote\n"))))
 
 (ert-deftest clime-test-conform/two-groups-independent-errors ()
   "Violation in one group doesn't mask violations in another."
@@ -716,7 +716,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "nil"))))
+    (should (equal output "nil\n"))))
 
 ;;; ─── Exclusive: Value-Taking Options ───────────────────────────────
 
@@ -736,7 +736,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd)))))
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--file" "/tmp/x")))))
-      (should (equal output "file:/tmp/x")))
+      (should (equal output "file:/tmp/x\n")))
     (should-error
      (clime-parse app '("run" "--file" "/tmp/x" "--url" "http://y"))
      :type 'clime-usage-error)))
@@ -819,7 +819,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 ;;; ─── Paired: Three Options ─────────────────────────────────────────
 
@@ -878,7 +878,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--skip" "SPEC" "--reason" "no spec")))))
-    (should (equal output "(\"SPEC\") (\"no spec\")"))))
+    (should (equal output "(\"SPEC\") (\"no spec\")\n"))))
 
 ;;; ─── Paired: Env Var Participates ──────────────────────────────────
 
@@ -916,7 +916,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--csv")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 (ert-deftest clime-test-conform/ancestor-exclusive-conflict ()
   "Exclusive conform on app catches conflict across app+command options."
@@ -988,7 +988,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
     ;; Should succeed and derive value
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--json")))))
-      (should (equal output "fmt-json")))
+      (should (equal output "fmt-json\n")))
     ;; Should error with both
     (should-error
      (clime-parse app '("run" "--json" "--csv"))
@@ -1081,16 +1081,16 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd)))))
     ;; --plain wins: color suppressed to nil, default skipped
     (should (equal (with-output-to-string (clime-run app '("run" "--plain")))
-                   "color=nil plain=t display=plain"))
+                   "color=nil plain=t display=plain\n"))
     ;; nothing set: color gets default t, no winner
     (should (equal (with-output-to-string (clime-run app '("run")))
-                   "color=t plain=nil display=nil"))
+                   "color=t plain=nil display=nil\n"))
     ;; --color explicit: color wins
     (should (equal (with-output-to-string (clime-run app '("run" "--color")))
-                   "color=t plain=nil display=color"))
+                   "color=t plain=nil display=color\n"))
     ;; --no-color: explicitly set but not a winner — no derived key
     (should (equal (with-output-to-string (clime-run app '("run" "--no-color")))
-                   "color=nil plain=nil display=nil"))))
+                   "color=nil plain=nil display=nil\n"))))
 
 (ert-deftest clime-test-conform/exclusive-negatable-default-nil-absent ()
   "Negatable option with :default nil stays absent (no special interaction)."
@@ -1107,7 +1107,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd)))))
     ;; :default nil is no-op — color stays absent, clime-param returns fallback
     (should (equal (with-output-to-string (clime-run app '("run")))
-                   "color=auto"))))
+                   "color=auto\n"))))
 
 ;;; ─── Edge Cases ─────────────────────────────────────────────────────
 
@@ -1124,7 +1124,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd)))))
     (clime-test-with-env (("TEST_PORT_CONFORM" "8080"))
       (should (equal (with-output-to-string (clime-run app '("run")))
-                     "8080")))))
+                     "8080\n")))))
 
 (ert-deftest clime-test-conform/node-conform-sees-option-conform-result ()
   "Node :conform receives the already-conformed option value."
@@ -1192,7 +1192,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "config" grp)))))
     (should (equal (with-output-to-string (clime-run app '("config")))
-                   "val=injected"))))
+                   "val=injected\n"))))
 
 ;;; ─── Inline Group Structure (clime-swl) ────────────────────────────
 

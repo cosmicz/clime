@@ -43,7 +43,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--skip" "SPEC" "--reason" "no spec")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 ;;; ─── Neither Present OK ─────────────────────────────────────────────
 
@@ -59,7 +59,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 ;;; ─── Missing Required Option ────────────────────────────────────────
 
@@ -123,7 +123,7 @@
     ;; B alone is fine
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--format" "json")))))
-      (should (equal output "ok")))
+      (should (equal output "ok\n")))
     ;; A without B errors
     (should-error
      (clime-parse app '("run" "--output-file" "a.txt"))
@@ -131,7 +131,7 @@
     ;; Both together is fine
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--output-file" "a.txt" "--format" "json")))))
-      (should (equal output "ok")))))
+      (should (equal output "ok\n")))))
 
 ;;; ─── Multi-Dependency ───────────────────────────────────────────────
 
@@ -152,7 +152,7 @@
     ;; A with both B and C succeeds
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--aa" "--bb" "--cc")))))
-      (should (equal output "ok")))))
+      (should (equal output "ok\n")))))
 
 ;;; ─── Env Var Satisfies ──────────────────────────────────────────────
 
@@ -170,7 +170,7 @@
                                        process-environment)))
       (let ((output (with-output-to-string
                       (clime-run app '("run" "--skip" "SPEC")))))
-        (should (equal output "ok"))))))
+        (should (equal output "ok\n"))))))
 
 ;;; ─── Defaults Don't Satisfy ─────────────────────────────────────────
 
@@ -207,7 +207,7 @@
     ;; --admin with --auth succeeds
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--admin" "--auth" "token")))))
-      (should (equal output "ok")))))
+      (should (equal output "ok\n")))))
 
 ;;; ─── clime-run Exit Code ────────────────────────────────────────────
 
@@ -244,7 +244,7 @@
     ;; --no-color with --format is fine
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--no-color" "--format" "csv")))))
-      (should (equal output "ok")))))
+      (should (equal output "ok\n")))))
 
 ;;; ─── DSL Integration ────────────────────────────────────────────────
 
