@@ -1,23 +1,21 @@
 #+title: clime
 #+options: toc:nil num:nil
 
-*clime* is a universal declarative command router framework for Emacs Lisp.  Write your
-app's commands, options, and arguments once with a structured DSL
-then run it from the shell as an executable script or interactively from
-Emacs via =clime-invoke=.
+*clime* is a declarative command framework for Emacs Lisp.  Define your
+commands, options, and arguments once with a structured DSL — then
+surface them however you want: as a CLI script, interactively from
+Emacs via =clime-invoke=, or (soon) over a network via =clime-serve=.
 
-clime handles the plumbing: a polyglot shebang for direct shell
-execution, two-pass argument parsing with type coercion, env var
-resolution, and validation, auto-generated help, structured output
-formats, and a bundler that produces single-file distributions usable
-as both standalone CLIs and Emacs libraries.
+clime handles the plumbing: two-pass argument parsing with type
+coercion, env var resolution, and validation, auto-generated help,
+structured output formats, a polyglot shebang for direct shell
+execution, and a bundler that produces single-file distributions
+usable as both standalone CLIs and Emacs libraries.
 
-Here's ~clime-make~ (clime's own build tool, built with clime)
-running interactively:
+Here's ~clime-make~ (clime's own build tool, built with clime) — same
+definition, two surfaces:
 
 [[file:.github/assets/invoke-menu.png]]
-
-And from the command line:
 
 #+begin_src sh
 ./clime-make.el quickstart --help
@@ -51,7 +49,7 @@ Options:
 Write an Elisp file using the clime DSL:
 
 #+begin_src emacs-lisp
-;;; greet.el --- A greeting CLI  -*- lexical-binding: t; -*-
+;;; greet.el --- A greeting app  -*- lexical-binding: t; -*-
 
 ;;; Code:
 
@@ -83,7 +81,8 @@ Write an Elisp file using the clime DSL:
 ;;; greet.el ends here
 #+end_src
 
-Run ~quickstart~ to add the entrypoint boilerplate and shebang:
+Now surface it.  From the shell (run ~quickstart~ once to add the
+shebang):
 
 #+begin_src bash
 path/to/clime-make.el quickstart greet.el
@@ -94,12 +93,14 @@ path/to/clime-make.el quickstart greet.el
 ./greet.el hello --help
 #+end_src
 
-Or invoke it interactively from Emacs:
+Or interactively from Emacs:
 
 #+begin_src emacs-lisp
 (require 'clime-invoke)
 (clime-invoke greet)
 #+end_src
+
+Same definition, different surface.  The handler code doesn't change.
 
 * Installation
 
@@ -182,25 +183,42 @@ Options declared at any level are available to all descendants.  A
 ~--verbose~ flag on the app can be accessed from any child command.
 In ~--help~, inherited options appear in a "Global Options:" section.
 
-** Two-pass parameter parse
+** Values map and two-pass pipeline
 
-Parsing happens in two passes with an optional ~:setup~ hook between
-them.  Both passes operate on a *values map* --- an alist of
-~(NAME . (:value V :source S))~ entries that tracks each parameter's
-resolved value and its provenance (~user~, ~app~, ~env~, ~default~,
-~conform~).
+Every surface feeds parameter values into a shared *values map* --- an
+alist of ~(NAME . (:value V :source S))~ entries that tracks each
+parameter's resolved value and provenance (~user~, ~app~, ~env~,
+~default~, ~conform~).
 
-Pass 1 extracts values from argv (type coercion, static ~:choices~,
-~:coerce~) into the values map with source ~user~.  Pass 2 merges
-env vars, runs ~:conform~ hooks (accumulating errors as ~:error~
-entries), applies defaults, and checks required params.  The ~:setup~
-hook runs between passes, letting apps load configuration that
-influences pass-2 behavior.
+For CLI, the pipeline runs in two passes with an optional ~:setup~
+hook between them.  Pass 1 extracts values from argv (type coercion,
+static ~:choices~, ~:coerce~) into the values map with source ~user~.
+Pass 2 merges env vars, runs ~:conform~ hooks (accumulating errors as
+~:error~ entries), applies defaults, and checks required params.  The
+~:setup~ hook runs between passes, letting apps load configuration
+that influences pass-2 behavior.
+
+Invoke builds the values map interactively (key-by-key), then runs
+the same pass-2 finalization before calling the handler.
 
 Handlers receive a flat params plist derived from the values map
-(via ~clime-values-plist~), so existing handler code is unaffected.
+(via ~clime-values-plist~) --- they don't know which surface provided
+the values.
 
-* Interactive (~clime-invoke~)
+* Surfaces
+
+A clime app is surface-agnostic --- the same definition drives CLI
+parsing, interactive menus, and (soon) network servers.  Each surface
+translates user input into the values map, validates it through the
+same pipeline, and calls the handler.
+
+** CLI (~clime-run-batch~)
+
+The default surface.  ~clime-run-batch~ parses argv, runs the two-pass
+pipeline, and calls the handler.  See [[*Getting Started][Getting Started]] and
+[[*Bundling & Distribution][Bundling & Distribution]] for setup.
+
+** Interactive (~clime-invoke~)
 
 Any ~clime-app~ can be invoked interactively from Emacs via
 ~clime-invoke~, which auto-generates a lightweight ~read-key~ menu
@@ -230,7 +248,7 @@ keys for visual feedback.
   (plist-get result :output)) ;; handler output string (nil if user quit)
 #+end_src
 
-** Hot-reload (~clime-reload~)
+*** Hot-reload (~clime-reload~)
 
 ~clime-reload~ force-reloads all clime modules in dependency order,
 including ~clime.el~ itself and optional modules (~clime-invoke~,
@@ -687,7 +705,11 @@ echo "World" | ./greet.el hello -
 
 ** Parsing & Validation
 
-*** Collapsed short flags
+The value pipeline and validation stages apply uniformly across all
+surfaces.  The features below describe CLI-specific parsing behavior
+and the shared validation pipeline.
+
+*** Collapsed short flags (CLI)
 
 Single-character flags can be collapsed: ~-abc~ expands to ~-a -b -c~.
 This works when all flags in the group are boolean.  A trailing
@@ -697,7 +719,7 @@ value-taking flag consumes the next argument:
 ./myapp.el -vvf show 123   # -v -v -f show 123
 #+end_src
 
-*** ~--flag=value~ and ~--~
+*** ~--flag=value~ and ~--~ (CLI)
 
 Options accept ~--flag=value~ syntax:
 
@@ -806,10 +828,11 @@ value regardless of source.
   mechanism internally.
 
 The key distinction between ~:coerce~ and ~:conform~ is /when/ they
-run: ~:coerce~ runs immediately in pass 1 (CLI input only), while
-~:conform~ runs in pass 2 (CLI + env var input, after the ~:setup~
-hook).  Use ~:coerce~ for simple transforms, ~:conform~ for
-cross-source validation.
+run: ~:coerce~ runs immediately when a value is set (per-token in CLI,
+per-keystroke in invoke), while ~:conform~ runs during finalization
+(after all values are collected, env vars applied, and ~:setup~ has
+run).  Use ~:coerce~ for simple transforms, ~:conform~ for
+cross-source or cross-param validation.
 
 All four slots chain in order --- ~:type~ → ~:choices~ → ~:coerce~ →
 ~:conform~:
@@ -1506,6 +1529,8 @@ clime draws inspiration from several projects:
   declarative API
 - [[https://github.com/dnaeon/clingon][clingon]] --- a feature-rich Common Lisp command-line parser with
   subcommands, options, and completions
+- [[https://github.com/magit/transient][transient]] --- Emacs command dispatching with infix arguments and
+  interactive menus
 - [[https://github.com/omsai/orgstrap][orgstrap]] --- self-bootstrapping Org files with embedded Elisp, a
   different take on making Emacs code executable
 
