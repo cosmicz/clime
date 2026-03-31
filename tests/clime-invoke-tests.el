@@ -2477,5 +2477,377 @@
     ;; Should not show ($=csv)
     (should-not (string-match-p "(\\$=" (substring-no-properties result)))))
 
+;;; ─── Ask / Immediate Tests ──────────────────────────────────────────
+
+(defun clime-test--invoke-immediate-app ()
+  "Build an app with required args for ask/immediate tests."
+  (let* ((opt-verbose (clime-make-option :name 'verbose
+                                          :flags '("--verbose" "-v")
+                                          :nargs 0
+                                          :help "Be verbose"))
+         (opt-output (clime-make-option :name 'output
+                                         :flags '("--output" "-o")
+                                         :required t
+                                         :help "Output file"))
+         (opt-format (clime-make-option :name 'format
+                                         :flags '("--format" "-f")
+                                         :choices '("json" "text")
+                                         :help "Output format"))
+         (arg-name (clime-make-arg :name 'name :help "Resource name"))
+         (handler-called nil)
+         (cmd (clime-make-command :name "run"
+                                   :help "Run it"
+                                   :handler (lambda (_ctx)
+                                              (setq handler-called t)
+                                              (princ "ok")
+                                              nil)
+                                   :options (list opt-output opt-format)
+                                   :args (list arg-name))))
+    (list (clime-make-app :name "testapp"
+                           :version "1"
+                           :help "Test"
+                           :options (list opt-verbose)
+                           :children (list (cons "run" cmd)))
+          (lambda () handler-called))))
+
+;;; ─── Unit tests for ask/immediate helpers ──────────────────────────
+
+(ert-deftest clime-test-invoke/collect-ask-params-t-returns-required ()
+  "collect-ask-params with t returns required params only."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree nil)
+      (let ((params (clime-invoke--collect-ask-params node t)))
+        ;; output (required option) + name (required arg)
+        (should (= 2 (length params)))
+        (should (cl-find 'output params :key #'clime-param-name))
+        (should (cl-find 'name params :key #'clime-param-name))
+        ;; format (not required) should not be included
+        (should-not (cl-find 'format params :key #'clime-param-name))))))
+
+(ert-deftest clime-test-invoke/collect-ask-params-list-returns-named ()
+  "collect-ask-params with a list returns only those params."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree nil)
+      (let ((params (clime-invoke--collect-ask-params node '(format))))
+        (should (= 1 (length params)))
+        (should (eq 'format (clime-param-name (car params))))))))
+
+(ert-deftest clime-test-invoke/collect-ask-params-nil-returns-empty ()
+  "collect-ask-params with nil returns nil."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree nil)
+      (should-not (clime-invoke--collect-ask-params node nil)))))
+
+(ert-deftest clime-test-invoke/collect-ask-params-skips-user-seeded ()
+  "collect-ask-params with t skips params already seeded by user."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree '(output "/pre"))
+      (let ((params (clime-invoke--collect-ask-params node t)))
+        ;; Only name (required arg) — output already seeded
+        (should (= 1 (length params)))
+        (should (eq 'name (clime-param-name (car params))))))))
+
+(ert-deftest clime-test-invoke/collect-ask-params-unknown-ignored ()
+  "collect-ask-params with unknown names returns empty."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree nil)
+      (should-not (clime-invoke--collect-ask-params node '(nonexistent))))))
+
+(ert-deftest clime-test-invoke/all-required-satisfied-p-true ()
+  "all-required-satisfied-p returns t when all required params have values."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree '(output "/tmp" name "foo"))
+      (should (clime-invoke--all-required-satisfied-p node)))))
+
+(ert-deftest clime-test-invoke/all-required-satisfied-p-false ()
+  "all-required-satisfied-p returns nil when a required param is missing."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree '(name "foo"))
+      ;; output is required but missing
+      (should-not (clime-invoke--all-required-satisfied-p node)))))
+
+(ert-deftest clime-test-invoke/prompt-params-returns-t-on-completion ()
+  "prompt-params returns t when all prompts complete."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree nil)
+      (let ((params (clime-invoke--collect-ask-params node '(name))))
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (_prompt &rest _) "test-val")))
+          (should (eq t (clime-invoke--prompt-params params))))))))
+
+(ert-deftest clime-test-invoke/prompt-params-returns-nil-on-quit ()
+  "prompt-params returns nil when user quits."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let* ((tree (clime--prepare-tree app))
+           (node (cdr (assoc "run" (clime-group-children tree))))
+           (clime-invoke--values nil))
+      (clime-invoke--seed-values tree nil)
+      (let ((params (clime-invoke--collect-ask-params node '(name))))
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _) (signal 'quit nil))))
+          (should-not (clime-invoke--prompt-params params)))))))
+
+;; ─── Integration: immediate with conformer error falls to menu ──────
+
+(ert-deftest clime-test-invoke/immediate-conformer-error-falls-to-menu ()
+  "`:immediate t' falls to menu when conformer check fails."
+  (let* ((opt (clime-make-option :name 'output :flags '("--output" "-o")
+                                  :required t :help "Output"))
+         (cmd (clime-make-command
+               :name "run" :help "Run"
+               :handler #'ignore
+               :options (list opt)
+               :conform (lambda (_values _node)
+                          (signal 'clime-usage-error
+                                  '("bad value" :params (output))))))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "run" cmd))))
+         (loop-entered nil))
+    (cl-letf (((symbol-function 'clime-invoke--loop)
+               (lambda (_app _node _path &optional _top)
+                 (setq loop-entered t)
+                 (list nil nil)))
+              ((symbol-function 'clime-invoke--display-output)
+               #'ignore))
+      (clime-invoke app '("run") '(output "/tmp/out") :immediate t)
+      (should loop-entered))))
+
+;; ─── Integration: :immediate with explicit :ask overrides default ───
+
+(ert-deftest clime-test-invoke/immediate-explicit-ask-overrides-default ()
+  "`:immediate t :ask (format)' asks only for format, not all required."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((prompted nil))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt choices &rest _)
+                   (push prompt prompted)
+                   (car choices)))
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (_app _node _path &optional _top)
+                   (list nil nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        ;; :ask '(format) overrides the implied :ask t from :immediate
+        (clime-invoke app '("run") '(output "/tmp" name "foo")
+                      :immediate t :ask '(format))
+        ;; Should only prompt for format
+        (should (= 1 (length prompted)))))))
+
+;; AC 1: :ask t prompts required params then opens menu
+(ert-deftest clime-test-invoke/ask-t-prompts-required-params ()
+  "`:ask t' prompts for all required params, then enters menu loop."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((prompted nil)
+          (loop-entered nil))
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (prompt &rest _)
+                   (push prompt prompted)
+                   "/tmp/out"))
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (_app _node _path &optional _top)
+                   (setq loop-entered t)
+                   ;; Verify values were seeded by ask phase
+                   (should (equal "/tmp/out"
+                                  (clime-values-value
+                                   clime-invoke--values 'output)))
+                   (list '(0 . "done") nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        (clime-invoke app '("run") nil :ask t)
+        (should loop-entered)
+        ;; Should have prompted for output (required option) and name (required arg)
+        (should (>= (length prompted) 2))))))
+
+;; AC 2: :ask with specific param list prompts only those
+(ert-deftest clime-test-invoke/ask-specific-params ()
+  "`:ask (format)' prompts only for format, then enters menu loop."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((prompted-params nil))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt choices &rest _)
+                   (push prompt prompted-params)
+                   (car choices)))
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (_app _node _path &optional _top)
+                   (list '(0 . "done") nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        (clime-invoke app '("run") nil :ask '(format))
+        ;; Should have prompted exactly once (for format)
+        (should (= 1 (length prompted-params)))))))
+
+;; AC 3: :immediate t runs handler without showing menu
+(ert-deftest clime-test-invoke/immediate-runs-without-menu ()
+  "`:immediate t' prompts required params then runs handler, never enters loop."
+  (cl-destructuring-bind (app handler-called-p) (clime-test--invoke-immediate-app)
+    (let ((loop-entered nil))
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (_prompt &rest _) "/tmp/out"))
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (&rest _)
+                   (setq loop-entered t)
+                   (list nil nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        (let ((result (clime-invoke app '("run") '(name "foo")
+                                    :immediate t)))
+          (should-not loop-entered)
+          (should (funcall handler-called-p))
+          (should (= 0 (plist-get result :exit)))
+          (should (equal "ok" (plist-get result :output))))))))
+
+;; AC 4: :immediate with all params pre-filled asks y-or-n-p
+(ert-deftest clime-test-invoke/immediate-all-filled-asks-confirmation ()
+  "`:immediate t' with all required params pre-filled asks y-or-n-p."
+  (cl-destructuring-bind (app handler-called-p) (clime-test--invoke-immediate-app)
+    (let ((yn-called nil))
+      (cl-letf (((symbol-function 'y-or-n-p)
+                 (lambda (_prompt) (setq yn-called t) t))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore)
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (&rest _) (list nil nil))))
+        (let ((result (clime-invoke app '("run")
+                                    '(output "/tmp/out" name "foo")
+                                    :immediate t)))
+          (should yn-called)
+          (should (funcall handler-called-p))
+          (should (= 0 (plist-get result :exit))))))))
+
+;; AC 4b: y-or-n-p declined → returns nil exit
+(ert-deftest clime-test-invoke/immediate-confirmation-declined ()
+  "`:immediate t' with y-or-n-p declined returns nil exit, does not run."
+  (cl-destructuring-bind (app handler-called-p) (clime-test--invoke-immediate-app)
+    (cl-letf (((symbol-function 'y-or-n-p)
+               (lambda (_prompt) nil))
+              ((symbol-function 'clime-invoke--display-output)
+               #'ignore)
+              ((symbol-function 'clime-invoke--loop)
+               (lambda (&rest _) (list nil nil))))
+      (let ((result (clime-invoke app '("run")
+                                  '(output "/tmp/out" name "foo")
+                                  :immediate t)))
+        (should-not (funcall handler-called-p))
+        (should-not (plist-get result :exit))))))
+
+;; AC 5: :immediate falls into menu when required params remain unfilled
+(ert-deftest clime-test-invoke/immediate-falls-to-menu-on-missing ()
+  "`:immediate t' enters menu loop when required params still missing after ask."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((loop-entered nil))
+      ;; Simulate user leaving output empty during ask
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (_prompt &rest _) ""))
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (_app _node _path &optional _top)
+                   (setq loop-entered t)
+                   (list '(0 . "done") nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        (clime-invoke app '("run") nil :immediate t)
+        (should loop-entered)))))
+
+;; AC 6: C-g during ask phase returns nil exit/output
+(ert-deftest clime-test-invoke/ask-quit-returns-nil ()
+  "C-g during ask phase returns nil :exit and :output."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (&rest _) (signal 'quit nil)))
+              ((symbol-function 'clime-invoke--loop)
+               (lambda (&rest _) (error "Loop should not be entered")))
+              ((symbol-function 'clime-invoke--display-output)
+               #'ignore))
+      (let ((result (clime-invoke app '("run") nil :ask t)))
+        (should-not (plist-get result :exit))
+        (should-not (plist-get result :output))))))
+
+;; AC 7: :immediate on group node (no handler) enters menu normally
+(ert-deftest clime-test-invoke/immediate-on-group-shows-menu ()
+  "`:immediate t' on a group node (no handler) falls into menu loop."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((loop-entered nil))
+      (cl-letf (((symbol-function 'clime-invoke--loop)
+                 (lambda (_app _node _path &optional _top)
+                   (setq loop-entered t)
+                   (list nil nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        ;; Invoke at root (a group, not a command with handler)
+        (clime-invoke app nil nil :immediate t)
+        (should loop-entered)))))
+
+;; AC 8: :ask with unknown param names silently ignored
+(ert-deftest clime-test-invoke/ask-unknown-params-ignored ()
+  "`:ask' with unknown param names does not error."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((loop-entered nil))
+      (cl-letf (((symbol-function 'clime-invoke--loop)
+                 (lambda (_app _node _path &optional _top)
+                   (setq loop-entered t)
+                   (list nil nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        (clime-invoke app '("run") nil :ask '(nonexistent-param))
+        (should loop-entered)))))
+
+;; AC 9: params already provided via plist are not re-prompted
+(ert-deftest clime-test-invoke/ask-skips-preseeded-params ()
+  "`:ask t' does not prompt for params already in the params plist."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((prompted nil))
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (prompt &rest _)
+                   (push prompt prompted)
+                   "asked-value"))
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (_app _node _path &optional _top)
+                   (list '(0 . "done") nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        ;; Pre-seed output — should NOT be prompted for it
+        (clime-invoke app '("run") '(output "/pre") :ask t)
+        ;; Should only have been prompted for name (the required arg),
+        ;; not output (already seeded)
+        (should prompted)
+        (should-not (cl-find "Output file" prompted :test #'string-match-p))))))
+
+;; AC 10: backward compat — no :ask/:immediate behaves identically
+(ert-deftest clime-test-invoke/no-ask-immediate-backward-compat ()
+  "clime-invoke without :ask/:immediate enters loop directly."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((loop-entered nil))
+      (cl-letf (((symbol-function 'clime-invoke--loop)
+                 (lambda (_app _node _path &optional _top)
+                   (setq loop-entered t)
+                   (list nil nil)))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore))
+        (clime-invoke app '("run") nil)
+        (should loop-entered)))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here

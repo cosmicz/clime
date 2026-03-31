@@ -936,6 +936,79 @@ then merges user-provided PARAMS on top.  Sets `clime-invoke--values'."
              do (setq values (clime-values-set values k v 'user)))
     (setq clime-invoke--values values)))
 
+(defun clime-invoke--collect-ask-params (node ask)
+  "Return list of param structs to prompt for based on ASK.
+ASK is t (all required), a list of symbols (specific params), or nil.
+Skips params that already have a user-provided value in
+`clime-invoke--values'."
+  (when ask
+    (let ((params nil))
+      (if (eq ask t)
+          ;; Collect all required params: own options (non-locked),
+          ;; ancestor options, and args
+          (progn
+            (dolist (opt (clime-node-all-options node))
+              (when (and (clime-param-required opt)
+                         (not (clime-option-locked opt)))
+                (push opt params)))
+            (dolist (opt (clime-help--collect-ancestor-options node))
+              (when (clime-param-required opt)
+                (push opt params)))
+            (dolist (arg (clime-node-args node))
+              (when (clime-param-required arg)
+                (push arg params))))
+        ;; Specific param names: look up each by symbol
+        (let ((all-opts (append (clime-node-all-options node)
+                                (clime-help--collect-ancestor-options node)))
+              (all-args (clime-node-args node)))
+          (dolist (name ask)
+            (let ((found (or (cl-find name all-opts
+                                      :key #'clime-param-name)
+                             (cl-find name all-args
+                                      :key #'clime-param-name))))
+              (when found (push found params))))))
+      ;; Filter out params already set with source 'user
+      (setq params (nreverse params))
+      (cl-remove-if
+       (lambda (p)
+         (eq 'user (clime-values-source clime-invoke--values
+                                        (clime-param-name p))))
+       params))))
+
+(defun clime-invoke--prompt-params (params)
+  "Prompt user for each param in PARAMS via minibuffer.
+Returns t if all prompts completed, nil if user quit (C-g)."
+  (condition-case nil
+      (progn
+        (dolist (p params)
+          (if (clime-option-p p)
+              (clime-invoke--handle-option-direct p)
+            (clime-invoke--handle-arg p)))
+        t)
+    (quit nil)))
+
+(defun clime-invoke--all-required-satisfied-p (node)
+  "Return non-nil if all required params of NODE have values.
+Checks own options (non-locked), ancestor options, and args."
+  (let ((satisfied t))
+    (dolist (opt (clime-node-all-options node))
+      (when (and (clime-param-required opt)
+                 (not (clime-option-locked opt))
+                 (not (clime-values-value
+                       clime-invoke--values (clime-param-name opt))))
+        (setq satisfied nil)))
+    (dolist (opt (clime-help--collect-ancestor-options node))
+      (when (and (clime-param-required opt)
+                 (not (clime-values-value
+                       clime-invoke--values (clime-param-name opt))))
+        (setq satisfied nil)))
+    (dolist (arg (clime-node-args node))
+      (when (and (clime-param-required arg)
+                 (not (clime-values-value
+                       clime-invoke--values (clime-param-name arg))))
+        (setq satisfied nil)))
+    satisfied))
+
 (defun clime-invoke--set-param (param value)
   "Set PARAM's value to VALUE with source `user' in the values map."
   (setq clime-invoke--values
@@ -1261,7 +1334,7 @@ Returns (LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
 ;;; ─── Public API ─────────────────────────────────────────────────────
 
 ;;;###autoload
-(cl-defun clime-invoke (app &optional path params &key display)
+(cl-defun clime-invoke (app &optional path params &key display ask immediate)
   "Open an interactive menu for clime APP.
 APP is a `clime-app' struct, or nil to select from registered apps.
 PATH is an optional list of strings naming a node to navigate to.
@@ -1269,6 +1342,15 @@ PARAMS is an optional plist of initial param values.
 
 DISPLAY controls how command output is shown (see
 `clime-invoke--display-output' for values).  Default is t.
+
+ASK controls which params to prompt for via minibuffer before
+showing the menu.  t means all required params; a list of symbols
+means those specific params; nil (default) means no pre-prompting.
+
+IMMEDIATE when non-nil runs the handler directly after the ask
+phase if all required params are satisfied, without showing the
+menu.  Implies ASK t when ASK is not explicitly provided.  If no
+params needed prompting, confirms via `y-or-n-p'.
 
 Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
   :params  — final parameter values
@@ -1307,24 +1389,71 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
               (setq node child)
               (push step nav-path)))
           (setq nav-path (nreverse nav-path)))
-        ;; Enter the loop
-        (let ((clime-invoke--show-mode 'normal)
-              loop-result)
-          (unwind-protect
-              (setq loop-result
-                    (clime-invoke--loop tree node (or nav-path '()) t))
-            ;; Clean up invoke buffer regardless of how we exit
-            (when-let ((buf (get-buffer clime-invoke--buffer-name)))
-              (let ((win (get-buffer-window buf)))
-                (when win (delete-window win)))
-              (kill-buffer buf)))
-          ;; Show output after invoke buffer is gone
-          (let ((last-output (car loop-result)))
-            (when last-output
-              (clime-invoke--display-output (cdr last-output) (car last-output) display))
+        ;; Ask phase: prompt for params before showing menu
+        (let ((effective-ask (if (and immediate (not ask)) t ask))
+              (ask-params nil)
+              (ask-completed t)
+              (immediate-result nil))
+          (when effective-ask
+            (setq ask-params
+                  (clime-invoke--collect-ask-params node effective-ask))
+            (when ask-params
+              (setq ask-completed
+                    (clime-invoke--prompt-params ask-params))))
+          ;; Immediate mode: run without menu if possible
+          (when (and immediate ask-completed (clime-node-handler node))
+            (let ((valid (clime-invoke--validate-all node)))
+              (when (and (null (car valid)) (null (cdr valid))
+                         (clime-invoke--all-required-satisfied-p node))
+                ;; All valid — run immediately (with y-or-n-p if nothing was asked)
+                (if (or ask-params
+                        (y-or-n-p (format "Run %s? "
+                                          (clime-node-name node))))
+                    (let* ((run-result
+                            (clime-invoke--run-handler
+                             tree node (or nav-path '())))
+                           (exit (car run-result))
+                           (output (cdr run-result)))
+                      (setq immediate-result
+                            (list :params (clime-values-plist
+                                           clime-invoke--values)
+                                  :exit exit :output output))
+                      (clime-invoke--display-output output exit display))
+                  ;; y-or-n-p declined
+                  (setq immediate-result
+                        (list :params (clime-values-plist
+                                       clime-invoke--values)
+                              :exit nil :output nil))))))
+          (cond
+           ;; Immediate mode handled it
+           (immediate-result immediate-result)
+           ;; Ask phase quit (C-g)
+           ((not ask-completed)
             (list :params (clime-values-plist clime-invoke--values)
-                  :exit (and last-output (car last-output))
-                  :output (and last-output (cdr last-output)))))))))
+                  :exit nil :output nil))
+           ;; Normal: enter the menu loop
+           (t
+            (let ((clime-invoke--show-mode 'normal)
+                  loop-result)
+              (unwind-protect
+                  (setq loop-result
+                        (clime-invoke--loop
+                         tree node (or nav-path '()) t))
+                ;; Clean up invoke buffer regardless of how we exit
+                (when-let ((buf (get-buffer clime-invoke--buffer-name)))
+                  (let ((win (get-buffer-window buf)))
+                    (when win (delete-window win)))
+                  (kill-buffer buf)))
+              ;; Show output after invoke buffer is gone
+              (let ((last-output (car loop-result)))
+                (when last-output
+                  (clime-invoke--display-output
+                   (cdr last-output) (car last-output) display))
+                (list :params (clime-values-plist clime-invoke--values)
+                      :exit (and last-output (car last-output))
+                      :output (and last-output
+                                   (cdr last-output))))))))))))
+
 
 ;;;###autoload
 (defun clime-invoke-command (app command-path)
