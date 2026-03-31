@@ -135,6 +135,9 @@ One of `normal' (default), `all' (show hidden), or `clean' (hide deprecated).")
 (defvar clime-invoke--registry (make-hash-table :test #'equal)
   "Registry of named clime apps, keyed by name string.")
 
+(defvar clime-invoke--stale nil
+  "Non-nil when registry entries may be stale after `clime-reload'.")
+
 (defconst clime-invoke--buffer-name " *clime-menu*"
   "Buffer name for the menu display.")
 
@@ -150,6 +153,20 @@ NAME is a string.  APP is a `clime-app' struct."
   (let ((keys '()))
     (maphash (lambda (k _v) (push k keys)) clime-invoke--registry)
     (sort keys #'string<)))
+
+(defun clime-invoke--refresh-registry ()
+  "Refresh stale registry entries from their symbol values.
+For each registered name, if a symbol with that name is bound to a
+`clime-app' struct, replace the cached entry.  Clears `clime-invoke--stale'."
+  (when clime-invoke--stale
+    (maphash (lambda (name _app)
+               (let ((sym (intern-soft name)))
+                 (when (and sym (boundp sym))
+                   (let ((val (symbol-value sym)))
+                     (when (clime-app-p val)
+                       (puthash name val clime-invoke--registry))))))
+             clime-invoke--registry)
+    (setq clime-invoke--stale nil)))
 
 ;;; ─── Pure Helpers: Key Assignment ───────────────────────────────────
 
@@ -1212,6 +1229,7 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
   :exit    — handler exit code (integer), or nil if user quit
   :output  — handler output (string), or nil if user quit"
   (interactive (list nil))
+  (clime-invoke--refresh-registry)
   (when app
     (clime-register-app (clime-node-name app) app))
   (unless app

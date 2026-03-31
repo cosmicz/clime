@@ -76,7 +76,10 @@ Reloads modules in dependency order to avoid stale definitions."
       (when (featurep mod)
         (let ((file (locate-library (symbol-name mod))))
           (when file
-            (load file nil t t))))))
+            (load file nil t t)))))
+    ;; Mark invoke registry as stale so cached apps get refreshed
+    (when (boundp 'clime-invoke--stale)
+      (setq clime-invoke--stale t)))
   (message "Reloaded clime modules"))
 
 (provide 'clime)

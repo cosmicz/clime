@@ -2247,5 +2247,74 @@
       ;; Attributed errors should NOT appear in general-errors
       (should-not (cdr result)))))
 
+;;; ─── Stale Registry Refresh ─────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/stale-flag-nil-by-default ()
+  "The stale flag starts as nil."
+  (let ((clime-invoke--stale nil))
+    (should-not clime-invoke--stale)))
+
+(ert-deftest clime-test-invoke/refresh-picks-up-rebound-symbol ()
+  "After stale flag is set, refresh replaces registry entry from symbol value."
+  (let ((clime-invoke--registry (make-hash-table :test #'equal))
+        (clime-invoke--stale t))
+    (let* ((old-app (clime-make-app :name "testapp" :version "1.0" :children nil))
+           (new-app (clime-make-app :name "testapp" :version "2.0" :children nil))
+           ;; Use an uninterned-like symbol in a known package for isolation
+           (sym (intern "testapp")))
+      (puthash "testapp" old-app clime-invoke--registry)
+      ;; Simulate user re-evaluating their app definition
+      (let ((old-val (and (boundp sym) (symbol-value sym))))
+        (unwind-protect
+            (progn
+              (set sym new-app)
+              (clime-invoke--refresh-registry)
+              (should (eq new-app (gethash "testapp" clime-invoke--registry)))
+              (should-not clime-invoke--stale))
+          ;; Restore
+          (if old-val (set sym old-val) (makunbound sym)))))))
+
+(ert-deftest clime-test-invoke/refresh-keeps-entry-when-symbol-unbound ()
+  "Refresh preserves cached entry when symbol is unbound."
+  (let ((clime-invoke--registry (make-hash-table :test #'equal))
+        (clime-invoke--stale t))
+    (let ((app (clime-make-app :name "zzz-no-such-sym" :version "1.0" :children nil)))
+      (puthash "zzz-no-such-sym" app clime-invoke--registry)
+      (clime-invoke--refresh-registry)
+      (should (eq app (gethash "zzz-no-such-sym" clime-invoke--registry)))
+      (should-not clime-invoke--stale))))
+
+(ert-deftest clime-test-invoke/refresh-keeps-entry-when-symbol-not-app ()
+  "Refresh preserves cached entry when symbol is bound but not a clime-app."
+  (let ((clime-invoke--registry (make-hash-table :test #'equal))
+        (clime-invoke--stale t))
+    (let* ((app (clime-make-app :name "testapp2" :version "1.0" :children nil))
+           (sym (intern "testapp2")))
+      (puthash "testapp2" app clime-invoke--registry)
+      (let ((old-val (and (boundp sym) (symbol-value sym))))
+        (unwind-protect
+            (progn
+              (set sym "not an app")
+              (clime-invoke--refresh-registry)
+              (should (eq app (gethash "testapp2" clime-invoke--registry))))
+          (if old-val (set sym old-val) (makunbound sym)))))))
+
+(ert-deftest clime-test-invoke/refresh-noop-when-not-stale ()
+  "Refresh does nothing when stale flag is nil."
+  (let ((clime-invoke--registry (make-hash-table :test #'equal))
+        (clime-invoke--stale nil))
+    (let* ((app (clime-make-app :name "testapp" :version "1.0" :children nil))
+           (new-app (clime-make-app :name "testapp" :version "2.0" :children nil))
+           (sym (intern "testapp")))
+      (puthash "testapp" app clime-invoke--registry)
+      (let ((old-val (and (boundp sym) (symbol-value sym))))
+        (unwind-protect
+            (progn
+              (set sym new-app)
+              (clime-invoke--refresh-registry)
+              ;; Should NOT have refreshed — still old app
+              (should (eq app (gethash "testapp" clime-invoke--registry))))
+          (if old-val (set sym old-val) (makunbound sym)))))))
+
 (provide 'clime-invoke-tests)
 ;;; clime-invoke-tests.el ends here
