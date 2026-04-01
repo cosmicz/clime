@@ -977,67 +977,17 @@
     (should-error (clime-parse app '("create" "--tag" "dev" "--tag" "nope"))
                   :type 'clime-usage-error)))
 
-;;; ─── Function Type ─────────────────────────────────────────────────
+;;; ─── Function Type (removed) ────────────────────────────────────────
 
-(ert-deftest clime-test-parse/function-type-option ()
-  "Option with :type as function coerces string value."
+(ert-deftest clime-test-parse/function-type-signals-error ()
+  "Function :type signals clime-type-error via clime-usage-error."
   (let* ((opt (clime-make-option :name 'port :flags '("--port")
                                   :type (lambda (s) (string-to-number s))))
          (cmd (clime-make-command :name "serve" :handler #'ignore
                                   :options (list opt)))
          (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "serve" cmd))))
-         (result (clime-parse app '("serve" "--port" "8080"))))
-    (should (= (plist-get (clime-parse-result-params result) 'port) 8080))))
-
-(ert-deftest clime-test-parse/function-type-arg ()
-  "Arg with :type as function coerces string value."
-  (let* ((arg (clime-make-arg :name 'count
-                               :type (lambda (s) (string-to-number s))))
-         (cmd (clime-make-command :name "repeat" :handler #'ignore
-                                  :args (list arg)))
-         (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "repeat" cmd))))
-         (result (clime-parse app '("repeat" "5"))))
-    (should (= (plist-get (clime-parse-result-params result) 'count) 5))))
-
-(ert-deftest clime-test-parse/function-type-then-coerce ()
-  ":coerce runs after function :type."
-  (let* ((opt (clime-make-option :name 'port :flags '("--port")
-                                  :type (lambda (s) (string-to-number s))
-                                  :coerce (lambda (n) (* n 10))))
-         (cmd (clime-make-command :name "serve" :handler #'ignore
-                                  :options (list opt)))
-         (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "serve" cmd))))
-         (result (clime-parse app '("serve" "--port" "8"))))
-    (should (= (plist-get (clime-parse-result-params result) 'port) 80))))
-
-(ert-deftest clime-test-parse/function-type-with-choices ()
-  "Choices validates on result of function :type coercion."
-  (let* ((opt (clime-make-option :name 'level :flags '("--level")
-                                  :type (lambda (s) (string-to-number s))
-                                  :choices '(1 2 3)))
-         (cmd (clime-make-command :name "run" :handler #'ignore
-                                  :options (list opt)))
-         (app (clime-make-app :name "t" :version "1"
-                              :children (list (cons "run" cmd))))
-         (result (clime-parse app '("run" "--level" "2"))))
-    (should (= (plist-get (clime-parse-result-params result) 'level) 2))))
-
-(ert-deftest clime-test-parse/function-type-error-signals-usage-error ()
-  "Function :type that signals error produces clime-usage-error."
-  (let* ((opt (clime-make-option :name 'port :flags '("--port")
-                                  :type (lambda (s)
-                                          (let ((n (string-to-number s)))
-                                            (when (= n 0)
-                                              (error "Not a number: %s" s))
-                                            n))))
-         (cmd (clime-make-command :name "serve" :handler #'ignore
-                                  :options (list opt)))
-         (app (clime-make-app :name "t" :version "1"
                               :children (list (cons "serve" cmd)))))
-    (should-error (clime-parse app '("serve" "--port" "abc"))
+    (should-error (clime-parse app '("serve" "--port" "8080"))
                   :type 'clime-usage-error)))
 
 (ert-deftest clime-test-parse/keyword-types-unchanged ()
@@ -1726,18 +1676,11 @@
          (values (clime-values-set '() 'count t 'user)))
     (should (stringp (clime--validate-param-value opt values)))))
 
-(ert-deftest clime-test-validate-param-value/function-type ()
-  "Function :type coerces string through validate-param-value."
+(ert-deftest clime-test-validate-param-value/function-type-rejected ()
+  "Function :type is rejected through validate-param-value."
   (let* ((opt (clime-make-option :name 'port :flags '("--port")
                                   :type (lambda (s) (string-to-number s))))
          (values (clime-values-set '() 'port "8080" 'user)))
-    (should-not (clime--validate-param-value opt values))))
-
-(ert-deftest clime-test-validate-param-value/function-type-error ()
-  "Function :type error returns error string through validate-param-value."
-  (let* ((opt (clime-make-option :name 'port :flags '("--port")
-                                  :type (lambda (_s) (error "bad port"))))
-         (values (clime-values-set '() 'port "abc" 'user)))
     (should (stringp (clime--validate-param-value opt values)))))
 
 (ert-deftest clime-test-validate-param-value/coerce-error ()

@@ -37,7 +37,7 @@
                             (:copier nil))
   "A CLI option (flag) specification."
   (flags nil :type list :documentation "List of flag strings, e.g. (\"--verbose\" \"-v\").")
-  (type 'string :type (or symbol function) :documentation "Type converter: symbol (`string', `integer', `number') or function (string → value).")
+  (type 'string :type (or symbol list) :documentation "Type spec: symbol (`string', `integer', `number') or list (`(integer :min 1 :max 100)').")
   (nargs nil :type (or integer null) :documentation "Arg count: nil=1, 0=boolean, N=fixed.")
   (env nil :type (or string boolean null) :documentation "Env var name: string suffix (prefixed by app :env-prefix), t for auto-derive, or nil.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
@@ -149,7 +149,7 @@ Used for lazy slots like :choices and :default."
                          (:constructor clime-arg--create)
                          (:copier nil))
   "A CLI positional argument specification."
-  (type 'string :type (or symbol function) :documentation "Type converter: symbol (`string', `integer', `number') or function (string → value).")
+  (type 'string :type (or symbol list) :documentation "Type spec: symbol (`string', `integer', `number') or list (`(integer :min 1 :max 100)').")
   (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
   (coerce nil :type list :documentation "List of transform functions applied after type coercion (in order).  Errors are wrapped as `clime-usage-error'.")

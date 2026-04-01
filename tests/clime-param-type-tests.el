@@ -307,9 +307,10 @@
   "clime--coerce-value with 'number delegates to registry."
   (should (= 3.14 (clime--coerce-value "3.14" 'number "--rate"))))
 
-(ert-deftest clime-test-types/coerce-function-still-works ()
-  "clime--coerce-value still accepts function types (deprecated)."
-  (should (= 42 (clime--coerce-value "42" (lambda (s) (string-to-number s)) "--x"))))
+(ert-deftest clime-test-types/coerce-function-signals-error ()
+  "clime--coerce-value rejects function :type with clime-usage-error."
+  (should-error (clime--coerce-value "42" (lambda (s) (string-to-number s)) "--x")
+                :type 'clime-usage-error))
 
 (ert-deftest clime-test-types/coerce-unknown-symbol-errors ()
   "clime--coerce-value signals clime-usage-error for unknown type symbol."

@@ -119,35 +119,20 @@ or nil if TOKEN is not a valid bundle."
 
 (defun clime--coerce-value (value type flag-or-name)
   "Coerce string VALUE to TYPE, signaling `clime-usage-error' on failure.
-TYPE is a type spec for `clime-resolve-type' (nil, symbol, or list),
-or a function (deprecated, will be removed).
+TYPE is a type spec for `clime-resolve-type' (nil, symbol, or list).
 FLAG-OR-NAME is used in error messages."
-  (cond
-   ;; Registry-resolvable: nil, symbol, or list
-   ((or (null type) (symbolp type) (consp type))
-    (let ((resolved (condition-case err
-                        (clime-resolve-type type)
-                      (clime-type-error
-                       (signal 'clime-usage-error
-                               (list (format "%s for %s"
-                                             (cadr err) flag-or-name)))))))
-      (condition-case err
-          (funcall (plist-get resolved :parse) value)
-        (error (signal 'clime-usage-error
-                       (list (format "%s for %s"
-                                     (error-message-string err)
-                                     flag-or-name)))))))
-   ;; Function type — deprecated, kept until zae1 removes it
-   ((functionp type)
+  (let ((resolved (condition-case err
+                      (clime-resolve-type type)
+                    (clime-type-error
+                     (signal 'clime-usage-error
+                             (list (format "%s for %s"
+                                           (cadr err) flag-or-name)))))))
     (condition-case err
-        (funcall type value)
+        (funcall (plist-get resolved :parse) value)
       (error (signal 'clime-usage-error
                      (list (format "%s for %s"
                                    (error-message-string err)
-                                   flag-or-name))))))
-   (t
-    (signal 'clime-usage-error
-            (list (format "Invalid type spec %S for %s" type flag-or-name))))))
+                                   flag-or-name)))))))
 
 (defun clime--transform-value (value type choices coerce flag-or-name)
   "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE fns.
