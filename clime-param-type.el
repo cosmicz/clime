@@ -95,5 +95,40 @@ Example:
          ,@body)
        (clime-register-type ',name #',fn-name))))
 
+;;; ─── Built-in Types ─────────────────────────────────────────────────────
+
+(clime-deftype string ()
+  "String passthrough (default type)."
+  (list :parse #'identity :describe "string"))
+
+(clime-deftype integer ()
+  "Strict integer parser."
+  (list :parse (lambda (value)
+                 (let ((n (string-to-number value)))
+                   (unless (and (integerp n)
+                                (string-match-p "\\`-?[0-9]+\\'" value))
+                     (error "Expected integer, got \"%s\"" value))
+                   n))
+        :describe "integer"))
+
+(clime-deftype number ()
+  "Number parser (integer or float)."
+  (list :parse (lambda (value)
+                 (let ((n (string-to-number value)))
+                   (when (and (= n 0)
+                              (not (string-match-p "\\`-?0+\\.?0*\\'" value)))
+                     (error "Expected number, got \"%s\"" value))
+                   n))
+        :describe "number"))
+
+(clime-deftype boolean ()
+  "Boolean parser (truthy/falsy strings)."
+  (list :parse (lambda (value)
+                 (pcase (downcase (string-trim value))
+                   ((or "1" "true" "yes" "on" "t") t)
+                   ((or "0" "false" "no" "off" "nil" "") nil)
+                   (_ (error "Expected boolean, got \"%s\"" value))))
+        :describe "boolean"))
+
 (provide 'clime-param-type)
 ;;; clime-param-type.el ends here

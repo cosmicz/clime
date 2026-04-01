@@ -17,6 +17,7 @@
 
 (require 'cl-lib)
 (require 'clime-core)
+(require 'clime-param-type)
 
 ;;; ─── Error Symbols ──────────────────────────────────────────────────────
 
@@ -118,34 +119,35 @@ or nil if TOKEN is not a valid bundle."
 
 (defun clime--coerce-value (value type flag-or-name)
   "Coerce string VALUE to TYPE, signaling `clime-usage-error' on failure.
-TYPE is a symbol (`string', `integer', `number', nil) or a function
-\(string → value).  FLAG-OR-NAME is used in error messages."
-  (pcase type
-    ((or 'string 'nil) value)
-    ('integer
-     (let ((n (string-to-number value)))
-       (unless (and (integerp n)
-                    (string-match-p "\\`-?[0-9]+\\'" value))
-         (signal 'clime-usage-error
-                 (list (format "Expected integer for %s, got \"%s\""
-                               flag-or-name value))))
-       n))
-    ('number
-     (let ((n (string-to-number value)))
-       (when (and (= n 0) (not (string-match-p "\\`-?0+\\.?0*\\'" value)))
-         (signal 'clime-usage-error
-                 (list (format "Expected number for %s, got \"%s\""
-                               flag-or-name value))))
-       n))
-    ((pred functionp)
-     (condition-case err
-         (funcall type value)
-       (error (signal 'clime-usage-error
-                      (list (format "%s for %s"
-                                    (error-message-string err)
-                                    flag-or-name))))))
-    (_ (signal 'clime-usage-error
-               (list (format "Unknown type %s for %s" type flag-or-name))))))
+TYPE is a type spec for `clime-resolve-type' (nil, symbol, or list),
+or a function (deprecated, will be removed).
+FLAG-OR-NAME is used in error messages."
+  (cond
+   ;; Registry-resolvable: nil, symbol, or list
+   ((or (null type) (symbolp type) (consp type))
+    (let ((resolved (condition-case err
+                        (clime-resolve-type type)
+                      (clime-type-error
+                       (signal 'clime-usage-error
+                               (list (format "%s for %s"
+                                             (cadr err) flag-or-name)))))))
+      (condition-case err
+          (funcall (plist-get resolved :parse) value)
+        (error (signal 'clime-usage-error
+                       (list (format "%s for %s"
+                                     (error-message-string err)
+                                     flag-or-name)))))))
+   ;; Function type — deprecated, kept until zae1 removes it
+   ((functionp type)
+    (condition-case err
+        (funcall type value)
+      (error (signal 'clime-usage-error
+                     (list (format "%s for %s"
+                                   (error-message-string err)
+                                   flag-or-name))))))
+   (t
+    (signal 'clime-usage-error
+            (list (format "Invalid type spec %S for %s" type flag-or-name))))))
 
 (defun clime--transform-value (value type choices coerce flag-or-name)
   "Coerce VALUE by TYPE, validate against CHOICES, apply COERCE fns.

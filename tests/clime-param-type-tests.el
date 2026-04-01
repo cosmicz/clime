@@ -228,5 +228,93 @@
   "clime-type-plist-p rejects empty list."
   (should-not (clime-type-plist-p '())))
 
+;;; ─── Built-in Type Registrations ───────────────────────────────────────
+
+(ert-deftest clime-test-types/builtin-string-registered ()
+  "string type is registered and resolves."
+  (let ((plist (clime-resolve-type 'string)))
+    (should (equal "string" (plist-get plist :describe)))
+    (should (equal "hello" (funcall (plist-get plist :parse) "hello")))))
+
+(ert-deftest clime-test-types/builtin-integer-parses ()
+  "integer type parses valid integers."
+  (let ((parse (plist-get (clime-resolve-type 'integer) :parse)))
+    (should (= 42 (funcall parse "42")))
+    (should (= -7 (funcall parse "-7")))
+    (should (= 0 (funcall parse "0")))))
+
+(ert-deftest clime-test-types/builtin-integer-rejects ()
+  "integer type rejects non-integers."
+  (let ((parse (plist-get (clime-resolve-type 'integer) :parse)))
+    (should-error (funcall parse "abc"))
+    (should-error (funcall parse "3.14"))
+    (should-error (funcall parse ""))))
+
+(ert-deftest clime-test-types/builtin-number-parses ()
+  "number type parses integers and floats."
+  (let ((parse (plist-get (clime-resolve-type 'number) :parse)))
+    (should (= 42 (funcall parse "42")))
+    (should (= 3.14 (funcall parse "3.14")))
+    (should (= -2.5 (funcall parse "-2.5")))
+    (should (= 0 (funcall parse "0")))))
+
+(ert-deftest clime-test-types/builtin-number-rejects ()
+  "number type rejects non-numbers."
+  (let ((parse (plist-get (clime-resolve-type 'number) :parse)))
+    (should-error (funcall parse "abc"))
+    (should-error (funcall parse ""))))
+
+(ert-deftest clime-test-types/builtin-boolean-parses ()
+  "boolean type parses truthy/falsy strings."
+  (let ((parse (plist-get (clime-resolve-type 'boolean) :parse)))
+    (should (eq t (funcall parse "true")))
+    (should (eq t (funcall parse "1")))
+    (should (eq t (funcall parse "yes")))
+    (should (eq t (funcall parse "on")))
+    (should (eq t (funcall parse "TRUE")))
+    (should (null (funcall parse "false")))
+    (should (null (funcall parse "0")))
+    (should (null (funcall parse "no")))
+    (should (null (funcall parse "off")))
+    (should (null (funcall parse "")))))
+
+(ert-deftest clime-test-types/builtin-boolean-rejects ()
+  "boolean type rejects unrecognized strings."
+  (let ((parse (plist-get (clime-resolve-type 'boolean) :parse)))
+    (should-error (funcall parse "maybe"))
+    (should-error (funcall parse "2"))))
+
+;;; ─── clime--coerce-value Delegation ────────────────────────────────────
+
+(ert-deftest clime-test-types/coerce-nil-delegates ()
+  "clime--coerce-value with nil type returns string as-is."
+  (should (equal "hello" (clime--coerce-value "hello" nil "--flag"))))
+
+(ert-deftest clime-test-types/coerce-string-delegates ()
+  "clime--coerce-value with 'string delegates to registry."
+  (should (equal "hello" (clime--coerce-value "hello" 'string "--flag"))))
+
+(ert-deftest clime-test-types/coerce-integer-delegates ()
+  "clime--coerce-value with 'integer delegates to registry."
+  (should (= 42 (clime--coerce-value "42" 'integer "--port"))))
+
+(ert-deftest clime-test-types/coerce-integer-error-wraps ()
+  "clime--coerce-value wraps integer parse error as clime-usage-error."
+  (should-error (clime--coerce-value "abc" 'integer "--port")
+                :type 'clime-usage-error))
+
+(ert-deftest clime-test-types/coerce-number-delegates ()
+  "clime--coerce-value with 'number delegates to registry."
+  (should (= 3.14 (clime--coerce-value "3.14" 'number "--rate"))))
+
+(ert-deftest clime-test-types/coerce-function-still-works ()
+  "clime--coerce-value still accepts function types (deprecated)."
+  (should (= 42 (clime--coerce-value "42" (lambda (s) (string-to-number s)) "--x"))))
+
+(ert-deftest clime-test-types/coerce-unknown-symbol-errors ()
+  "clime--coerce-value signals clime-usage-error for unknown type symbol."
+  (should-error (clime--coerce-value "x" 'nonexistent "--flag")
+                :type 'clime-usage-error))
+
 (provide 'clime-param-type-tests)
 ;;; clime-param-type-tests.el ends here
