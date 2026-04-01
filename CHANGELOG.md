@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Invoke `:key` slot**: options, arguments, commands, and groups now
+  accept a `:key` keyword to set the preferred single-char key in the
+  `clime-invoke` menu.  When set, `:key` overrides the auto-derived key
+  (flag letter for options, first letter of name for commands).
+  Collisions fall back to the normal auto-assignment algorithm.
+
 - **Invoke `:ask` and `:immediate` keywords**: `clime-invoke` now
   accepts `:ask` and `:immediate` keyword arguments for pre-menu
   prompting and immediate execution.  `:ask t` prompts for all

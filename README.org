@@ -239,6 +239,16 @@ Inline validation highlights invalid parameters as you set them.
 Prefix keys (~-~ / ~=~) re-render the buffer with dimmed non-option
 keys for visual feedback.
 
+Use ~:key~ to override auto-assigned keys:
+
+#+begin_src emacs-lisp
+(clime-command deploy :key "d"
+  :help "Deploy to production"
+  (clime-opt target ("--target" "-t") :key "t" :required
+    :choices '("staging" "production"))
+  (clime-handler (ctx) ...))
+#+end_src
+
 ~clime-invoke~ returns a structured plist for programmatic use:
 
 #+begin_src emacs-lisp
@@ -1264,11 +1274,11 @@ struct constructors.
 * DSL Reference
 
 All command-like forms (~clime-command~, ~clime-group~, ~clime-app~)
-accept: ~:help~ (~:doc~ is an alias), ~:aliases~, ~:hidden~,
+accept: ~:help~ (~:doc~ is an alias), ~:aliases~, ~:key~, ~:hidden~,
 ~:deprecated~, ~:epilog~, ~:examples~, ~:category~.
 
 All parameter forms (~clime-opt~, ~clime-arg~) accept: ~:type~,
-~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:help~,
+~:choices~, ~:coerce~, ~:conform~, ~:default~, ~:key~, ~:help~,
 ~:deprecated~, ~:from~.
 
 | Macro                 | Alias              | Purpose                          | Distinctive arguments                                                 |

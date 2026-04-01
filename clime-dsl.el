@@ -646,6 +646,7 @@ Keyword arguments:
   :default VAL      Default value when not provided
   :env STR|t        Env var suffix (prefixed by :env-prefix) or t to auto-derive
   :category STR     Help display category
+  :key CHAR-OR-STR  Preferred invoke menu key (single char)
   :hidden t         Omit from help
   :deprecated STR   Deprecation message or t
   :help STR         One-line help text
@@ -676,6 +677,7 @@ Keyword arguments:
   :nargs N          Number of arguments (:rest for rest args)
   :required BOOL    Whether arg is required (default t)
   :optional BOOL    Arg is not required (exclusive with :required)
+  :key CHAR-OR-STR  Preferred invoke menu key (single char)
   :deprecated STR   Deprecation message or t
   :help STR         One-line help text
   :from SYM         Inherit from `clime-defarg' template"
@@ -694,6 +696,7 @@ NAME is a symbol — the command name.
 BODY is a mix of keyword args and child forms:
   :help STRING       — command description
   :aliases LIST      — alternative names
+  :key CHAR-OR-STR   — preferred invoke menu key
   :hidden BOOL       — omit from help
   :epilog STRING     — text after help
   :category STRING   — help display category
@@ -709,7 +712,7 @@ Child forms:
 (cl-defmacro clime-alias-for (name
                               path
                               &rest plist
-                              &key help doc aliases hidden category
+                              &key help doc aliases key hidden category
                               deprecated defaults vals
                               &allow-other-keys)
   "Define an alias NAME for the command at PATH.
@@ -719,13 +722,14 @@ PATH is a list of symbols naming the target command.
 Keyword arguments:
   :help STR         Help text (inherits from target if omitted)
   :aliases LIST     Alternative names
+  :key CHAR-OR-STR  Preferred invoke menu key
   :hidden t         Omit from help
   :category STR     Help display category
   :deprecated STR   Deprecation message or t
   :defaults ALIST   Preset option values (user can override)
   :vals ALIST       Locked option values (hidden from CLI)"
   (declare (indent 2))
-  (ignore help doc aliases hidden category deprecated defaults vals)
+  (ignore help doc aliases key hidden category deprecated defaults vals)
   (clime--build-alias-for (cons name (cons path plist))))
 
 (defmacro clime-group (name &rest body)
@@ -735,6 +739,7 @@ NAME is a symbol — the group name.
 BODY is a mix of keyword args and child forms:
   :help STRING       — group description
   :aliases LIST      — alternative names
+  :key CHAR-OR-STR   — preferred invoke menu key
   :hidden BOOL       — omit from help
   :inline BOOL       — promote children to parent level
   :epilog STRING     — text after help
