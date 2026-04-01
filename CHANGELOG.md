@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Type system**: `:type` now supports a registry-based type system
+  with parameterized and composite types.  Built-in types: `string`,
+  `integer`, `number`, `boolean`.  Parameterized forms:
+  `(integer :min 1 :max 65535)`, `(number :min 0)`,
+  `(string :match "^[a-z]+$")`.  Composite types: `(member "json" "csv")`
+  for string enums with completion, `(const "off")` for exact match,
+  `(choice (integer :min 1) (const "off"))` for alternatives (first
+  match wins).  User-defined types via `clime-deftype`.  Help and invoke
+  both show resolved type descriptions — e.g., `(integer 1–65535)` —
+  and composite types provide `:choices` for invoke completion
+  automatically.
+
+- **Breaking: function `:type` removed**: `:type` no longer accepts a
+  bare function.  Use `clime-deftype` to register a named type, or use
+  `:coerce` for ad-hoc transforms.
+
 - **Invoke `:key` slot**: options, arguments, commands, and groups now
   accept a `:key` keyword to set the preferred single-char key in the
   `clime-invoke` menu.  When set, `:key` overrides the auto-derived key
@@ -32,12 +48,6 @@
   `:optional` as the inverse of `:required`.  Bare `:optional` or
   `:optional t` sets `:required nil`; `:optional nil` sets `:required t`.
   Mutually exclusive with `:required` (error if both present).
-
-- **Function `:type`**: `:type` now accepts a function `(string → value)`
-  in addition to keyword symbols (`'integer`, `'number`, `'string`).
-  Errors signaled by function types are wrapped as `clime-usage-error`.
-  `:coerce` errors are now also wrapped as `clime-usage-error` for
-  consistency.
 
 - **Values map as single source of truth**: the runtime data carrier for
   both parse and invoke pipelines is now a values map — an alist of

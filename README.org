@@ -769,20 +769,49 @@ immediately during pass 1, while env vars are applied in pass 2
 value regardless of source.
 
 - *:type* --- convert the raw string to a typed value.  Accepts a
-  symbol (~'integer~, ~'number~, ~'string~) or a function
-  ~(string → value)~.  Runs first so that ~:choices~ can compare typed
-  values:
+  type spec: a symbol (~'integer~, ~'number~, ~'string~, ~'boolean~),
+  a parameterized form (~'(integer :min 1 :max 65535)~), or a
+  composite type (~'(member "json" "csv")~, ~'(choice ...)~).  Runs
+  first so that ~:choices~ can compare typed values:
 
   #+begin_src emacs-lisp
+  ;; Simple type
   (clime-opt level ("--level") :type 'integer :choices '(1 2 3))
 
-  ;; Function type for custom parsing
-  (clime-opt date ("--date") :type #'parse-time-string
-    :help "Date in YYYY-MM-DD format")
+  ;; Parameterized — bounded port number
+  (clime-opt port ("--port" "-p") :type '(integer :min 1 :max 65535)
+    :help "Listen port")
+
+  ;; Member — string enum with invoke completion
+  (clime-opt format ("--format" "-f") :type '(member "json" "csv" "table")
+    :help "Output format")
+
+  ;; Choice — mixed types, first match wins
+  (clime-opt timeout ("--timeout") :type '(choice (integer :min 0) (const "off"))
+    :help "Timeout in seconds or \"off\"")
   #+end_src
 
-  Errors signaled by function types are wrapped as usage errors
-  automatically.
+  Types provide both help text and invoke completion automatically.
+  ~(member ...)~ and ~(const ...)~ supply ~:choices~ for cycling and
+  ~completing-read~.  Help output shows the resolved type description:
+
+  #+begin_example
+  Options:
+    --port VALUE      Listen port (integer 1–65535)
+    --format VALUE    Output format (json | csv | table)
+    --timeout VALUE   Timeout in seconds or "off" (integer ≥0 | "off")
+  #+end_example
+
+  Errors from type parsing are wrapped as usage errors automatically.
+  Define custom types with ~clime-deftype~:
+
+  #+begin_src emacs-lisp
+  (clime-deftype port ()
+    "TCP port number."
+    (clime-resolve-type '(integer :min 1 :max 65535)))
+
+  (clime-opt listen ("--listen") :type 'port :help "Listen port")
+  #+end_src
 
 - *:choices* --- validate against an allowed set.  Runs after ~:type~
   so the comparison uses typed values.  Accepts a literal list or a
