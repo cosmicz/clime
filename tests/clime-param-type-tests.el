@@ -389,5 +389,195 @@
   (should-error (clime--coerce-value "0" '(integer :min 1 :max 65535) "--port")
                 :type 'clime-usage-error))
 
+;;; ─── member Type ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-types/member-accepts-valid ()
+  "(member ...) accepts listed values."
+  (let ((parse (plist-get (clime-resolve-type '(member "json" "csv" "table")) :parse)))
+    (should (equal "json" (funcall parse "json")))
+    (should (equal "csv" (funcall parse "csv")))
+    (should (equal "table" (funcall parse "table")))))
+
+(ert-deftest clime-test-types/member-rejects-invalid ()
+  "(member ...) rejects unlisted values."
+  (let ((parse (plist-get (clime-resolve-type '(member "json" "csv" "table")) :parse)))
+    (should-error (funcall parse "xml"))
+    (should-error (funcall parse ""))
+    (should-error (funcall parse "JSON"))))
+
+(ert-deftest clime-test-types/member-describe ()
+  "(member ...) :describe joins values with \" | \"."
+  (should (equal "json | csv | table"
+                 (plist-get (clime-resolve-type '(member "json" "csv" "table")) :describe))))
+
+(ert-deftest clime-test-types/member-choices ()
+  "(member ...) :choices returns the value list."
+  (should (equal '("json" "csv" "table")
+                 (plist-get (clime-resolve-type '(member "json" "csv" "table")) :choices))))
+
+(ert-deftest clime-test-types/member-single-value ()
+  "(member \"x\") accepts only that value."
+  (let ((plist (clime-resolve-type '(member "x"))))
+    (should (equal "x" (funcall (plist-get plist :parse) "x")))
+    (should-error (funcall (plist-get plist :parse) "y"))
+    (should (equal '("x") (plist-get plist :choices)))))
+
+;;; ─── const Type ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-types/const-accepts-match ()
+  "(const \"off\") accepts exact match."
+  (let ((plist (clime-resolve-type '(const "off"))))
+    (should (equal "off" (funcall (plist-get plist :parse) "off")))))
+
+(ert-deftest clime-test-types/const-rejects-mismatch ()
+  "(const \"off\") rejects non-matching input."
+  (let ((parse (plist-get (clime-resolve-type '(const "off")) :parse)))
+    (should-error (funcall parse "on"))
+    (should-error (funcall parse "OFF"))
+    (should-error (funcall parse ""))))
+
+(ert-deftest clime-test-types/const-returns-original-value ()
+  "(const 42) returns the original numeric value, not the string."
+  (should (eq 42 (funcall (plist-get (clime-resolve-type '(const 42)) :parse) "42"))))
+
+(ert-deftest clime-test-types/const-describe ()
+  "(const \"off\") :describe is quoted value."
+  (should (equal "\"off\"" (plist-get (clime-resolve-type '(const "off")) :describe))))
+
+(ert-deftest clime-test-types/const-choices ()
+  "(const \"off\") :choices is single-element list."
+  (should (equal '("off") (plist-get (clime-resolve-type '(const "off")) :choices))))
+
+(ert-deftest clime-test-types/const-non-string-value ()
+  "(const 42) compares against stringified form."
+  (let ((plist (clime-resolve-type '(const 42))))
+    (should (equal "\"42\"" (plist-get plist :describe)))
+    (should (equal '("42") (plist-get plist :choices)))
+    (should-error (funcall (plist-get plist :parse) "43"))))
+
+;;; ─── choice Type ─────────────────────────────────────────────────────
+
+(ert-deftest clime-test-types/choice-first-match-wins ()
+  "(choice integer (const \"off\")) parses integer first."
+  (let ((parse (plist-get (clime-resolve-type '(choice integer (const "off"))) :parse)))
+    (should (= 42 (funcall parse "42")))
+    (should (equal "off" (funcall parse "off")))))
+
+(ert-deftest clime-test-types/choice-bounded-integer ()
+  "(choice (integer :min 1) (const \"off\")) with bounded integer."
+  (let ((parse (plist-get (clime-resolve-type '(choice (integer :min 1) (const "off"))) :parse)))
+    (should (= 30 (funcall parse "30")))
+    (should (equal "off" (funcall parse "off")))
+    (should-error (funcall parse "foo"))))
+
+(ert-deftest clime-test-types/choice-rejects-all-fail ()
+  "(choice ...) rejects when all alternatives fail."
+  (let ((parse (plist-get (clime-resolve-type '(choice integer boolean)) :parse)))
+    (should-error (funcall parse "not-a-thing"))))
+
+(ert-deftest clime-test-types/choice-describe ()
+  "(choice ...) :describe joins with \" | \"."
+  (should (equal "integer | \"off\""
+                 (plist-get (clime-resolve-type '(choice integer (const "off"))) :describe))))
+
+(ert-deftest clime-test-types/choice-choices-unions ()
+  "(choice ...) :choices unions sub-type choices."
+  (let ((plist (clime-resolve-type '(choice (member "a" "b") (const "c")))))
+    (should (equal '("a" "b" "c") (plist-get plist :choices)))))
+
+(ert-deftest clime-test-types/choice-choices-skips-no-choices ()
+  "(choice integer (const \"off\")) only collects choices from types that have them."
+  (let ((plist (clime-resolve-type '(choice integer (const "off")))))
+    (should (equal '("off") (plist-get plist :choices)))))
+
+(ert-deftest clime-test-types/choice-nested ()
+  "Nested choice works."
+  (let ((parse (plist-get (clime-resolve-type
+                           '(choice (choice integer boolean) (const "auto")))
+                          :parse)))
+    (should (= 5 (funcall parse "5")))
+    (should (eq t (funcall parse "true")))
+    (should (equal "auto" (funcall parse "auto")))
+    (should-error (funcall parse "nope"))))
+
+;;; ─── Composite via clime--coerce-value ───────────────────────────────
+
+(ert-deftest clime-test-types/coerce-member ()
+  "clime--coerce-value with member type."
+  (should (equal "json" (clime--coerce-value "json" '(member "json" "csv") "--format")))
+  (should-error (clime--coerce-value "xml" '(member "json" "csv") "--format")
+                :type 'clime-usage-error))
+
+(ert-deftest clime-test-types/coerce-choice ()
+  "clime--coerce-value with choice type."
+  (should (= 8080 (clime--coerce-value "8080" '(choice (integer :min 1) (const "off")) "--port")))
+  (should (equal "off" (clime--coerce-value "off" '(choice (integer :min 1) (const "off")) "--port")))
+  (should-error (clime--coerce-value "bad" '(choice (integer :min 1) (const "off")) "--port")
+                :type 'clime-usage-error))
+
+;;; ─── Composite Edge Cases ─────────────────────────────────────────────
+
+(ert-deftest clime-test-types/member-valid-plist ()
+  "(member ...) resolves to a valid type plist."
+  (should (clime-type-plist-p (clime-resolve-type '(member "a" "b")))))
+
+(ert-deftest clime-test-types/const-valid-plist ()
+  "(const ...) resolves to a valid type plist."
+  (should (clime-type-plist-p (clime-resolve-type '(const "x")))))
+
+(ert-deftest clime-test-types/choice-valid-plist ()
+  "(choice ...) resolves to a valid type plist."
+  (should (clime-type-plist-p (clime-resolve-type '(choice integer string)))))
+
+(ert-deftest clime-test-types/member-error-message-lists-values ()
+  "(member ...) error message includes available values."
+  (condition-case err
+      (funcall (plist-get (clime-resolve-type '(member "a" "b")) :parse) "c")
+    (error
+     (should (string-match-p "\"a\"" (error-message-string err)))
+     (should (string-match-p "\"b\"" (error-message-string err))))))
+
+(ert-deftest clime-test-types/choice-error-message-includes-sub-errors ()
+  "(choice ...) error message includes each sub-type's error."
+  (condition-case err
+      (funcall (plist-get (clime-resolve-type '(choice integer (const "off"))) :parse) "bad")
+    (error
+     (should (string-match-p "integer" (error-message-string err)))
+     (should (string-match-p "\"off\"" (error-message-string err))))))
+
+(ert-deftest clime-test-types/choice-single-alternative ()
+  "(choice integer) with single alternative works like bare integer."
+  (let ((parse (plist-get (clime-resolve-type '(choice integer)) :parse)))
+    (should (= 5 (funcall parse "5")))
+    (should-error (funcall parse "abc"))))
+
+(ert-deftest clime-test-types/choice-order-matters ()
+  "First matching alternative wins — (choice string integer) always returns string."
+  (let ((parse (plist-get (clime-resolve-type '(choice string integer)) :parse)))
+    ;; string :parse is identity, so "42" stays a string
+    (should (equal "42" (funcall parse "42")))))
+
+(ert-deftest clime-test-types/const-empty-string ()
+  "(const \"\") matches empty string."
+  (let ((plist (clime-resolve-type '(const ""))))
+    (should (equal "" (funcall (plist-get plist :parse) "")))
+    (should-error (funcall (plist-get plist :parse) "x"))))
+
+(ert-deftest clime-test-types/choice-bounded-integer-rejects-out-of-range ()
+  "(choice (integer :min 1 :max 10) (const \"off\")) rejects 0 (out of range, not \"off\")."
+  (let ((parse (plist-get (clime-resolve-type '(choice (integer :min 1 :max 10) (const "off"))) :parse)))
+    (should-error (funcall parse "0"))))
+
+(ert-deftest clime-test-types/coerce-const ()
+  "clime--coerce-value with const type."
+  (should (equal "off" (clime--coerce-value "off" '(const "off") "--mode")))
+  (should-error (clime--coerce-value "on" '(const "off") "--mode")
+                :type 'clime-usage-error))
+
+(ert-deftest clime-test-types/choice-nested-choices-union ()
+  "Nested choice unions :choices from all levels."
+  (let ((plist (clime-resolve-type '(choice (member "a") (choice (const "b") (member "c" "d"))))))
+    (should (equal '("a" "b" "c" "d") (plist-get plist :choices)))))
+
 (provide 'clime-param-type-tests)
 ;;; clime-param-type-tests.el ends here

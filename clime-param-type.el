@@ -157,5 +157,54 @@ MIN and MAX, when non-nil, constrain the accepted range."
                    (_ (error "Expected boolean, got \"%s\"" value))))
         :describe "boolean"))
 
+;;; ─── Composite Types ────────────────────────────────────────────────────
+
+(clime-deftype member (&rest values)
+  "One of literal string values.
+VALUES are the allowed strings.  Provides :choices for invoke completion."
+  (list :parse (lambda (value)
+                 (unless (member value values)
+                   (error "Expected one of %s, got \"%s\""
+                          (mapconcat (lambda (v) (format "\"%s\"" v)) values ", ")
+                          value))
+                 value)
+        :describe (mapconcat (lambda (v) (format "%s" v)) values " | ")
+        :choices values))
+
+(clime-deftype const (value)
+  "Exact literal match against VALUE.
+VALUE may be any type; non-strings are compared against their
+stringified form.  Returns the original VALUE on match."
+  (let ((str (if (stringp value) value (format "%s" value))))
+    (list :parse (lambda (input)
+                   (unless (equal input str)
+                     (error "Expected \"%s\", got \"%s\"" str input))
+                   value)
+          :describe (format "\"%s\"" str)
+          :choices (list str))))
+
+(clime-deftype choice (&rest type-specs)
+  "Try alternative type specs in order; first successful parse wins.
+TYPE-SPECS are type specs passed to `clime-resolve-type'.
+:describe joins sub-type descriptions with \" | \".
+:choices unions sub-type :choices lists."
+  (let ((resolved (mapcar #'clime-resolve-type type-specs)))
+    (list :parse (lambda (value)
+                   (catch 'choice-match
+                     (let ((errors nil))
+                       (dolist (rt resolved)
+                         (condition-case err
+                             (throw 'choice-match
+                                    (funcall (plist-get rt :parse) value))
+                           (error (push (error-message-string err) errors))))
+                       (error "No matching type for \"%s\" (tried: %s)"
+                              value
+                              (mapconcat #'identity (nreverse errors) "; ")))))
+          :describe (mapconcat (lambda (rt) (plist-get rt :describe))
+                               resolved " | ")
+          :choices (cl-loop for rt in resolved
+                            when (plist-get rt :choices)
+                            append (plist-get rt :choices)))))
+
 (provide 'clime-param-type)
 ;;; clime-param-type.el ends here
