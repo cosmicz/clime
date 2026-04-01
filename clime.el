@@ -31,6 +31,7 @@
 
 (require 'clime-settings)
 (require 'clime-core)
+(require 'clime-param-type)
 (require 'clime-parse)
 (require 'clime-dsl)
 (require 'clime-help)
@@ -41,7 +42,7 @@
   "The clime package version string.")
 
 (defconst clime--modules
-  '(clime-settings clime-core clime-parse clime-dsl
+  '(clime-settings clime-core clime-param-type clime-parse clime-dsl
                    clime-help clime-output clime-run)
   "Clime modules in dependency order.")
 
