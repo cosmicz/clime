@@ -316,5 +316,77 @@
   (should-error (clime--coerce-value "x" 'nonexistent "--flag")
                 :type 'clime-usage-error))
 
+;;; ─── Parameterized Integer ──────────────────────────────────────────────
+
+(ert-deftest clime-test-types/integer-bounded ()
+  "(integer :min 1 :max 100) accepts in-range, rejects out-of-range."
+  (let ((plist (clime-resolve-type '(integer :min 1 :max 100))))
+    (should (equal "integer (1–100)" (plist-get plist :describe)))
+    (should (= 1 (funcall (plist-get plist :parse) "1")))
+    (should (= 50 (funcall (plist-get plist :parse) "50")))
+    (should (= 100 (funcall (plist-get plist :parse) "100")))
+    (should-error (funcall (plist-get plist :parse) "0"))
+    (should-error (funcall (plist-get plist :parse) "101"))))
+
+(ert-deftest clime-test-types/integer-min-only ()
+  "(integer :min 1) lower-bounded."
+  (let ((plist (clime-resolve-type '(integer :min 1))))
+    (should (equal "integer (≥1)" (plist-get plist :describe)))
+    (should (= 999 (funcall (plist-get plist :parse) "999")))
+    (should-error (funcall (plist-get plist :parse) "0"))))
+
+(ert-deftest clime-test-types/integer-max-only ()
+  "(integer :max 100) upper-bounded."
+  (let ((plist (clime-resolve-type '(integer :max 100))))
+    (should (equal "integer (≤100)" (plist-get plist :describe)))
+    (should (= -5 (funcall (plist-get plist :parse) "-5")))
+    (should-error (funcall (plist-get plist :parse) "101"))))
+
+(ert-deftest clime-test-types/integer-no-bounds ()
+  "(integer) with no bounds same as bare 'integer."
+  (let ((plist (clime-resolve-type '(integer))))
+    (should (equal "integer" (plist-get plist :describe)))
+    (should (= 42 (funcall (plist-get plist :parse) "42")))))
+
+;;; ─── Parameterized Number ──────────────────────────────────────────────
+
+(ert-deftest clime-test-types/number-bounded ()
+  "(number :min -1.5 :max 1.5) accepts in-range floats."
+  (let ((plist (clime-resolve-type '(number :min -1.5 :max 1.5))))
+    (should (equal "number (-1.5–1.5)" (plist-get plist :describe)))
+    (should (= 0.5 (funcall (plist-get plist :parse) "0.5")))
+    (should (= -1.5 (funcall (plist-get plist :parse) "-1.5")))
+    (should-error (funcall (plist-get plist :parse) "2.0"))))
+
+(ert-deftest clime-test-types/number-min-only ()
+  "(number :min 0) lower-bounded."
+  (let ((plist (clime-resolve-type '(number :min 0))))
+    (should (equal "number (≥0)" (plist-get plist :describe)))
+    (should (= 3.14 (funcall (plist-get plist :parse) "3.14")))
+    (should-error (funcall (plist-get plist :parse) "-0.1"))))
+
+;;; ─── Parameterized String ──────────────────────────────────────────────
+
+(ert-deftest clime-test-types/string-match ()
+  "(string :match REGEXP) validates pattern."
+  (let ((plist (clime-resolve-type '(string :match "^[a-z]+$"))))
+    (should (string-match-p "matching" (plist-get plist :describe)))
+    (should (equal "hello" (funcall (plist-get plist :parse) "hello")))
+    (should-error (funcall (plist-get plist :parse) "Hello123"))))
+
+(ert-deftest clime-test-types/string-no-match ()
+  "(string) with no :match same as bare 'string."
+  (let ((plist (clime-resolve-type '(string))))
+    (should (equal "string" (plist-get plist :describe)))
+    (should (equal "anything" (funcall (plist-get plist :parse) "anything")))))
+
+;;; ─── Parameterized via clime--coerce-value ─────────────────────────────
+
+(ert-deftest clime-test-types/coerce-bounded-integer ()
+  "clime--coerce-value with bounded integer spec."
+  (should (= 8080 (clime--coerce-value "8080" '(integer :min 1 :max 65535) "--port")))
+  (should-error (clime--coerce-value "0" '(integer :min 1 :max 65535) "--port")
+                :type 'clime-usage-error))
+
 (provide 'clime-param-type-tests)
 ;;; clime-param-type-tests.el ends here

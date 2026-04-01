@@ -13,6 +13,8 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 ;;; ─── Error Condition ───────────────────────────────────────────────────
 
 (define-error 'clime-type-error "Clime type error")
@@ -90,36 +92,61 @@ Example:
   (declare (indent defun) (doc-string 3))
   (let ((fn-name (intern (format "clime-type--%s" name))))
     `(progn
-       (defun ,fn-name ,arglist
+       (cl-defun ,fn-name ,arglist
          ,docstring
          ,@body)
        (clime-register-type ',name #',fn-name))))
 
 ;;; ─── Built-in Types ─────────────────────────────────────────────────────
 
-(clime-deftype string ()
-  "String passthrough (default type)."
-  (list :parse #'identity :describe "string"))
+(clime-deftype string (&key match)
+  "String type, optionally constrained by a regexp pattern.
+When MATCH is non-nil, validates that the value matches the regexp."
+  (if match
+      (list :parse (lambda (value)
+                     (unless (string-match-p match value)
+                       (error "Value \"%s\" does not match %s" value match))
+                     value)
+            :describe (format "string (matching %s)" match))
+    (list :parse #'identity :describe "string")))
 
-(clime-deftype integer ()
-  "Strict integer parser."
+(clime-deftype integer (&key min max)
+  "Integer parser with optional bounds.
+MIN and MAX, when non-nil, constrain the accepted range."
   (list :parse (lambda (value)
                  (let ((n (string-to-number value)))
                    (unless (and (integerp n)
                                 (string-match-p "\\`-?[0-9]+\\'" value))
                      (error "Expected integer, got \"%s\"" value))
+                   (when (and min (< n min))
+                     (error "Value %d is less than minimum %d" n min))
+                   (when (and max (> n max))
+                     (error "Value %d exceeds maximum %d" n max))
                    n))
-        :describe "integer"))
+        :describe (cond
+                   ((and min max) (format "integer (%s–%s)" min max))
+                   (min (format "integer (≥%s)" min))
+                   (max (format "integer (≤%s)" max))
+                   (t "integer"))))
 
-(clime-deftype number ()
-  "Number parser (integer or float)."
+(clime-deftype number (&key min max)
+  "Number parser (integer or float) with optional bounds.
+MIN and MAX, when non-nil, constrain the accepted range."
   (list :parse (lambda (value)
                  (let ((n (string-to-number value)))
                    (when (and (= n 0)
                               (not (string-match-p "\\`-?0+\\.?0*\\'" value)))
                      (error "Expected number, got \"%s\"" value))
+                   (when (and min (< n min))
+                     (error "Value %s is less than minimum %s" n min))
+                   (when (and max (> n max))
+                     (error "Value %s exceeds maximum %s" n max))
                    n))
-        :describe "number"))
+        :describe (cond
+                   ((and min max) (format "number (%s–%s)" min max))
+                   (min (format "number (≥%s)" min))
+                   (max (format "number (≤%s)" max))
+                   (t "number"))))
 
 (clime-deftype boolean ()
   "Boolean parser (truthy/falsy strings)."
