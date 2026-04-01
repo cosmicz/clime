@@ -511,7 +511,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :epilog :examples :category :deprecated
+                     '(:help :doc :aliases :key :hidden :epilog :examples :category :deprecated
                              :options :args)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
@@ -524,7 +524,7 @@ ARGS is (NAME &rest BODY)."
            (clime-make-command
             :name ,name-str
             :handler ,handler
-            ,@(clime--emit-kw keywords '(:help :aliases :hidden :epilog :examples :category :deprecated))
+            ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :epilog :examples :category :deprecated))
             ,@(clime--emit-merged keywords classified '(:conform :options :args :children))))))
 
 (defun clime--build-alias-for (args)
@@ -538,7 +538,7 @@ Supports :defaults and :vals alists for preset/locked option values."
          (path-strings (mapcar #'symbol-name path-form))
          (extracted (clime--extract-keywords
                      (cddr args)
-                     '(:help :doc :aliases :hidden :category :deprecated
+                     '(:help :doc :aliases :key :hidden :category :deprecated
                              :defaults :vals)))
          (keywords (car extracted)))
     (setq keywords (clime--prepare-aliases keywords))
@@ -546,7 +546,7 @@ Supports :defaults and :vals alists for preset/locked option values."
            (clime-alias--create
             :name ,name-str
             :target ',path-strings
-            ,@(clime--emit-kw keywords '(:defaults :vals :help :aliases :hidden :category :deprecated))))))
+            ,@(clime--emit-kw keywords '(:defaults :vals :help :key :aliases :hidden :category :deprecated))))))
 
 (defun clime--build-group (args)
   "Build a `clime-group' constructor form from DSL ARGS.
@@ -555,7 +555,7 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :inline :epilog :examples :category :deprecated
+                     '(:help :doc :aliases :key :hidden :inline :epilog :examples :category :deprecated
                              :options :args :children)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
@@ -564,7 +564,7 @@ ARGS is (NAME &rest BODY)."
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
-            ,@(clime--emit-kw keywords '(:help :aliases :hidden :inline :epilog :examples :category :deprecated))
+            ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :inline :epilog :examples :category :deprecated))
             ,@(clime--emit-merged keywords classified '(:conform :options :args :children :handler))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
@@ -623,7 +623,7 @@ Child forms:
                         &key bool flag from type help required optional
                         default nargs env count multiple choices coerce
                         conform separator category hidden deprecated
-                        negatable requires
+                        negatable requires key
                         &allow-other-keys)
   "Define a CLI option NAME with FLAGS.
 NAME is a symbol — the canonical parameter name.
@@ -653,7 +653,7 @@ Keyword arguments:
   (declare (indent 2))
   (ignore bool flag from type help required optional default nargs env count
           multiple choices coerce conform separator category hidden
-          deprecated negatable requires)
+          deprecated negatable requires key)
   (clime--build-option (cons name (cons flags plist))))
 
 (defalias 'clime-option 'clime-opt)
@@ -662,7 +662,7 @@ Keyword arguments:
 (cl-defmacro clime-arg (name
                         &rest plist
                         &key from type help required optional default
-                        nargs choices coerce conform deprecated
+                        nargs choices coerce conform deprecated key
                         &allow-other-keys)
   "Define a positional argument NAME.
 NAME is a symbol — the canonical parameter name.
@@ -681,7 +681,7 @@ Keyword arguments:
   :from SYM         Inherit from `clime-defarg' template"
   (declare (indent 1))
   (ignore from type help required optional default nargs choices coerce
-          conform deprecated)
+          conform deprecated key)
   (clime--build-arg (cons name plist)))
 
 (defalias 'clime-argument 'clime-arg)

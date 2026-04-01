@@ -144,6 +144,109 @@
     (should (equal "b" (cdr (assq 'b keys))))
     (should (equal "c" (cdr (assq 'c keys))))))
 
+;;; ─── Explicit :key Slot ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-invoke/option-explicit-key ()
+  "Option with :key overrides flag-derived key."
+  (let* ((opt (clime-make-option :name 'output :flags '("--output" "-o") :key "x"))
+         (item (clime-invoke--option-key-item opt)))
+    (should (equal "x" (nth 1 item)))))
+
+(ert-deftest clime-test-invoke/option-explicit-key-char ()
+  "Option :key as character is normalized to string."
+  (let* ((opt (clime-make-option :name 'output :flags '("--output" "-o") :key ?x))
+         (item (clime-invoke--option-key-item opt)))
+    (should (equal "x" (nth 1 item)))))
+
+(ert-deftest clime-test-invoke/option-nil-key-uses-flag ()
+  "Option with nil :key falls back to flag-derived key."
+  (let* ((opt (clime-make-option :name 'output :flags '("--output" "-o")))
+         (item (clime-invoke--option-key-item opt)))
+    (should (equal "o" (nth 1 item)))))
+
+(ert-deftest clime-test-invoke/command-explicit-key ()
+  "Command with :key gets that key in child actions."
+  (let* ((cmd (clime-make-command :name "deploy" :key "d"
+                                  :handler #'ignore))
+         (grp (clime-make-group :name "root"
+                                :children (list (cons "deploy" cmd))))
+         (used (make-hash-table :test #'equal))
+         (actions (clime-invoke--build-child-actions grp used)))
+    (should (equal "d" (caar actions)))))
+
+(ert-deftest clime-test-invoke/command-explicit-key-overrides-name ()
+  "Command :key \"x\" overrides name-derived \"d\" for deploy."
+  (let* ((cmd (clime-make-command :name "deploy" :key "x"
+                                  :handler #'ignore))
+         (grp (clime-make-group :name "root"
+                                :children (list (cons "deploy" cmd))))
+         (used (make-hash-table :test #'equal))
+         (actions (clime-invoke--build-child-actions grp used)))
+    (should (equal "x" (caar actions)))))
+
+(ert-deftest clime-test-invoke/arg-explicit-key ()
+  "Arg with :key gets that key in arg actions."
+  (let* ((arg (clime-make-arg :name 'file :key "f"))
+         (cmd (clime-make-command :name "open" :handler #'ignore
+                                  :args (list arg)))
+         (used (make-hash-table :test #'equal))
+         (actions (clime-invoke--build-arg-actions cmd used)))
+    (should (equal "f" (caar actions)))))
+
+(ert-deftest clime-test-invoke/key-collision-fallback ()
+  "When two commands have same :key, second falls back."
+  (let* ((c1 (clime-make-command :name "alpha" :key "a" :handler #'ignore))
+         (c2 (clime-make-command :name "beta" :key "a" :handler #'ignore))
+         (grp (clime-make-group :name "root"
+                                :children (list (cons "alpha" c1)
+                                                (cons "beta" c2))))
+         (used (make-hash-table :test #'equal))
+         (actions (clime-invoke--build-child-actions grp used))
+         (keys (mapcar #'car actions)))
+    (should (= 2 (length keys)))
+    (should (= 2 (length (delete-dups keys))))))
+
+(ert-deftest clime-test-invoke/option-key-in-full-keymap ()
+  "Option :key appears in full key-map with \"- x\" prefix."
+  (let* ((opt (clime-make-option :name 'output :flags '("--output" "-o") :key "x"))
+         (cmd (clime-make-command :name "test" :handler #'ignore
+                                  :options (list opt)))
+         (km (clime-invoke--build-key-map cmd))
+         (action (cdr (assoc "- x" km))))
+    (should action)
+    (should (eq :option (car action)))
+    (should (eq 'output (clime-option-name (cadr action))))))
+
+(ert-deftest clime-test-invoke/mixed-explicit-and-auto-keys ()
+  "Mix of explicit :key and auto-derived keys assigns correctly."
+  (let* ((c1 (clime-make-command :name "alpha" :key "z" :handler #'ignore))
+         (c2 (clime-make-command :name "beta" :handler #'ignore))
+         (c3 (clime-make-command :name "gamma" :key "g" :handler #'ignore))
+         (grp (clime-make-group :name "root"
+                                :children (list (cons "alpha" c1)
+                                                (cons "beta" c2)
+                                                (cons "gamma" c3))))
+         (used (make-hash-table :test #'equal))
+         (actions (clime-invoke--build-child-actions grp used))
+         (alpha-key (car (cl-find-if (lambda (e) (equal "alpha" (caddr e))) actions)))
+         (beta-key (car (cl-find-if (lambda (e) (equal "beta" (caddr e))) actions)))
+         (gamma-key (car (cl-find-if (lambda (e) (equal "gamma" (caddr e))) actions))))
+    (should (equal "z" alpha-key))
+    (should (equal "b" beta-key))
+    (should (equal "g" gamma-key))))
+
+(ert-deftest clime-test-invoke/dsl-option-key ()
+  "DSL clime-opt passes :key through to the struct."
+  (let* ((form (macroexpand '(clime-opt output ("--output" "-o") :key "x")))
+         (opt (eval form t)))
+    (should (equal "x" (clime-param-key opt)))))
+
+(ert-deftest clime-test-invoke/dsl-arg-key ()
+  "DSL clime-arg passes :key through to the struct."
+  (let* ((form (macroexpand '(clime-arg file :key "f")))
+         (arg (eval form t)))
+    (should (equal "f" (clime-param-key arg)))))
+
 ;;; ─── Choices Cycling ───────────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/choices-cycles ()

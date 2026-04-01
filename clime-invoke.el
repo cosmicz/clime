@@ -184,11 +184,21 @@ the first letter of the long flag (e.g. \"--output\" → \"o\")."
           (when long
             (substring long 2 3))))))
 
+(defun clime-invoke--normalize-key (key)
+  "Normalize KEY to a single-char string or nil.
+KEY may be a character, a string, or nil."
+  (cond
+   ((null key) nil)
+   ((characterp key) (char-to-string key))
+   ((stringp key) (substring key 0 1))
+   (t nil)))
+
 (defun clime-invoke--option-key-item (option)
   "Build an assign-keys item for OPTION.
 Returns (NAME PREFERRED FALLBACK-STRING).
-Preferred key is the short flag letter (e.g. \"v\" from \"-v\")."
-  (let* ((short-letter (cl-loop for flag in (clime-option-flags option)
+Preferred key is :key slot, then short flag letter (e.g. \"v\" from \"-v\")."
+  (let* ((explicit (clime-invoke--normalize-key (clime-param-key option)))
+         (short-letter (cl-loop for flag in (clime-option-flags option)
                                 when (and (= (length flag) 2)
                                           (string-prefix-p "-" flag)
                                           (not (string-prefix-p "--" flag)))
@@ -196,7 +206,7 @@ Preferred key is the short flag letter (e.g. \"v\" from \"-v\")."
          (long-flag (cl-find-if (lambda (f) (string-prefix-p "--" f))
                                 (clime-option-flags option)))
          (fallback (and long-flag (substring long-flag 2))))
-    (list (clime-option-name option) short-letter fallback)))
+    (list (clime-option-name option) (or explicit short-letter) fallback)))
 
 (defun clime-invoke--assign-keys (items &optional used)
   "Assign unique keys to ITEMS.
@@ -308,8 +318,11 @@ SHARED-USED is a hash table of taken keys.  Returns alist of (KEY . ACTION)."
     (let* ((children (clime-invoke--visible-children node))
            (child-keys (clime-invoke--assign-keys
                         (mapcar (lambda (entry)
-                                  (let ((name (car entry)))
-                                    (list name (substring name 0 1) name)))
+                                  (let* ((name (car entry))
+                                         (child (cdr entry))
+                                         (explicit (clime-invoke--normalize-key
+                                                    (clime-node-key child))))
+                                    (list name (or explicit (substring name 0 1)) name)))
                                 children)
                         shared-used))
            (actions '()))
@@ -327,8 +340,10 @@ SHARED-USED is a hash table of taken keys.  Returns alist of (KEY . ACTION)."
   (let* ((args (clime-node-args node))
          (arg-keys (clime-invoke--assign-keys
                     (mapcar (lambda (a)
-                              (let ((name (symbol-name (clime-arg-name a))))
-                                (list (clime-arg-name a) nil name)))
+                              (let ((name (symbol-name (clime-arg-name a)))
+                                    (explicit (clime-invoke--normalize-key
+                                               (clime-param-key a))))
+                                (list (clime-arg-name a) explicit name)))
                             args)
                     shared-used))
          (actions '()))

@@ -27,7 +27,8 @@
   (name nil :type symbol :documentation "Canonical param name.")
   (help nil :type (or string null) :documentation "One-line help text.")
   (required nil :type boolean)
-  (default nil :documentation "Default value, or a function for lazy defaults."))
+  (default nil :documentation "Default value, or a function for lazy defaults.")
+  (key nil :type (or character string null) :documentation "Preferred invoke menu key (single char)."))
 
 ;;; ─── Option ─────────────────────────────────────────────────────────────
 
@@ -372,6 +373,7 @@ under GROUP-NAME."
   "Abstract base for CLI tree nodes (commands, groups, apps)."
   (name nil :type string :documentation "Node name as typed by user.")
   (aliases nil :type list :documentation "Alternative names for this node.")
+  (key nil :type (or character string null) :documentation "Preferred invoke menu key (single char).")
   (help nil :type (or string null) :documentation "One-line description.")
   (options nil :type list :documentation "List of `clime-option' structs.")
   (args nil :type list :documentation "Ordered list of `clime-arg' structs.")
