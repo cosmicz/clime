@@ -67,9 +67,9 @@
                                             (when (or (< n min) (> n max))
                                               (error "Out of range"))
                                             n))
-                                 :describe (format "integer (%d–%d)" min max))))
+                                 :describe (format "integer %d–%d" min max))))
     (let ((plist (clime-resolve-type '(bounded 1 100))))
-      (should (equal "integer (1–100)" (plist-get plist :describe)))
+      (should (equal "integer 1–100" (plist-get plist :describe)))
       (should (= 50 (funcall (plist-get plist :parse) "50")))
       (should-error (funcall (plist-get plist :parse) "200")))))
 
@@ -322,7 +322,7 @@
 (ert-deftest clime-test-types/integer-bounded ()
   "(integer :min 1 :max 100) accepts in-range, rejects out-of-range."
   (let ((plist (clime-resolve-type '(integer :min 1 :max 100))))
-    (should (equal "integer (1–100)" (plist-get plist :describe)))
+    (should (equal "integer 1–100" (plist-get plist :describe)))
     (should (= 1 (funcall (plist-get plist :parse) "1")))
     (should (= 50 (funcall (plist-get plist :parse) "50")))
     (should (= 100 (funcall (plist-get plist :parse) "100")))
@@ -332,14 +332,14 @@
 (ert-deftest clime-test-types/integer-min-only ()
   "(integer :min 1) lower-bounded."
   (let ((plist (clime-resolve-type '(integer :min 1))))
-    (should (equal "integer (≥1)" (plist-get plist :describe)))
+    (should (equal "integer ≥1" (plist-get plist :describe)))
     (should (= 999 (funcall (plist-get plist :parse) "999")))
     (should-error (funcall (plist-get plist :parse) "0"))))
 
 (ert-deftest clime-test-types/integer-max-only ()
   "(integer :max 100) upper-bounded."
   (let ((plist (clime-resolve-type '(integer :max 100))))
-    (should (equal "integer (≤100)" (plist-get plist :describe)))
+    (should (equal "integer ≤100" (plist-get plist :describe)))
     (should (= -5 (funcall (plist-get plist :parse) "-5")))
     (should-error (funcall (plist-get plist :parse) "101"))))
 
@@ -354,7 +354,7 @@
 (ert-deftest clime-test-types/number-bounded ()
   "(number :min -1.5 :max 1.5) accepts in-range floats."
   (let ((plist (clime-resolve-type '(number :min -1.5 :max 1.5))))
-    (should (equal "number (-1.5–1.5)" (plist-get plist :describe)))
+    (should (equal "number -1.5–1.5" (plist-get plist :describe)))
     (should (= 0.5 (funcall (plist-get plist :parse) "0.5")))
     (should (= -1.5 (funcall (plist-get plist :parse) "-1.5")))
     (should-error (funcall (plist-get plist :parse) "2.0"))))
@@ -362,7 +362,7 @@
 (ert-deftest clime-test-types/number-min-only ()
   "(number :min 0) lower-bounded."
   (let ((plist (clime-resolve-type '(number :min 0))))
-    (should (equal "number (≥0)" (plist-get plist :describe)))
+    (should (equal "number ≥0" (plist-get plist :describe)))
     (should (= 3.14 (funcall (plist-get plist :parse) "3.14")))
     (should-error (funcall (plist-get plist :parse) "-0.1"))))
 
@@ -578,6 +578,67 @@
   "Nested choice unions :choices from all levels."
   (let ((plist (clime-resolve-type '(choice (member "a") (choice (const "b") (member "c" "d"))))))
     (should (equal '("a" "b" "c" "d") (plist-get plist :choices)))))
+
+;;; ─── clime--type-describe ─────────────────────────────────────────────
+
+(ert-deftest clime-test-types/type-describe-nil ()
+  "clime--type-describe returns nil for nil type."
+  (should-not (clime--type-describe nil)))
+
+(ert-deftest clime-test-types/type-describe-string ()
+  "clime--type-describe returns nil for plain string type."
+  (should-not (clime--type-describe 'string)))
+
+(ert-deftest clime-test-types/type-describe-integer ()
+  "clime--type-describe returns \"integer\" for integer type."
+  (should (equal "integer" (clime--type-describe 'integer))))
+
+(ert-deftest clime-test-types/type-describe-bounded-integer ()
+  "clime--type-describe returns bounded description."
+  (should (equal "integer 1–100" (clime--type-describe '(integer :min 1 :max 100)))))
+
+(ert-deftest clime-test-types/type-describe-member ()
+  "clime--type-describe returns member description."
+  (should (equal "json | csv" (clime--type-describe '(member "json" "csv")))))
+
+(ert-deftest clime-test-types/type-describe-choice ()
+  "clime--type-describe returns choice description."
+  (should (equal "integer | \"off\""
+                 (clime--type-describe '(choice integer (const "off"))))))
+
+(ert-deftest clime-test-types/type-describe-unknown-returns-nil ()
+  "clime--type-describe returns nil for unknown type (no error)."
+  (should-not (clime--type-describe 'nonexistent-type-xyz)))
+
+;;; ─── clime--effective-choices ────────────────────────────────────────
+
+(ert-deftest clime-test-types/effective-choices-explicit-wins ()
+  "Explicit :choices overrides type-provided choices."
+  (let ((opt (clime-make-option :name 'fmt :flags '("-f")
+                           :type '(member "json" "csv")
+                           :choices '("xml" "yaml"))))
+    (should (equal '("xml" "yaml") (clime--effective-choices opt)))))
+
+(ert-deftest clime-test-types/effective-choices-falls-back-to-type ()
+  "Falls back to type :choices when explicit is nil."
+  (let ((opt (clime-make-option :name 'fmt :flags '("-f")
+                           :type '(member "json" "csv"))))
+    (should (equal '("json" "csv") (clime--effective-choices opt)))))
+
+(ert-deftest clime-test-types/effective-choices-nil-when-no-choices ()
+  "Returns nil when neither explicit nor type provides choices."
+  (let ((opt (clime-make-option :name 'port :flags '("-p") :type 'integer)))
+    (should-not (clime--effective-choices opt))))
+
+(ert-deftest clime-test-types/effective-choices-arg ()
+  "Works for args too."
+  (let ((arg (clime-make-arg :name 'format :type '(member "json" "csv"))))
+    (should (equal '("json" "csv") (clime--effective-choices arg)))))
+
+(ert-deftest clime-test-types/effective-choices-unknown-type-returns-nil ()
+  "Returns nil for unknown type (no error)."
+  (let ((opt (clime-make-option :name 'x :flags '("--x") :type 'nonexistent-xyz)))
+    (should-not (clime--effective-choices opt))))
 
 (provide 'clime-param-type-tests)
 ;;; clime-param-type-tests.el ends here

@@ -124,9 +124,9 @@ MIN and MAX, when non-nil, constrain the accepted range."
                      (error "Value %d exceeds maximum %d" n max))
                    n))
         :describe (cond
-                   ((and min max) (format "integer (%s–%s)" min max))
-                   (min (format "integer (≥%s)" min))
-                   (max (format "integer (≤%s)" max))
+                   ((and min max) (format "integer %s–%s" min max))
+                   (min (format "integer ≥%s" min))
+                   (max (format "integer ≤%s" max))
                    (t "integer"))))
 
 (clime-deftype number (&key min max)
@@ -143,9 +143,9 @@ MIN and MAX, when non-nil, constrain the accepted range."
                      (error "Value %s exceeds maximum %s" n max))
                    n))
         :describe (cond
-                   ((and min max) (format "number (%s–%s)" min max))
-                   (min (format "number (≥%s)" min))
-                   (max (format "number (≤%s)" max))
+                   ((and min max) (format "number %s–%s" min max))
+                   (min (format "number ≥%s" min))
+                   (max (format "number ≤%s" max))
                    (t "number"))))
 
 (clime-deftype boolean ()

@@ -154,6 +154,17 @@ CHOICES may be a list or a function returning a list."
       (format "(choices: %s)"
               (mapconcat (lambda (c) (format "%s" c)) resolved ", ")))))
 
+(defun clime-help--append-type (help-text type)
+  "Append type annotation to HELP-TEXT from resolved TYPE.
+Shows the resolved :describe wrapped in parens, e.g. \"(integer 1–100)\"."
+  (let ((desc (clime--type-describe type)))
+    (if desc
+        (let ((suffix (format "(%s)" desc)))
+          (if (and help-text (not (string-empty-p help-text)))
+              (concat help-text " " suffix)
+            suffix))
+      (or help-text ""))))
+
 (defun clime-help--append-choices (help-text choices)
   "Append choices annotation to HELP-TEXT if CHOICES is non-nil."
   (let ((suffix (clime-help--choices-suffix choices)))
@@ -211,8 +222,10 @@ When WIDTH is non-nil, help text is wrapped to fit."
                    (lambda (arg)
                      (let ((name (format "<%s>" (clime-arg-name arg)))
                            (help (clime-help--append-choices
-                                  (clime-arg-help arg)
-                                  (clime-arg-choices arg))))
+                                  (clime-help--append-type
+                                   (clime-arg-help arg)
+                                   (clime-arg-type arg))
+                                  (clime--effective-choices arg))))
                        (cons name help)))
                    visible)))
         (concat "Arguments:\n" (clime-help--format-table rows width))))))
@@ -342,8 +355,10 @@ Pipeline: help → choices → required → env → deprecated."
          (clime-help--append-env
           (clime-help--append-required
            (clime-help--append-choices
-            (clime-option-help opt)
-            (clime-option-choices opt))
+            (clime-help--append-type
+             (clime-option-help opt)
+             (clime-option-type opt))
+            (clime--effective-choices opt))
            opt)
           opt app)
          (clime-option-deprecated opt))))

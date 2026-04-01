@@ -18,6 +18,7 @@
 (require 'cl-lib)
 
 (declare-function json-encode "json")
+(declare-function clime-resolve-type "clime-param-type")
 
 ;;; ─── Param (abstract base) ──────────────────────────────────────────────
 
@@ -142,6 +143,29 @@ concatenated (template fns first, override fns after)."
   "Resolve VALUE, calling it if it is a function.
 Used for lazy slots like :choices and :default."
   (if (functionp value) (funcall value) value))
+
+(defun clime--type-describe (type)
+  "Return resolved :describe for TYPE spec, or nil for plain/nil types.
+Returns nil for nil and \"string\" types (no annotation needed)."
+  (when type
+    (condition-case nil
+        (let ((desc (plist-get (clime-resolve-type type) :describe)))
+          (unless (equal desc "string") desc))
+      (clime-type-error nil))))
+
+(defun clime--effective-choices (param)
+  "Return effective choices for PARAM (option or arg).
+Explicit :choices slot wins.  Falls back to type-provided :choices."
+  (or (clime--resolve-value
+       (if (clime-option-p param)
+           (clime-option-choices param)
+         (clime-arg-choices param)))
+      (let ((type (if (clime-option-p param)
+                      (clime-option-type param)
+                    (clime-arg-type param))))
+        (condition-case nil
+            (plist-get (clime-resolve-type type) :choices)
+          (clime-type-error nil)))))
 
 ;;; ─── Arg ────────────────────────────────────────────────────────────────
 

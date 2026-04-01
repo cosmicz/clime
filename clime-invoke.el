@@ -474,8 +474,8 @@ APP is the root app (for env var resolution)."
           (propertize "on" 'face 'clime-invoke-active)
         (propertize "off" 'face 'clime-invoke-unset)))
      ;; Choices — show all inline
-     ((clime-option-choices option)
-      (let* ((choices (clime--resolve-value (clime-option-choices option)))
+     ((clime--effective-choices option)
+      (let* ((choices (clime--effective-choices option))
              (d (and default (clime--resolve-value default)))
              (env-name (and app (clime--env-var-for-option option app)))
              (env-val (and (null val) env-name (getenv env-name)))
@@ -538,10 +538,12 @@ APP is the root app (for env var resolution on options)."
                  (clime-option-hidden option-or-arg))
         (push (propertize "(hidden)" 'face 'clime-invoke-hidden) annotations))
       ;; Type hint (non-string)
-      (when (clime-option-p option-or-arg)
-        (let ((type (clime-option-type option-or-arg)))
-          (when (and type (symbolp type) (not (eq type 'string)))
-            (push (propertize (format "(%s)" type) 'face 'shadow) annotations))))
+      (let ((type (if (clime-option-p option-or-arg)
+                      (clime-option-type option-or-arg)
+                    (clime-arg-type option-or-arg))))
+        (let ((desc (clime--type-describe type)))
+          (when desc
+            (push (propertize (format "(%s)" desc) 'face 'shadow) annotations))))
       ;; Multiple hint
       (when (and (clime-option-p option-or-arg)
                  (clime-option-multiple option-or-arg))
@@ -1081,16 +1083,15 @@ APP is the root app (for env var resolution)."
           (clime-invoke--clear-param option)
         (clime-invoke--set-param option t)))
      ;; Choices
-     ((clime-option-choices option)
-      (let* ((choices (clime--resolve-value (clime-option-choices option)))
+     ((clime--effective-choices option)
+      (let* ((choices (clime--effective-choices option))
              (next (clime-invoke--cycle-choice current choices)))
         (if next
             (clime-invoke--set-param option next)
           (clime-invoke--clear-param option))))
      ;; Multiple
      ((clime-option-multiple option)
-      (let* ((choices (and (clime-option-choices option)
-                           (clime--resolve-value (clime-option-choices option))))
+      (let* ((choices (clime--effective-choices option))
              (val (if choices
                       (completing-read "Add value: " choices nil t)
                     (read-string "Add value (empty to clear): "))))
@@ -1111,8 +1112,7 @@ APP is the root app (for env var resolution)."
   "Handle user interaction for positional ARG, updating the values map."
   (let* ((name (clime-arg-name arg))
          (current (clime-values-value clime-invoke--values name))
-         (choices (and (clime-arg-choices arg)
-                       (clime--resolve-value (clime-arg-choices arg))))
+         (choices (clime--effective-choices arg))
          (val (if choices
                   (completing-read
                    (format "%s: " (or (clime-arg-help arg) (symbol-name name)))
@@ -1131,8 +1131,8 @@ Unlike cycling, this prompts the user for an explicit value."
          (current (clime-values-value clime-invoke--values name)))
     (cond
      ;; Choices: completing-read
-     ((clime-option-choices option)
-      (let* ((choices (clime--resolve-value (clime-option-choices option)))
+     ((clime--effective-choices option)
+      (let* ((choices (clime--effective-choices option))
              (val (completing-read
                    (format "%s: " (or (clime-option-help option) (symbol-name name)))
                    choices nil t (and current (format "%s" current)))))
