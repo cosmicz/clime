@@ -118,13 +118,13 @@
       :help "Registry to install from"
       :default "default")
 
-    ;; [25] Parameterized integer type — bounded range
-    (clime-opt timeout ("--timeout" "-T") :type '(integer :min 1 :max 300)
+    ;; [25] Parameterized integer type — bounded range (short alias)
+    (clime-opt timeout ("--timeout" "-T") :type '(int :min 1 :max 300)
                :help "Network timeout in seconds"
                :default "30")
 
     ;; [26] Requires constraint — retries only makes sense with timeout
-    (clime-opt retries ("--retries") :type '(integer :min 0 :max 10)
+    (clime-opt retries ("--retries") :type '(int :min 0 :max 10)
                :help "Number of retry attempts"
                :requires '(timeout))
 

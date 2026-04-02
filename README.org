@@ -769,10 +769,11 @@ immediately during pass 1, while env vars are applied in pass 2
 value regardless of source.
 
 - *:type* --- convert the raw string to a typed value.  Accepts a
-  type spec: a symbol (~'integer~, ~'number~, ~'string~, ~'boolean~),
-  a parameterized form (~'(integer :min 1 :max 65535)~), or a
-  composite type (~'(member "json" "csv")~, ~'(choice ...)~).  Runs
-  first so that ~:choices~ can compare typed values:
+  type spec: a symbol (~'integer~, ~'number~, ~'string~, ~'boolean~;
+  short aliases ~'int~, ~'num~, ~'str~, ~'bool~), a parameterized
+  form (~'(integer :min 1 :max 65535)~), or a composite type
+  (~'(member "json" "csv")~, ~'(choice ...)~).  Runs first so that
+  ~:choices~ can compare typed values:
 
   #+begin_src emacs-lisp
   ;; Simple type
@@ -793,14 +794,20 @@ value regardless of source.
 
   Types provide both help text and invoke completion automatically.
   ~(member ...)~ and ~(const ...)~ supply ~:choices~ for cycling and
-  ~completing-read~.  Help output shows the resolved type description:
+  ~completing-read~.  CLI help appends the resolved type description
+  after help text (suppressed when it duplicates choices):
 
   #+begin_example
   Options:
     --port VALUE      Listen port (integer 1–65535)
-    --format VALUE    Output format (json | csv | table)
+    --format VALUE    Output format [choices: json, csv, table]
     --timeout VALUE   Timeout in seconds or "off" (integer ≥0 | "off")
   #+end_example
+
+  In ~clime-invoke~, the type description is prepended to help text
+  in the desc column.  Cycling through a ~choice~ type's member values
+  prompts for free-form input after exhausting the enum.  Direct input
+  (~=~) uses non-strict completion, allowing values from any branch.
 
   Errors from type parsing are wrapped as usage errors automatically.
   Define custom types with ~clime-deftype~:
@@ -975,10 +982,12 @@ Help text wraps to the terminal width, auto-detected from the
 with the ~clime-help-width~ variable.
 
 Option help lines include inline annotations:
+- ~(type desc)~ prepended type hint — e.g., ~(integer 1–65535)~;
+  suppressed when redundant with choices
 - ~[$VAR]~ for options with env var resolution (or ~[$VAR=value]~ when
   the variable is set)
 - ~(required)~ for required options with no default
-- ~(choices: a|b|c)~ for options with ~:choices~
+- ~[choices: a|b|c]~ for options with ~:choices~
 - ~(DEPRECATED)~ for deprecated options
 
 *** Examples

@@ -4,15 +4,19 @@
 
 - **Type system**: `:type` now supports a registry-based type system
   with parameterized and composite types.  Built-in types: `string`,
-  `integer`, `number`, `boolean`.  Parameterized forms:
-  `(integer :min 1 :max 65535)`, `(number :min 0)`,
-  `(string :match "^[a-z]+$")`.  Composite types: `(member "json" "csv")`
-  for string enums with completion, `(const "off")` for exact match,
+  `integer`, `number`, `boolean` (short aliases: `str`, `int`, `num`,
+  `bool`).  Parameterized forms: `(integer :min 1 :max 65535)`,
+  `(number :min 0)`, `(string :match "^[a-z]+$")`.  Composite types:
+  `(member "json" "csv")` for string enums with completion,
+  `(const "off")` for exact match,
   `(choice (integer :min 1) (const "off"))` for alternatives (first
   match wins).  User-defined types via `clime-deftype`.  Help and invoke
-  both show resolved type descriptions — e.g., `(integer 1–65535)` —
-  and composite types provide `:choices` for invoke completion
-  automatically.
+  both show resolved type descriptions — e.g., `(integer 1–65535)`.
+  CLI help appends the type hint after help text; invoke prepends it.
+  Redundancy suppression hides the hint when it duplicates choices.  Composite types provide `:choices` for
+  invoke completion automatically.  Invoke cycling for `choice` types
+  prompts for free-form input after exhausting member choices; direct
+  input (`=`) uses non-strict completion.
 
 - **Breaking: function `:type` removed**: `:type` no longer accepts a
   bare function.  Use `clime-deftype` to register a named type, or use

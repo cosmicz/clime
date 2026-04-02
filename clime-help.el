@@ -167,6 +167,19 @@ Suppresses the hint when it would duplicate EFFECTIVE-CHOICES."
             prefix))
       (or help-text ""))))
 
+(defun clime-help--append-type (help-text type effective-choices)
+  "Append type annotation to HELP-TEXT from resolved TYPE.
+Shows the resolved :describe wrapped in parens, e.g. \"(integer 1–100)\".
+Suppresses the hint when it would duplicate EFFECTIVE-CHOICES."
+  (let ((desc (and (not (clime--type-describe-redundant-p type effective-choices))
+                   (clime--type-describe type))))
+    (if desc
+        (let ((suffix (format "(%s)" desc)))
+          (if (and help-text (not (string-empty-p help-text)))
+              (concat help-text " " suffix)
+            suffix))
+      (or help-text ""))))
+
 (defun clime-help--append-choices (help-text choices)
   "Append choices annotation to HELP-TEXT if CHOICES is non-nil."
   (let ((suffix (clime-help--choices-suffix choices)))
@@ -224,11 +237,11 @@ When WIDTH is non-nil, help text is wrapped to fit."
                    (lambda (arg)
                      (let* ((name (format "<%s>" (clime-arg-name arg)))
                             (choices (clime--effective-choices arg))
-                            (help (clime-help--append-choices
-                                   (clime-help--prepend-type
+                            (help (clime-help--append-type
+                                   (clime-help--append-choices
                                     (clime-arg-help arg)
-                                    (clime-arg-type arg)
                                     choices)
+                                   (clime-arg-type arg)
                                    choices)))
                        (cons name help)))
                    visible)))
@@ -353,17 +366,17 @@ options apply to."
 (defun clime-help--option-row (opt &optional app)
   "Format OPT as a (left . help) table row.
 APP is the root app, used to resolve env var names.
-Pipeline: type → help → choices → required → env → deprecated."
+Pipeline: help → choices → type → required → env → deprecated."
   (let ((choices (clime--effective-choices opt)))
     (cons (clime-help--format-option-flags opt)
           (clime-help--append-deprecated
            (clime-help--append-env
             (clime-help--append-required
-             (clime-help--append-choices
-              (clime-help--prepend-type
+             (clime-help--append-type
+              (clime-help--append-choices
                (clime-option-help opt)
-               (clime-option-type opt)
                choices)
+              (clime-option-type opt)
               choices)
              opt)
             opt app)

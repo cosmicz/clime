@@ -1369,5 +1369,22 @@ Width applies to content; prefix is extra visual indentation."
   (should (equal "some help"
                  (clime-help--prepend-type "some help" '(member "a" "b") '("a" "b")))))
 
+(ert-deftest clime-test-help/append-type-integer ()
+  "clime-help--append-type appends (integer) to help text."
+  (should (equal "some help (integer)" (clime-help--append-type "some help" 'integer nil))))
+
+(ert-deftest clime-test-help/append-type-nil-help ()
+  "clime-help--append-type with nil help returns just the type."
+  (should (equal "(integer)" (clime-help--append-type nil 'integer nil))))
+
+(ert-deftest clime-test-help/append-type-nil-type ()
+  "clime-help--append-type returns help-text unchanged for nil type."
+  (should (equal "some help" (clime-help--append-type "some help" nil nil))))
+
+(ert-deftest clime-test-help/append-type-suppressed-by-redundant-choices ()
+  "clime-help--append-type suppresses when redundant with choices."
+  (should (equal "some help"
+                 (clime-help--append-type "some help" '(member "a" "b") '("a" "b")))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here
