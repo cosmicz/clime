@@ -406,8 +406,8 @@
     (should-error (funcall parse "JSON"))))
 
 (ert-deftest clime-test-types/member-describe ()
-  "(member ...) :describe joins values with \" | \"."
-  (should (equal "json | csv | table"
+  "(member ...) :describe joins values with \"|\"."
+  (should (equal "json|csv|table"
                  (plist-get (clime-resolve-type '(member "json" "csv" "table")) :describe))))
 
 (ert-deftest clime-test-types/member-choices ()
@@ -476,8 +476,8 @@
     (should-error (funcall parse "not-a-thing"))))
 
 (ert-deftest clime-test-types/choice-describe ()
-  "(choice ...) :describe joins with \" | \"."
-  (should (equal "integer | \"off\""
+  "(choice ...) :describe joins with \"|\"."
+  (should (equal "integer|\"off\""
                  (plist-get (clime-resolve-type '(choice integer (const "off"))) :describe))))
 
 (ert-deftest clime-test-types/choice-choices-unions ()
@@ -599,11 +599,11 @@
 
 (ert-deftest clime-test-types/type-describe-member ()
   "clime--type-describe returns member description."
-  (should (equal "json | csv" (clime--type-describe '(member "json" "csv")))))
+  (should (equal "json|csv" (clime--type-describe '(member "json" "csv")))))
 
 (ert-deftest clime-test-types/type-describe-choice ()
   "clime--type-describe returns choice description."
-  (should (equal "integer | \"off\""
+  (should (equal "integer|\"off\""
                  (clime--type-describe '(choice integer (const "off"))))))
 
 (ert-deftest clime-test-types/type-describe-unknown-returns-nil ()
@@ -686,6 +686,52 @@
   "Member type is not redundant when effective choices differ."
   (should-not (clime--type-describe-redundant-p
                '(member "a" "b") '("x" "y"))))
+
+;;; ─── Compact describe ───────────────────────────────────────────────
+
+(ert-deftest clime-test-type/compact-describe-choice-member-integer ()
+  "Compact describe collapses member to 'choice', keeps integer."
+  (should (equal "choice|integer ≥1"
+                 (clime--type-describe-compact
+                  '(choice (member "auto" "serial" "cpus") (integer :min 1))))))
+
+(ert-deftest clime-test-type/compact-describe-choice-number-const ()
+  "Compact describe collapses const to 'choice', keeps number."
+  (should (equal "choice|number ≥0"
+                 (clime--type-describe-compact
+                  '(choice (number :min 0) (const "off"))))))
+
+(ert-deftest clime-test-type/compact-describe-pure-member ()
+  "Pure member type returns nil (fully redundant with choices)."
+  (should-not (clime--type-describe-compact '(member "a" "b" "c"))))
+
+(ert-deftest clime-test-type/compact-describe-pure-choice-member-const ()
+  "Choice with only member/const branches returns nil (redundant)."
+  (should-not (clime--type-describe-compact
+               '(choice (member "a" "b") (const "off")))))
+
+(ert-deftest clime-test-type/compact-describe-plain-integer ()
+  "Non-choice types fall back to standard describe."
+  (should (equal "integer 1–100"
+                 (clime--type-describe-compact '(integer :min 1 :max 100)))))
+
+(ert-deftest clime-test-type/compact-describe-plain-symbol ()
+  "Plain symbol type falls back to standard describe."
+  (should (equal "integer"
+                 (clime--type-describe-compact 'integer))))
+
+(ert-deftest clime-test-type/compact-describe-nil ()
+  "Nil type returns nil."
+  (should-not (clime--type-describe-compact nil)))
+
+(ert-deftest clime-test-type/compact-describe-string ()
+  "String type returns nil (suppressed)."
+  (should-not (clime--type-describe-compact 'string)))
+
+(ert-deftest clime-test-type/compact-describe-choice-with-string ()
+  "Choice with string branch: string suppressed, member collapsed → nil."
+  (should-not (clime--type-describe-compact
+               '(choice (member "a" "b") (string)))))
 
 (provide 'clime-param-type-tests)
 ;;; clime-param-type-tests.el ends here

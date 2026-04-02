@@ -175,7 +175,7 @@ VALUES are the allowed strings.  Provides :choices for invoke completion."
                           (mapconcat (lambda (v) (format "\"%s\"" v)) values ", ")
                           value))
                  value)
-        :describe (mapconcat (lambda (v) (format "%s" v)) values " | ")
+        :describe (mapconcat (lambda (v) (format "%s" v)) values "|")
         :choices values))
 
 (clime-deftype const (value)
@@ -193,7 +193,7 @@ stringified form.  Returns the original VALUE on match."
 (clime-deftype choice (&rest type-specs)
   "Try alternative type specs in order; first successful parse wins.
 TYPE-SPECS are type specs passed to `clime-resolve-type'.
-:describe joins sub-type descriptions with \" | \".
+:describe joins sub-type descriptions with \"|\".
 :choices unions sub-type :choices lists."
   (let ((resolved (mapcar #'clime-resolve-type type-specs)))
     (list :parse (lambda (value)
@@ -208,7 +208,7 @@ TYPE-SPECS are type specs passed to `clime-resolve-type'.
                               value
                               (mapconcat #'identity (nreverse errors) "; ")))))
           :describe (mapconcat (lambda (rt) (plist-get rt :describe))
-                               resolved " | ")
+                               resolved "|")
           :choices (cl-loop for rt in resolved
                             when (plist-get rt :choices)
                             append (plist-get rt :choices)))))

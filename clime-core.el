@@ -153,6 +153,41 @@ Returns nil for nil and \"string\" types (no annotation needed)."
           (unless (equal desc "string") desc))
       (clime-type-error nil))))
 
+(defun clime--type-describe-compact (type)
+  "Return a compact :describe for TYPE, collapsing choices branches.
+For choice types, member/const branches are collapsed to \"choice\"
+and non-choice branches keep their :describe.  Returns nil when fully
+redundant (pure member/const) or for nil/string types.
+Examples:
+  (choice (member ...) (integer :min 1)) → \"choice|integer ≥1\"
+  (choice (number :min 0) (const \"off\")) → \"number ≥0|choice\"
+  (member \"a\" \"b\") → nil  (pure choices, redundant)
+  (integer :min 1) → \"integer ≥1\"  (no change)"
+  (if (and type (consp type) (eq (car type) 'choice))
+      (let ((has-choices nil)
+            (others '()))
+        (dolist (spec (cdr type))
+          (let ((head (and (consp spec) (car spec))))
+            (if (memq head '(member const))
+                (setq has-choices t)
+              ;; Resolve the sub-type to get its :describe
+              (condition-case nil
+                  (let ((desc (plist-get (clime-resolve-type spec) :describe)))
+                    (when (and desc (not (equal desc "string")))
+                      (push desc others)))
+                (clime-type-error nil)))))
+        (let ((parts (nreverse others)))
+          (when has-choices
+            (push "choice" parts))
+          ;; Pure member/const with no other branches → redundant
+          (unless (and (= (length parts) 1) (equal (car parts) "choice"))
+            (mapconcat #'identity parts "|"))))
+    ;; Non-choice: delegate to standard describe, but suppress
+    ;; pure member/const (redundant with choices display)
+    (if (and (consp type) (memq (car type) '(member const)))
+        nil
+      (clime--type-describe type))))
+
 (defun clime--type-describe-redundant-p (type effective-choices)
   "Return non-nil if TYPE :describe is redundant with EFFECTIVE-CHOICES.
 True when the type's own :choices match EFFECTIVE-CHOICES and
@@ -165,7 +200,7 @@ True when the type's own :choices match EFFECTIVE-CHOICES and
           (and desc type-choices
                (equal type-choices effective-choices)
                (equal desc (mapconcat (lambda (v) (format "%s" v))
-                                      type-choices " | "))))
+                                      type-choices "|"))))
       (clime-type-error nil))))
 
 (defun clime--effective-choices (param)

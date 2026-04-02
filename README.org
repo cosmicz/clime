@@ -801,7 +801,7 @@ value regardless of source.
   Options:
     --port VALUE      Listen port (integer 1–65535)
     --format VALUE    Output format [choices: json, csv, table]
-    --timeout VALUE   Timeout in seconds or "off" (integer ≥0 | "off")
+    --timeout VALUE   Timeout in seconds or "off" (integer ≥0|"off")
   #+end_example
 
   In ~clime-invoke~, the type description is prepended to help text

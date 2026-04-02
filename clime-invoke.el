@@ -516,14 +516,13 @@ APP is the root app (for env var resolution on options)."
   (let* ((help (clime-param-help option-or-arg))
          (parts '()))
     ;; Type hint — pushed first so it appears first after nreverse
-    (let ((type (if (clime-option-p option-or-arg)
-                    (clime-option-type option-or-arg)
-                  (clime-arg-type option-or-arg))))
-      (when (not (clime--type-describe-redundant-p
-                  type (clime--effective-choices option-or-arg)))
-        (let ((desc (clime--type-describe type)))
-          (when desc
-            (push (propertize (format "(%s)" desc) 'face 'shadow) parts)))))
+    ;; Uses compact describe: collapses member/const to "choice"
+    (let* ((type (if (clime-option-p option-or-arg)
+                     (clime-option-type option-or-arg)
+                   (clime-arg-type option-or-arg)))
+           (desc (clime--type-describe-compact type)))
+      (when desc
+        (push (propertize (format "(%s)" desc) 'face 'shadow) parts)))
     ;; Help text or long flag as fallback
     (when help
       (push help parts))

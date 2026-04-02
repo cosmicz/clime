@@ -1327,7 +1327,7 @@ Width applies to content; prefix is extra visual indentation."
          (help (clime-format-help
                 (cdr (car (clime-group-children app)))
                 '("t" "cmd"))))
-    (should (string-match-p "(integer ≥1 | \"off\")" help))))
+    (should (string-match-p "(integer ≥1|\"off\")" help))))
 
 (ert-deftest clime-test-help/option-type-hint-member-suppressed ()
   "Member type suppresses type hint (redundant with choices display)."
@@ -1341,7 +1341,7 @@ Width applies to content; prefix is extra visual indentation."
                 (cdr (car (clime-group-children app)))
                 '("t" "cmd"))))
     ;; Type hint suppressed — choices shown instead
-    (should-not (string-match-p "(json | csv | table)" help))
+    (should-not (string-match-p "(json|csv|table)" help))
     (should (string-match-p "choices: json, csv, table" help))))
 
 (ert-deftest clime-test-help/prepend-type-nil-help ()
