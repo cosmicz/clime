@@ -733,5 +733,132 @@
   (should-not (clime--type-describe-compact
                '(choice (member "a" "b") (string)))))
 
+;;; ─── File/Directory/Path Types ──────────────────────────────────────
+
+(ert-deftest clime-test-type/file-bare ()
+  "Bare file type resolves with :describe \"file\"."
+  (let ((plist (clime-resolve-type 'file)))
+    (should (clime-type-plist-p plist))
+    (should (equal "file" (plist-get plist :describe)))))
+
+(ert-deftest clime-test-type/file-parse-expands ()
+  "File parser expands the path."
+  (let* ((plist (clime-resolve-type 'file))
+         (parse (plist-get plist :parse))
+         (result (funcall parse "~/foo.txt")))
+    (should (string-prefix-p "/" result))
+    (should (string-suffix-p "/foo.txt" result))))
+
+(ert-deftest clime-test-type/file-must-exist-rejects-missing ()
+  "File :must-exist rejects non-existent path."
+  (let* ((plist (clime-resolve-type '(file :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (should (equal "file (existing)" (plist-get plist :describe)))
+    (should-error (funcall parse "/tmp/clime-test-nonexistent-file-xyz"))))
+
+(ert-deftest clime-test-type/file-must-exist-accepts-regular-file ()
+  "File :must-exist accepts an existing regular file."
+  (let* ((tmp (make-temp-file "clime-test"))
+         (plist (clime-resolve-type '(file :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (unwind-protect
+        (should (stringp (funcall parse tmp)))
+      (delete-file tmp))))
+
+(ert-deftest clime-test-type/file-must-exist-rejects-directory ()
+  "File :must-exist rejects a directory (not a regular file)."
+  (let* ((tmp (make-temp-file "clime-test" t))
+         (plist (clime-resolve-type '(file :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (unwind-protect
+        (should-error (funcall parse tmp))
+      (delete-directory tmp))))
+
+(ert-deftest clime-test-type/directory-bare ()
+  "Bare directory type resolves with :describe \"directory\"."
+  (let ((plist (clime-resolve-type 'directory)))
+    (should (clime-type-plist-p plist))
+    (should (equal "directory" (plist-get plist :describe)))))
+
+(ert-deftest clime-test-type/directory-must-exist-accepts-dir ()
+  "Directory :must-exist accepts an existing directory."
+  (let* ((tmp (make-temp-file "clime-test" t))
+         (plist (clime-resolve-type '(directory :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (unwind-protect
+        (should (stringp (funcall parse tmp)))
+      (delete-directory tmp))))
+
+(ert-deftest clime-test-type/directory-must-exist-rejects-file ()
+  "Directory :must-exist rejects a regular file."
+  (let* ((tmp (make-temp-file "clime-test"))
+         (plist (clime-resolve-type '(directory :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (unwind-protect
+        (should-error (funcall parse tmp))
+      (delete-file tmp))))
+
+(ert-deftest clime-test-type/directory-must-exist-rejects-missing ()
+  "Directory :must-exist rejects non-existent path."
+  (let* ((plist (clime-resolve-type '(directory :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (should (equal "directory (existing)" (plist-get plist :describe)))
+    (should-error (funcall parse "/tmp/clime-test-nonexistent-dir-xyz"))))
+
+(ert-deftest clime-test-type/path-bare ()
+  "Bare path type resolves with :describe \"path\"."
+  (let ((plist (clime-resolve-type 'path)))
+    (should (clime-type-plist-p plist))
+    (should (equal "path" (plist-get plist :describe)))))
+
+(ert-deftest clime-test-type/path-must-exist-accepts-file ()
+  "Path :must-exist accepts an existing regular file."
+  (let* ((tmp (make-temp-file "clime-test"))
+         (plist (clime-resolve-type '(path :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (unwind-protect
+        (should (stringp (funcall parse tmp)))
+      (delete-file tmp))))
+
+(ert-deftest clime-test-type/path-must-exist-accepts-dir ()
+  "Path :must-exist accepts an existing directory."
+  (let* ((tmp (make-temp-file "clime-test" t))
+         (plist (clime-resolve-type '(path :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (unwind-protect
+        (should (stringp (funcall parse tmp)))
+      (delete-directory tmp))))
+
+(ert-deftest clime-test-type/path-must-exist-rejects-missing ()
+  "Path :must-exist rejects non-existent path."
+  (let* ((plist (clime-resolve-type '(path :must-exist t)))
+         (parse (plist-get plist :parse)))
+    (should (equal "path (existing)" (plist-get plist :describe)))
+    (should-error (funcall parse "/tmp/clime-test-nonexistent-path-xyz"))))
+
+(ert-deftest clime-test-type/file-in-choice ()
+  "File type works inside a choice with const."
+  (let* ((plist (clime-resolve-type '(choice (file :must-exist t) (const "-"))))
+         (parse (plist-get plist :parse)))
+    ;; const "-" parses
+    (should (equal "-" (funcall parse "-")))
+    ;; existing file parses
+    (let ((tmp (make-temp-file "clime-test")))
+      (unwind-protect
+          (should (stringp (funcall parse tmp)))
+        (delete-file tmp)))))
+
+(ert-deftest clime-test-type/dir-alias ()
+  "Dir is a short alias for directory."
+  (let ((plist (clime-resolve-type 'dir)))
+    (should (clime-type-plist-p plist))
+    (should (equal "directory" (plist-get plist :describe)))))
+
+(ert-deftest clime-test-type/file-bare-accepts-nonexistent ()
+  "Bare file type does not check existence."
+  (let* ((plist (clime-resolve-type 'file))
+         (parse (plist-get plist :parse)))
+    (should (stringp (funcall parse "/tmp/clime-test-nonexistent-xyz")))))
+
 (provide 'clime-param-type-tests)
 ;;; clime-param-type-tests.el ends here

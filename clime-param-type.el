@@ -164,6 +164,43 @@ MIN and MAX, when non-nil, constrain the accepted range."
 (clime-register-type 'num #'clime-type--number)
 (clime-register-type 'bool #'clime-type--boolean)
 
+;;; ─── File/Path Types ───────────────────────────────────────────────
+
+(clime-deftype file (&key must-exist)
+  "File path type, optionally requiring existence.
+When MUST-EXIST is non-nil, validates that the path is an existing regular file."
+  (list :parse (lambda (value)
+                 (let ((expanded (expand-file-name value)))
+                   (when must-exist
+                     (unless (file-regular-p expanded)
+                       (error "File does not exist: %s" expanded)))
+                   expanded))
+        :describe (if must-exist "file (existing)" "file")))
+
+(clime-deftype directory (&key must-exist)
+  "Directory path type, optionally requiring existence.
+When MUST-EXIST is non-nil, validates that the path is an existing directory."
+  (list :parse (lambda (value)
+                 (let ((expanded (expand-file-name value)))
+                   (when must-exist
+                     (unless (file-directory-p expanded)
+                       (error "Directory does not exist: %s" expanded)))
+                   expanded))
+        :describe (if must-exist "directory (existing)" "directory")))
+
+(clime-register-type 'dir #'clime-type--directory)
+
+(clime-deftype path (&key must-exist)
+  "Filesystem path type (file or directory), optionally requiring existence.
+When MUST-EXIST is non-nil, validates that the path exists."
+  (list :parse (lambda (value)
+                 (let ((expanded (expand-file-name value)))
+                   (when must-exist
+                     (unless (file-exists-p expanded)
+                       (error "Path does not exist: %s" expanded)))
+                   expanded))
+        :describe (if must-exist "path (existing)" "path")))
+
 ;;; ─── Composite Types ────────────────────────────────────────────────────
 
 (clime-deftype member (&rest values)
