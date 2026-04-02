@@ -451,7 +451,7 @@ When more than 5 choices, truncate around the active choice with ellipsis."
               (or suffix "")
               (if suffix-dots (concat sep (propertize "..." 'face 'shadow)) "")))))
 
-(defun clime-invoke--format-value (option &optional app)
+(defun clime-invoke--format-value (option &optional _app)
   "Format the display value for OPTION from the values map.
 APP is the root app (for env var resolution)."
   (let* ((name (clime-option-name option))
@@ -552,7 +552,7 @@ APP is the root app (for env var resolution on options)."
           (push (propertize (format "(%s)" long) 'face 'shadow) parts))))
     ;; When no help and no long flag pushed, use name
     (unless parts
-      (push (symbol-name name) parts))
+      (push (symbol-name (clime-param-name option-or-arg)) parts))
     ;; Tail annotations (appended after help text)
     (let ((annotations '()))
       ;; Deprecated

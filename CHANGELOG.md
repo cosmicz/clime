@@ -1,69 +1,77 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-04-02
 
-- **Type system**: `:type` now supports a registry-based type system
-  with parameterized and composite types.  Built-in types: `string`,
-  `integer`, `number`, `boolean` (short aliases: `str`, `int`, `num`,
-  `bool`).  Parameterized forms: `(integer :min 1 :max 65535)`,
-  `(number :min 0)`, `(string :match "^[a-z]+$")`.  Composite types:
-  `(member "json" "csv")` for string enums with completion,
-  `(const "off")` for exact match,
-  `(choice (integer :min 1) (const "off"))` for alternatives (first
-  match wins).  User-defined types via `clime-deftype`.  Help and invoke
-  both show resolved type descriptions — e.g., `(integer 1–65535)`.
-  CLI help appends the type hint after help text; invoke prepends it.
-  Redundancy suppression hides the hint when it duplicates choices.  Composite types provide `:choices` for
-  invoke completion automatically.  Invoke cycling for `choice` types
-  prompts for free-form input after exhausting member choices; direct
-  input (`=`) uses non-strict completion.
+### Type system
+
+- **Registry-based types**: `:type` now accepts type specs — symbols
+  or S-expression lists — that resolve via a type registry.  Built-in
+  types: `string`, `integer`, `number`, `boolean`, `json`, `file`,
+  `directory`, `path` (short aliases: `str`, `int`, `num`, `bool`,
+  `dir`).  Parameterized forms support constraints:
+  `(integer :min 1 :max 65535)`, `(string :match "^[a-z]+$")`,
+  `(file :must-exist t)`.  Composite types: `(member "json" "csv")`
+  for string enums with completion, `(const "off")` for exact match,
+  `(choice (integer :min 1) (const "off"))` for union types (first
+  match wins).
+
+- **`clime-deftype`**: define and register custom types.  The macro
+  creates a constructor function and registers it — the type is
+  immediately usable in `:type` specs.
+
+- **Type-aware help and invoke**: CLI help appends the type description
+  after help text — e.g., `(integer 1–65535)`.  Invoke prepends it in
+  the desc column.  Redundancy suppression hides the hint when it
+  duplicates choices.  Composite types provide `:choices` for invoke
+  completion automatically.
 
 - **Breaking: function `:type` removed**: `:type` no longer accepts a
   bare function.  Use `clime-deftype` to register a named type, or use
   `:coerce` for ad-hoc transforms.
 
-- **Invoke `:key` slot**: options, arguments, commands, and groups now
-  accept a `:key` keyword to set the preferred single-char key in the
-  `clime-invoke` menu.  When set, `:key` overrides the auto-derived key
-  (flag letter for options, first letter of name for commands).
-  Collisions fall back to the normal auto-assignment algorithm.
+### Invoke
 
-- **Invoke `:ask` and `:immediate` keywords**: `clime-invoke` now
-  accepts `:ask` and `:immediate` keyword arguments for pre-menu
-  prompting and immediate execution.  `:ask t` prompts for all
-  required params via minibuffer before showing the menu; `:ask
-  '(param ...)` prompts for specific params.  `:immediate t` runs
-  the handler directly after prompting if all requirements are
-  satisfied, bypassing the menu entirely — enabling `clime-invoke`
-  as a drop-in for interactive Emacs commands.  When all params are
-  pre-filled, confirms via `y-or-n-p`.  The menu is displayed
-  during the ask phase with live value updates.  Env-provided
-  values are considered when determining which required params need
-  prompting.
+- **`:key` slot**: options, arguments, commands, and groups now accept
+  `:key` to set the preferred single-char key in the `clime-invoke`
+  menu.  Overrides the auto-derived key (flag letter for options, first
+  letter of name for commands).  Collisions fall back to auto-assignment.
 
-- **3-column invoke menu layout**: `clime-invoke` menu reordered from
-  Key|Desc|Value|Env to Key|Value|Desc for easier value scanning.
-  Compact choices format (`json|(csv)|html`), env-derived values
-  (`($=/path)`) in value column, simplified env annotation (`[$VAR]`)
-  in description.  Env+choices integration shows `($=val)` for
-  env-provided choices with error face for invalid values.
+- **`:ask` and `:immediate` keywords**: `clime-invoke` accepts `:ask`
+  and `:immediate` for pre-menu prompting and immediate execution.
+  `:ask t` prompts for all required params via minibuffer before showing
+  the menu; `:ask '(param ...)` prompts for specific params.
+  `:immediate t` runs the handler directly after prompting, bypassing
+  the menu — enabling `clime-invoke` as a drop-in for interactive Emacs
+  commands.  The menu is displayed during the ask phase with live value
+  updates.
 
-- **`:optional` keyword**: `clime-arg` and `clime-opt` now accept
-  `:optional` as the inverse of `:required`.  Bare `:optional` or
-  `:optional t` sets `:required nil`; `:optional nil` sets `:required t`.
-  Mutually exclusive with `:required` (error if both present).
+- **3-column layout**: menu reordered from Key|Desc|Value|Env to
+  Key|Value|Desc for easier value scanning.  Compact choices format
+  (`json|(csv)|html`), env-derived values (`($=/path)`) in value
+  column, env annotation (`[$VAR]`) in description.
 
-- **Values map as single source of truth**: the runtime data carrier for
-  both parse and invoke pipelines is now a values map — an alist of
+- **Desc column annotations**: required, multi, and type hints are
+  prepended to the description — e.g.,
+  `(required) (file existing) The .el file to set up`.
+
+### Features
+
+- **`:optional` keyword**: `clime-arg` and `clime-opt` accept
+  `:optional` as the inverse of `:required`.  Mutually exclusive with
+  `:required` (error if both present).
+
+- **`clime-defopt` templates with `:type`**: parameter templates now
+  support `:type`, with per-instance overrides via `:from`.
+
+### Internal
+
+- **Values map as single source of truth**: the runtime data carrier
+  for both parse and invoke is now a values map — an alist of
   `(NAME :value V :source S)` entries with optional `:error` key.
   Struct slots `:value` and `:source` removed from `clime-param`.
-  `locked-vals` slot removed from `clime-node` (replaced by
-  `value-entries`).  Dynamic vars `clime--building-values` and
-  `clime--parse-values` removed; values map threaded as a local through
-  parse functions.  `clime-app-params` and `clime--derive-params`
-  removed (no production callers).  Conformer errors accumulate in the
-  values map as `:error` entries before signaling a compound error.
-  Node conformer contract: `(values, node) → values`.
+  Dynamic vars `clime--building-values` and `clime--parse-values`
+  removed; values map threaded as a local.  Conformer errors accumulate
+  as `:error` entries before signaling a compound error.
 
 ## 0.5.0 — 2026-03-25
 

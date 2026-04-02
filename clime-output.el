@@ -54,6 +54,12 @@ conventions (nil→null, vectors→arrays, :json-false→false)."
   "Default text output format.  Always-streaming, princ-based.
 Not a CLI option — just a behavior container for text mode.")
 
+;;; ─── Legacy Aliases (must precede defvar of targets) ─────────────────
+
+(defvaralias 'clime--active-output-format 'clime-out--active-format)
+(defvaralias 'clime--output-items 'clime-out--items)
+(defvaralias 'clime--output-errors 'clime-out--errors)
+
 ;;; ─── Dynamic State ────────────────────────────────────────────────────
 
 (defvar clime-out--active-format clime-output-default-format
@@ -167,11 +173,6 @@ Reads items from `clime-out--items' and errors from `clime-out--errors'."
 (make-obsolete 'clime-output-stream 'clime-out-emit "0.5.0")
 (make-obsolete 'clime-output-text 'clime-out-text "0.5.0")
 (make-obsolete 'clime-output-name 'clime-out-format "0.5.0")
-
-;; Private variable aliases (for external code that may reference them)
-(defvaralias 'clime--active-output-format 'clime-out--active-format)
-(defvaralias 'clime--output-items 'clime-out--items)
-(defvaralias 'clime--output-errors 'clime-out--errors)
 
 (provide 'clime-output)
 ;;; clime-output.el ends here

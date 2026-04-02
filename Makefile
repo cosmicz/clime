@@ -47,7 +47,7 @@ test: clean-elc
 tests: test
 
 DIST_DIR ?= dist
-DIST_SRCS = clime-settings.el clime-core.el clime-parse.el \
+DIST_SRCS = clime-settings.el clime-core.el clime-param-type.el clime-parse.el \
 	clime-dsl.el clime-help.el clime-output.el clime-run.el clime.el \
 	clime-make.el
 

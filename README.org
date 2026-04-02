@@ -18,30 +18,32 @@ definition, two surfaces:
 [[file:.github/assets/invoke-menu.png]]
 
 #+begin_src sh
-./clime-make.el quickstart --help
+./bin/clime-make quickstart --help
 #+end_src
 
 #+RESULTS:
 #+begin_example shell
-Usage: clime-make.el quickstart [OPTIONS] <file>
+Usage: clime-make quickstart [OPTIONS] <file>
 
 Scaffold entrypoint + add shebang (scaffold + init)
 
 Arguments:
-  <file>    The .el file to set up
+  <file>    The .el file to set up (file existing)
 
 Options:
   --self-dir                       Add script's own directory to load path (uses
                                    $(dirname "$0") at runtime)
   -L, --load-path VALUE ...        Additional load paths to include in the
-                                   shebang
-  -R, --rel-load-path VALUE ...    Load path relative (to $(dirname "$0"))
-                                   script dir
+                                   shebang (directory) [$CLIME_LOAD_PATH]
+  -R, --rel-load-path VALUE ...    Load path relative to script dir (directory)
+                                   [$CLIME_REL_LOAD_PATH=lib/s.el,lib/foo.el]
   --standalone                     Skip the automatic clime load path (for
                                    vendored/bundled setups)
   -f, --force                      Replace an existing non-clime shebang
   -e, --env VALUE ...              Set environment variable in shebang
                                    (NAME=VALUE)
+  -o, --output VALUE               Write to OUTPUT instead of modifying the
+                                   source file (file)
 #+end_example
 
 * Getting Started
@@ -769,11 +771,12 @@ immediately during pass 1, while env vars are applied in pass 2
 value regardless of source.
 
 - *:type* --- convert the raw string to a typed value.  Accepts a
-  type spec: a symbol (~'integer~, ~'number~, ~'string~, ~'boolean~;
-  short aliases ~'int~, ~'num~, ~'str~, ~'bool~), a parameterized
-  form (~'(integer :min 1 :max 65535)~), or a composite type
-  (~'(member "json" "csv")~, ~'(choice ...)~).  Runs first so that
-  ~:choices~ can compare typed values:
+  type spec: a symbol (~'integer~, ~'number~, ~'string~, ~'boolean~,
+  ~'json~, ~'file~, ~'directory~, ~'path~; short aliases ~'int~,
+  ~'num~, ~'str~, ~'bool~, ~'dir~), a parameterized form
+  (~'(integer :min 1 :max 65535)~, ~'(file :must-exist t)~), or a
+  composite type (~'(member "json" "csv")~, ~'(choice ...)~).  Runs
+  first so that ~:choices~ can compare typed values:
 
   #+begin_src emacs-lisp
   ;; Simple type

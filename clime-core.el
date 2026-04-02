@@ -657,7 +657,6 @@ resolved command copies."
             ;; Apply :vals — lock options with their values
             (dolist (val-entry vals)
               (let* ((name (car val-entry))
-                     (val (cdr val-entry))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
                                       (clime-node-all-options resolved))))
                 (unless opt
