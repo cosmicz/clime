@@ -157,6 +157,13 @@ MIN and MAX, when non-nil, constrain the accepted range."
                    (_ (error "Expected boolean, got \"%s\"" value))))
         :describe "boolean"))
 
+;;; ─── Short Aliases ──────────────────────────────────────────────────────
+
+(clime-register-type 'str #'clime-type--string)
+(clime-register-type 'int #'clime-type--integer)
+(clime-register-type 'num #'clime-type--number)
+(clime-register-type 'bool #'clime-type--boolean)
+
 ;;; ─── Composite Types ────────────────────────────────────────────────────
 
 (clime-deftype member (&rest values)

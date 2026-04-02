@@ -153,6 +153,21 @@ Returns nil for nil and \"string\" types (no annotation needed)."
           (unless (equal desc "string") desc))
       (clime-type-error nil))))
 
+(defun clime--type-describe-redundant-p (type effective-choices)
+  "Return non-nil if TYPE :describe is redundant with EFFECTIVE-CHOICES.
+True when the type's own :choices match EFFECTIVE-CHOICES and
+:describe is just those choices joined with \" | \"."
+  (when (and type effective-choices)
+    (condition-case nil
+        (let* ((resolved (clime-resolve-type type))
+               (desc (plist-get resolved :describe))
+               (type-choices (plist-get resolved :choices)))
+          (and desc type-choices
+               (equal type-choices effective-choices)
+               (equal desc (mapconcat (lambda (v) (format "%s" v))
+                                      type-choices " | "))))
+      (clime-type-error nil))))
+
 (defun clime--effective-choices (param)
   "Return effective choices for PARAM (option or arg).
 Explicit :choices slot wins.  Falls back to type-provided :choices."

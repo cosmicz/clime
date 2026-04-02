@@ -1329,8 +1329,8 @@ Width applies to content; prefix is extra visual indentation."
                 '("t" "cmd"))))
     (should (string-match-p "(integer ≥1 | \"off\")" help))))
 
-(ert-deftest clime-test-help/option-type-hint-member ()
-  "Options with member type show values in type hint."
+(ert-deftest clime-test-help/option-type-hint-member-suppressed ()
+  "Member type suppresses type hint (redundant with choices display)."
   (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
                                   :options (list (clime-make-option :name 'fmt :flags '("--format")
                                                                     :help "Output format"
@@ -1340,27 +1340,34 @@ Width applies to content; prefix is extra visual indentation."
          (help (clime-format-help
                 (cdr (car (clime-group-children app)))
                 '("t" "cmd"))))
-    (should (string-match-p "(json | csv | table)" help))))
+    ;; Type hint suppressed — choices shown instead
+    (should-not (string-match-p "(json | csv | table)" help))
+    (should (string-match-p "choices: json, csv, table" help))))
 
-(ert-deftest clime-test-help/append-type-nil-help ()
-  "clime-help--append-type with nil help returns just the type."
-  (should (equal "(integer)" (clime-help--append-type nil 'integer))))
+(ert-deftest clime-test-help/prepend-type-nil-help ()
+  "clime-help--prepend-type with nil help returns just the type."
+  (should (equal "(integer)" (clime-help--prepend-type nil 'integer nil))))
 
-(ert-deftest clime-test-help/append-type-nil ()
-  "clime-help--append-type returns help-text unchanged for nil type."
-  (should (equal "some help" (clime-help--append-type "some help" nil))))
+(ert-deftest clime-test-help/prepend-type-nil ()
+  "clime-help--prepend-type returns help-text unchanged for nil type."
+  (should (equal "some help" (clime-help--prepend-type "some help" nil nil))))
 
-(ert-deftest clime-test-help/append-type-string ()
-  "clime-help--append-type returns help-text unchanged for string type."
-  (should (equal "some help" (clime-help--append-type "some help" 'string))))
+(ert-deftest clime-test-help/prepend-type-string ()
+  "clime-help--prepend-type returns help-text unchanged for string type."
+  (should (equal "some help" (clime-help--prepend-type "some help" 'string nil))))
 
-(ert-deftest clime-test-help/append-type-integer ()
-  "clime-help--append-type appends (integer) for integer type."
-  (should (equal "some help (integer)" (clime-help--append-type "some help" 'integer))))
+(ert-deftest clime-test-help/prepend-type-integer ()
+  "clime-help--prepend-type prepends (integer) to help text."
+  (should (equal "(integer) some help" (clime-help--prepend-type "some help" 'integer nil))))
 
-(ert-deftest clime-test-help/append-type-empty-help ()
-  "clime-help--append-type with empty help returns just the type."
-  (should (equal "(integer)" (clime-help--append-type "" 'integer))))
+(ert-deftest clime-test-help/prepend-type-empty-help ()
+  "clime-help--prepend-type with empty help returns just the type."
+  (should (equal "(integer)" (clime-help--prepend-type "" 'integer nil))))
+
+(ert-deftest clime-test-help/prepend-type-suppressed-by-redundant-choices ()
+  "clime-help--prepend-type suppresses when redundant with choices."
+  (should (equal "some help"
+                 (clime-help--prepend-type "some help" '(member "a" "b") '("a" "b")))))
 
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

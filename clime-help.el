@@ -154,15 +154,17 @@ CHOICES may be a list or a function returning a list."
       (format "(choices: %s)"
               (mapconcat (lambda (c) (format "%s" c)) resolved ", ")))))
 
-(defun clime-help--append-type (help-text type)
-  "Append type annotation to HELP-TEXT from resolved TYPE.
-Shows the resolved :describe wrapped in parens, e.g. \"(integer 1–100)\"."
-  (let ((desc (clime--type-describe type)))
+(defun clime-help--prepend-type (help-text type effective-choices)
+  "Prepend type annotation to HELP-TEXT from resolved TYPE.
+Shows the resolved :describe wrapped in parens, e.g. \"(integer 1–100)\".
+Suppresses the hint when it would duplicate EFFECTIVE-CHOICES."
+  (let ((desc (and (not (clime--type-describe-redundant-p type effective-choices))
+                   (clime--type-describe type))))
     (if desc
-        (let ((suffix (format "(%s)" desc)))
+        (let ((prefix (format "(%s)" desc)))
           (if (and help-text (not (string-empty-p help-text)))
-              (concat help-text " " suffix)
-            suffix))
+              (concat prefix " " help-text)
+            prefix))
       (or help-text ""))))
 
 (defun clime-help--append-choices (help-text choices)
@@ -220,12 +222,14 @@ When WIDTH is non-nil, help text is wrapped to fit."
     (when visible
       (let ((rows (mapcar
                    (lambda (arg)
-                     (let ((name (format "<%s>" (clime-arg-name arg)))
-                           (help (clime-help--append-choices
-                                  (clime-help--append-type
-                                   (clime-arg-help arg)
-                                   (clime-arg-type arg))
-                                  (clime--effective-choices arg))))
+                     (let* ((name (format "<%s>" (clime-arg-name arg)))
+                            (choices (clime--effective-choices arg))
+                            (help (clime-help--append-choices
+                                   (clime-help--prepend-type
+                                    (clime-arg-help arg)
+                                    (clime-arg-type arg)
+                                    choices)
+                                   choices)))
                        (cons name help)))
                    visible)))
         (concat "Arguments:\n" (clime-help--format-table rows width))))))
@@ -349,19 +353,21 @@ options apply to."
 (defun clime-help--option-row (opt &optional app)
   "Format OPT as a (left . help) table row.
 APP is the root app, used to resolve env var names.
-Pipeline: help → choices → required → env → deprecated."
-  (cons (clime-help--format-option-flags opt)
-        (clime-help--append-deprecated
-         (clime-help--append-env
-          (clime-help--append-required
-           (clime-help--append-choices
-            (clime-help--append-type
-             (clime-option-help opt)
-             (clime-option-type opt))
-            (clime--effective-choices opt))
-           opt)
-          opt app)
-         (clime-option-deprecated opt))))
+Pipeline: type → help → choices → required → env → deprecated."
+  (let ((choices (clime--effective-choices opt)))
+    (cons (clime-help--format-option-flags opt)
+          (clime-help--append-deprecated
+           (clime-help--append-env
+            (clime-help--append-required
+             (clime-help--append-choices
+              (clime-help--prepend-type
+               (clime-option-help opt)
+               (clime-option-type opt)
+               choices)
+              choices)
+             opt)
+            opt app)
+           (clime-option-deprecated opt)))))
 
 (defun clime-help--indent-lines (str prefix)
   "Prepend PREFIX to each line of STR."

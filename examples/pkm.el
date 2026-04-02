@@ -227,16 +227,23 @@
                :help "Script runner to use"
                :type '(member "sh" "bash" "zsh" "node" "python"))
 
+    ;; [29] Choice type — member or integer (named preset or explicit count)
+    (clime-opt concurrency ("--concurrency" "-j")
+      :type '(choice (member "auto" "serial" "cpus") (integer :min 1))
+      :default "auto"
+      :help "Parallelism level")
+
     ;; [25] Choice type — number or "off" (mixed type)
     (clime-opt max-time ("--max-time" "-m")
-               :type '(choice (number :min 0) (const "off"))
-               :help "Maximum execution time in seconds, or \"off\"")
+      :type '(choice (number :min 0) (const "off"))
+      :help "Maximum execution time in seconds, or \"off\"")
 
     (clime-handler (ctx)
-      (clime-let ctx (script args runner max-time)
-        (format "Running script %s%s%s%s"
+      (clime-let ctx (script args runner concurrency max-time)
+        (format "Running script %s%s%s%s%s"
                 script
                 (if runner (format " [runner=%s]" runner) "")
+                (if concurrency (format " [concurrency=%s]" concurrency) "")
                 (if max-time (format " [max-time=%ss]" max-time) "")
                 (if args (format " with args: %s" (string-join args " ")) "")))))
 

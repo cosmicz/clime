@@ -640,5 +640,52 @@
   (let ((opt (clime-make-option :name 'x :flags '("--x") :type 'nonexistent-xyz)))
     (should-not (clime--effective-choices opt))))
 
+;;; ─── Short Aliases ───────────────────────────────────────────────────
+
+(ert-deftest clime-test-types/short-int ()
+  "'int resolves to integer."
+  (let ((plist (clime-resolve-type 'int)))
+    (should (equal "integer" (plist-get plist :describe)))
+    (should (= 42 (funcall (plist-get plist :parse) "42")))))
+
+(ert-deftest clime-test-types/short-int-parameterized ()
+  "(int :min 1) works like (integer :min 1)."
+  (let ((plist (clime-resolve-type '(int :min 1))))
+    (should (equal "integer ≥1" (plist-get plist :describe)))
+    (should-error (funcall (plist-get plist :parse) "0"))))
+
+(ert-deftest clime-test-types/short-num ()
+  "'num resolves to number."
+  (should (= 3.14 (funcall (plist-get (clime-resolve-type 'num) :parse) "3.14"))))
+
+(ert-deftest clime-test-types/short-str ()
+  "'str resolves to string."
+  (should (equal "hello" (funcall (plist-get (clime-resolve-type 'str) :parse) "hello"))))
+
+(ert-deftest clime-test-types/short-bool ()
+  "'bool resolves to boolean."
+  (should (eq t (funcall (plist-get (clime-resolve-type 'bool) :parse) "true"))))
+
+;;; ─── Redundancy Check ───────────────────────────────────────────────
+
+(ert-deftest clime-test-types/redundant-member ()
+  "Member type is redundant with its own choices."
+  (should (clime--type-describe-redundant-p
+           '(member "a" "b") '("a" "b"))))
+
+(ert-deftest clime-test-types/not-redundant-choice ()
+  "Choice type is NOT redundant with its choices."
+  (should-not (clime--type-describe-redundant-p
+               '(choice integer (const "off")) '("off"))))
+
+(ert-deftest clime-test-types/not-redundant-integer ()
+  "Integer type has no choices, not redundant."
+  (should-not (clime--type-describe-redundant-p 'integer nil)))
+
+(ert-deftest clime-test-types/not-redundant-member-with-explicit-choices ()
+  "Member type is not redundant when effective choices differ."
+  (should-not (clime--type-describe-redundant-p
+               '(member "a" "b") '("x" "y"))))
+
 (provide 'clime-param-type-tests)
 ;;; clime-param-type-tests.el ends here

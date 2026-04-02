@@ -435,11 +435,17 @@ When more than 5 choices, truncate around the active choice with ellipsis."
                       (t (propertize (format "%s" c) 'face 'shadow))))
                    visible))
            ;; Append invalid env val if not in choices list
-           (suffix (when (and show-env (not env-in-list))
+           (suffix (cond
+                    ((and show-env (not env-in-list))
                      (concat sep
                              (propertize "($=" 'face 'shadow)
                              (propertize (format "%s" env-val) 'face 'clime-invoke-error)
-                             (propertize ")" 'face 'shadow)))))
+                             (propertize ")" 'face 'shadow)))
+                    ;; Append free-form value not in choices (e.g. integer from choice type)
+                    ((and selected (not (member selected choices)))
+                     (concat sep
+                             (propertize (format "%s" selected)
+                                         'face 'clime-invoke-active))))))
       (concat (if prefix-dots (concat (propertize "..." 'face 'shadow) sep) "")
               (string-join parts sep)
               (or suffix "")
@@ -509,6 +515,15 @@ Returns help text with long flag in parens, annotations, and env info.
 APP is the root app (for env var resolution on options)."
   (let* ((help (clime-param-help option-or-arg))
          (parts '()))
+    ;; Type hint — pushed first so it appears first after nreverse
+    (let ((type (if (clime-option-p option-or-arg)
+                    (clime-option-type option-or-arg)
+                  (clime-arg-type option-or-arg))))
+      (when (not (clime--type-describe-redundant-p
+                  type (clime--effective-choices option-or-arg)))
+        (let ((desc (clime--type-describe type)))
+          (when desc
+            (push (propertize (format "(%s)" desc) 'face 'shadow) parts)))))
     ;; Help text or long flag as fallback
     (when help
       (push help parts))
@@ -521,7 +536,7 @@ APP is the root app (for env var resolution on options)."
     ;; When no help and no long flag pushed, use name
     (unless parts
       (push (symbol-name name) parts))
-    ;; Annotations
+    ;; Annotations (appended after help text)
     (let ((annotations '()))
       ;; Required — always show, dimmed when satisfied
       (when (and (clime-param-required option-or-arg)
@@ -537,13 +552,6 @@ APP is the root app (for env var resolution on options)."
       (when (and (clime-option-p option-or-arg)
                  (clime-option-hidden option-or-arg))
         (push (propertize "(hidden)" 'face 'clime-invoke-hidden) annotations))
-      ;; Type hint (non-string)
-      (let ((type (if (clime-option-p option-or-arg)
-                      (clime-option-type option-or-arg)
-                    (clime-arg-type option-or-arg))))
-        (let ((desc (clime--type-describe type)))
-          (when desc
-            (push (propertize (format "(%s)" desc) 'face 'shadow) annotations))))
       ;; Multiple hint
       (when (and (clime-option-p option-or-arg)
                  (clime-option-multiple option-or-arg))
@@ -1085,10 +1093,22 @@ APP is the root app (for env var resolution)."
      ;; Choices
      ((clime--effective-choices option)
       (let* ((choices (clime--effective-choices option))
+             (type (clime-option-type option))
+             (is-choice (and (consp type) (eq (car type) 'choice)))
              (next (clime-invoke--cycle-choice current choices)))
-        (if next
-            (clime-invoke--set-param option next)
-          (clime-invoke--clear-param option))))
+        (cond
+         (next (clime-invoke--set-param option next))
+         ;; choice type: prompt for free-form input after exhausting members
+         (is-choice
+          (let ((val (read-string
+                      (format "%s: " (or (clime-option-help option)
+                                         (symbol-name (clime-option-name option))))
+                      (and current (not (member current choices))
+                           (format "%s" current)))))
+            (if (string-empty-p val)
+                (clime-invoke--clear-param option)
+              (clime-invoke--set-param option val))))
+         (t (clime-invoke--clear-param option)))))
      ;; Multiple
      ((clime-option-multiple option)
       (let* ((choices (clime--effective-choices option))
@@ -1113,10 +1133,12 @@ APP is the root app (for env var resolution)."
   (let* ((name (clime-arg-name arg))
          (current (clime-values-value clime-invoke--values name))
          (choices (clime--effective-choices arg))
+         (type (clime-arg-type arg))
+         (strict (not (and (consp type) (eq (car type) 'choice))))
          (val (if choices
                   (completing-read
                    (format "%s: " (or (clime-arg-help arg) (symbol-name name)))
-                   choices nil t current)
+                   choices nil strict current)
                 (read-string
                  (format "%s: " (or (clime-arg-help arg) (symbol-name name)))
                  current))))
@@ -1130,12 +1152,14 @@ Unlike cycling, this prompts the user for an explicit value."
   (let* ((name (clime-option-name option))
          (current (clime-values-value clime-invoke--values name)))
     (cond
-     ;; Choices: completing-read
+     ;; Choices: completing-read (strict unless type allows free input)
      ((clime--effective-choices option)
       (let* ((choices (clime--effective-choices option))
+             (type (clime-option-type option))
+             (strict (not (and (consp type) (eq (car type) 'choice))))
              (val (completing-read
                    (format "%s: " (or (clime-option-help option) (symbol-name name)))
-                   choices nil t (and current (format "%s" current)))))
+                   choices nil strict (and current (format "%s" current)))))
         (if (string-empty-p val)
             (clime-invoke--clear-param option)
           (clime-invoke--set-param option val))))
