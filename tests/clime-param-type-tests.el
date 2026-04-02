@@ -371,7 +371,7 @@
 (ert-deftest clime-test-types/string-match ()
   "(string :match REGEXP) validates pattern."
   (let ((plist (clime-resolve-type '(string :match "^[a-z]+$"))))
-    (should (string-match-p "matching" (plist-get plist :describe)))
+    (should (equal "string" (plist-get plist :describe)))
     (should (equal "hello" (funcall (plist-get plist :parse) "hello")))
     (should-error (funcall (plist-get plist :parse) "Hello123"))))
 
@@ -788,7 +788,7 @@
   "File :must-exist rejects non-existent path."
   (let* ((plist (clime-resolve-type '(file :must-exist t)))
          (parse (plist-get plist :parse)))
-    (should (equal "file (existing)" (plist-get plist :describe)))
+    (should (equal "file existing" (plist-get plist :describe)))
     (should-error (funcall parse "/tmp/clime-test-nonexistent-file-xyz"))))
 
 (ert-deftest clime-test-type/file-must-exist-accepts-regular-file ()
@@ -837,7 +837,7 @@
   "Directory :must-exist rejects non-existent path."
   (let* ((plist (clime-resolve-type '(directory :must-exist t)))
          (parse (plist-get plist :parse)))
-    (should (equal "directory (existing)" (plist-get plist :describe)))
+    (should (equal "directory existing" (plist-get plist :describe)))
     (should-error (funcall parse "/tmp/clime-test-nonexistent-dir-xyz"))))
 
 (ert-deftest clime-test-type/path-bare ()
@@ -868,7 +868,7 @@
   "Path :must-exist rejects non-existent path."
   (let* ((plist (clime-resolve-type '(path :must-exist t)))
          (parse (plist-get plist :parse)))
-    (should (equal "path (existing)" (plist-get plist :describe)))
+    (should (equal "path existing" (plist-get plist :describe)))
     (should-error (funcall parse "/tmp/clime-test-nonexistent-path-xyz"))))
 
 (ert-deftest clime-test-type/file-in-choice ()

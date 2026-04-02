@@ -732,17 +732,19 @@
 
 (ert-deftest clime-test-invoke/format-value-choices-default-parens ()
   "Default value in choices list shown in parens."
-  (let ((opt (clime-make-option :name 'format :flags '("--format")
-                                 :choices '("json" "text" "csv")
-                                 :default "text")))
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")
+                                  :choices '("json" "text" "csv")
+                                  :default "text"))
+         (clime-invoke--values (clime-values-set '() 'format "text" 'default)))
     (let ((val-str (clime-invoke--format-value opt)))
       ;; Default shown in parens, not highlighted
       (should (string-match-p "(text)" val-str)))))
 
 (ert-deftest clime-test-invoke/format-value-default-no-choices ()
   "Default value without choices shown in parens."
-  (let ((opt (clime-make-option :name 'limit :flags '("--limit")
-                                 :default "10")))
+  (let* ((opt (clime-make-option :name 'limit :flags '("--limit")
+                                  :default "10"))
+         (clime-invoke--values (clime-values-set '() 'limit "10" 'default)))
     (let ((val-str (clime-invoke--format-value opt)))
       (should (string-match-p "(10)" val-str)))))
 
@@ -759,8 +761,9 @@
 
 (ert-deftest clime-test-invoke/format-value-default-no-active-face ()
   "Default value does NOT have clime-invoke-active face."
-  (let ((opt (clime-make-option :name 'limit :flags '("--limit")
-                                 :default "10")))
+  (let* ((opt (clime-make-option :name 'limit :flags '("--limit")
+                                  :default "10"))
+         (clime-invoke--values (clime-values-set '() 'limit "10" 'default)))
     (let ((val-str (clime-invoke--format-value opt)))
       (let ((pos (string-match "10" val-str)))
         (should-not (eq 'clime-invoke-active
@@ -862,6 +865,36 @@
     (let ((desc (clime-invoke--format-desc opt)))
       (should (string-match-p "(multi)" desc)))))
 
+(ert-deftest clime-test-invoke/format-desc-annotation-order ()
+  "Desc column orders: (required) (multi) (type) help (--flag)."
+  (let ((opt (clime-make-option :name 'env :flags '("--env" "-e")
+                                 :required t :multiple t
+                                 :type '(string :match "^[A-Z]+=")
+                                 :help "Set env var")))
+    (let ((desc (clime-invoke--format-desc opt)))
+      ;; required before multi
+      (should (< (string-match-p "(required)" desc)
+                 (string-match-p "(multi)" desc)))
+      ;; multi before help
+      (should (< (string-match-p "(multi)" desc)
+                 (string-match-p "Set env var" desc)))
+      ;; help before long flag
+      (should (< (string-match-p "Set env var" desc)
+                 (string-match-p "(--env)" desc))))))
+
+(ert-deftest clime-test-invoke/format-desc-required-type-help ()
+  "Desc column for required arg: (required) (type) help."
+  (let ((arg (clime-make-arg :name 'file
+                              :type '(file :must-exist t)
+                              :help "The .el file to set up")))
+    (let ((desc (clime-invoke--format-desc arg)))
+      ;; required before type
+      (should (< (string-match-p "(required)" desc)
+                 (string-match-p "(file existing)" desc)))
+      ;; type before help
+      (should (< (string-match-p "(file existing)" desc)
+                 (string-match-p "The .el file" desc))))))
+
 ;;; ─── Format Env ─────────────────────────────────────────────────────
 
 (ert-deftest clime-test-invoke/format-env-with-value ()
@@ -889,12 +922,12 @@
       (should (eq 'shadow (get-text-property 0 'face env-str))))))
 
 (ert-deftest clime-test-invoke/format-value-env-derived ()
-  "Unset option with env var shows ($=value) in value column."
+  "Option with env source shows ($=value) in value column."
   (let* ((opt (clime-make-option :name 'home :flags '("--home")
                                   :env "HOME"))
-         (app (clime-make-app :name "test" :version "1" :children nil))
-         (clime-invoke--values '()))
-    (let ((val-str (clime-invoke--format-value opt app)))
+         (home-val (getenv "HOME"))
+         (clime-invoke--values (clime-values-set '() 'home home-val 'env)))
+    (let ((val-str (clime-invoke--format-value opt)))
       ;; Should show env-derived value with ($=...)
       (should (string-match-p "(\\$=" val-str))
       (should (string-match-p "/" val-str)))))
@@ -2471,7 +2504,7 @@
                                    :options (list opt)))
          (app (clime-make-app :name "test" :version "1"
                                :children `(("run" . ,cmd))))
-         (clime-invoke--values '()))
+         (clime-invoke--values (clime-values-set '() 'home (getenv "HOME") 'env)))
     (setf (clime-node-parent cmd) app)
     (let ((content (clime-invoke--render-to-string cmd nil nil)))
       ;; Find the option line

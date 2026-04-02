@@ -454,8 +454,9 @@ When more than 5 choices, truncate around the active choice with ellipsis."
 (defun clime-invoke--format-value (option &optional app)
   "Format the display value for OPTION from the values map.
 APP is the root app (for env var resolution)."
-  (let* ((val (clime-values-value clime-invoke--values (clime-option-name option)))
-         (default (clime-option-default option)))
+  (let* ((name (clime-option-name option))
+         (val (clime-values-value clime-invoke--values name))
+         (source (clime-values-source clime-invoke--values name)))
     (cond
      ;; Count option
      ((clime-option-count option)
@@ -482,31 +483,38 @@ APP is the root app (for env var resolution)."
      ;; Choices — show all inline
      ((clime--effective-choices option)
       (let* ((choices (clime--effective-choices option))
-             (d (and default (clime--resolve-value default)))
-             (env-name (and app (clime--env-var-for-option option app)))
-             (env-val (and (null val) env-name (getenv env-name)))
-             (env-val (and env-val (not (string-empty-p env-val)) env-val)))
-        (clime-invoke--format-choices choices val d env-val)))
+             (user-val (and (eq source 'user) val))
+             (default-val (and (memq source '(default app)) val))
+             (env-val (and (eq source 'env) val)))
+        (clime-invoke--format-choices choices user-val default-val
+                                      (and env-val (format "%s" env-val)))))
      ;; Multiple
      ((clime-option-multiple option)
-      (if (and val (listp val) val)
-          (string-join (mapcar (lambda (v) (propertize (format "%s" v) 'face 'clime-invoke-active)) val)
-                      ", ")
-        (propertize "(unset)" 'face 'clime-invoke-unset)))
+      (cond
+       ((and (eq source 'user) val (listp val))
+        (string-join (mapcar (lambda (v) (propertize (format "%s" v) 'face 'clime-invoke-active)) val)
+                     ", "))
+       ((and (memq source '(env default)) val)
+        (let* ((vals (if (listp val) val (list val)))
+               (face (if (eq source 'env) 'clime-invoke-default 'clime-invoke-default))
+               (prefix (if (eq source 'env) "($=" "("))
+               (suffix (if (eq source 'env) ")" ")")))
+          (concat (propertize prefix 'face 'shadow)
+                  (string-join (mapcar (lambda (v) (propertize (format "%s" v) 'face face)) vals)
+                               ", ")
+                  (propertize suffix 'face 'shadow))))
+       (t (propertize "(unset)" 'face 'clime-invoke-unset))))
      ;; Plain value
      (t
       (cond
-       (val (propertize (format "%s" val) 'face 'clime-invoke-active))
-       (default
-        (let ((d (clime--resolve-value default)))
-          (propertize (format "(%s)" d) 'face 'clime-invoke-default)))
-       ;; Env-derived: show ($=value) when env provides a value
-       ((let* ((env-name (and app (clime--env-var-for-option option app)))
-               (env-val (and env-name (getenv env-name))))
-          (when (and env-val (not (string-empty-p env-val)))
-            (concat (propertize "($=" 'face 'shadow)
-                    (propertize env-val 'face 'clime-invoke-default)
-                    (propertize ")" 'face 'shadow)))))
+       ((eq source 'user)
+        (propertize (format "%s" val) 'face 'clime-invoke-active))
+       ((eq source 'env)
+        (concat (propertize "($=" 'face 'shadow)
+                (propertize (format "%s" val) 'face 'clime-invoke-default)
+                (propertize ")" 'face 'shadow)))
+       ((memq source '(default app))
+        (propertize (format "(%s)" val) 'face 'clime-invoke-default))
        (t (propertize "(unset)" 'face 'clime-invoke-unset)))))))
 
 (defun clime-invoke--format-desc (option-or-arg &optional app)
@@ -515,8 +523,18 @@ Returns help text with long flag in parens, annotations, and env info.
 APP is the root app (for env var resolution on options)."
   (let* ((help (clime-param-help option-or-arg))
          (parts '()))
-    ;; Type hint — pushed first so it appears first after nreverse
-    ;; Uses compact describe: collapses member/const to "choice"
+    ;; Front annotations — pushed in reverse display order (nreverse later)
+    ;; Required — always show, dimmed when satisfied
+    (when (and (clime-param-required option-or-arg)
+               (not (clime-param-default option-or-arg)))
+      (if (clime-values-source clime-invoke--values (clime-param-name option-or-arg))
+          (push (propertize "(required)" 'face 'shadow) parts)
+        (push (propertize "(required)" 'face 'warning) parts)))
+    ;; Multiple hint
+    (when (and (clime-option-p option-or-arg)
+               (clime-option-multiple option-or-arg))
+      (push (propertize "(multi)" 'face 'shadow) parts))
+    ;; Type hint — uses compact describe: collapses member/const to "choice"
     (let* ((type (if (clime-option-p option-or-arg)
                      (clime-option-type option-or-arg)
                    (clime-arg-type option-or-arg)))
@@ -535,14 +553,8 @@ APP is the root app (for env var resolution on options)."
     ;; When no help and no long flag pushed, use name
     (unless parts
       (push (symbol-name name) parts))
-    ;; Annotations (appended after help text)
+    ;; Tail annotations (appended after help text)
     (let ((annotations '()))
-      ;; Required — always show, dimmed when satisfied
-      (when (and (clime-param-required option-or-arg)
-                 (not (clime-param-default option-or-arg)))
-        (if (clime-values-source clime-invoke--values (clime-param-name option-or-arg))
-            (push (propertize "(required)" 'face 'shadow) annotations)
-          (push (propertize "(required)" 'face 'warning) annotations)))
       ;; Deprecated
       (when (and (clime-option-p option-or-arg)
                  (clime-option-deprecated option-or-arg))
@@ -551,10 +563,6 @@ APP is the root app (for env var resolution on options)."
       (when (and (clime-option-p option-or-arg)
                  (clime-option-hidden option-or-arg))
         (push (propertize "(hidden)" 'face 'clime-invoke-hidden) annotations))
-      ;; Multiple hint
-      (when (and (clime-option-p option-or-arg)
-                 (clime-option-multiple option-or-arg))
-        (push (propertize "(multi)" 'face 'shadow) annotations))
       ;; Env var info (options only)
       (when (clime-option-p option-or-arg)
         (let ((env-str (clime-invoke--format-env option-or-arg app)))
@@ -644,7 +652,7 @@ Reads from `clime-invoke--values' for all value lookups."
 
 ;;; ─── Value Column Width ─────────────────────────────────────────
 
-(defconst clime-invoke--max-value-width 15
+(defconst clime-invoke--max-value-width 20
   "Maximum width for the value column in the 3-column layout.")
 
 (defun clime-invoke--compute-value-width (options args &optional app)
@@ -914,10 +922,16 @@ Extracts the letter from \"- v\" and prepends PREFIX (e.g. \"=v\")."
     key))
 
 (defun clime-invoke--pad-to (str width)
-  "Pad STR with spaces to WIDTH characters."
-  (if (>= (length str) width)
-      str
-    (concat str (make-string (- width (length str)) ?\s))))
+  "Center STR within WIDTH characters, padding with spaces."
+  (let ((len (length str)))
+    (if (>= len width)
+        str
+      (let* ((total-pad (- width len))
+             (left-pad (/ total-pad 2))
+             (right-pad (- total-pad left-pad)))
+        (concat (make-string left-pad ?\s)
+                str
+                (make-string right-pad ?\s))))))
 
 (defun clime-invoke--render (node key-map error-msg buffer
                                   &optional at-root validation-result
@@ -939,15 +953,20 @@ PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active."
 
 ;;; ─── Option Interaction ─────────────────────────────────────────────
 
-(defun clime-invoke--seed-values (tree params)
+(defun clime-invoke--seed-values (tree params &optional app)
   "Build initial values map from TREE's value-entries and PARAMS plist.
 Walks all nodes collecting value-entries (alias :vals with source `app'),
-then merges user-provided PARAMS on top.  Sets `clime-invoke--values'."
+then merges user-provided PARAMS on top, then applies env vars and
+defaults via `clime--apply-env' and `clime--apply-defaults'.
+APP is the root app (for :env-prefix resolution).
+Sets `clime-invoke--values'."
   (let ((values '())
+        (all-nodes '())
         (work (list tree)))
     ;; Collect value-entries from all nodes (locked alias vals)
     (while work
       (let ((node (pop work)))
+        (push node all-nodes)
         (dolist (entry (clime-node-value-entries node))
           (setq values (clime-values-set values (car entry)
                                          (plist-get (cdr entry) :value)
@@ -958,6 +977,10 @@ then merges user-provided PARAMS on top.  Sets `clime-invoke--values'."
     ;; Merge user-provided params on top
     (cl-loop for (k v) on params by #'cddr
              do (setq values (clime-values-set values k v 'user)))
+    ;; Apply env vars and defaults (same as parser)
+    (when app
+      (setq values (clime--apply-env all-nodes values app)))
+    (setq values (clime--apply-defaults all-nodes values))
     (setq clime-invoke--values values)))
 
 (defun clime-invoke--param-satisfied-p (param app)
@@ -1434,7 +1457,7 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
   (let ((tree (clime--prepare-tree app)))
     ;; Build initial values map from tree value-entries and user params
     (let ((clime-invoke--values nil))
-      (clime-invoke--seed-values tree params)
+      (clime-invoke--seed-values tree params app)
       ;; Navigate to starting node
       (let ((node tree)
             (nav-path '()))

@@ -107,7 +107,7 @@ When MATCH is non-nil, validates that the value matches the regexp."
                      (unless (string-match-p match value)
                        (error "Value \"%s\" does not match %s" value match))
                      value)
-            :describe (format "string (matching %s)" match))
+            :describe "string")
     (list :parse #'identity :describe "string")))
 
 (clime-deftype integer (&key min max)
@@ -184,7 +184,7 @@ When MUST-EXIST is non-nil, validates that the path is an existing regular file.
                      (unless (file-regular-p expanded)
                        (error "File does not exist: %s" expanded)))
                    expanded))
-        :describe (if must-exist "file (existing)" "file")))
+        :describe (if must-exist "file existing" "file")))
 
 (clime-deftype directory (&key must-exist)
   "Directory path type, optionally requiring existence.
@@ -195,7 +195,7 @@ When MUST-EXIST is non-nil, validates that the path is an existing directory."
                      (unless (file-directory-p expanded)
                        (error "Directory does not exist: %s" expanded)))
                    expanded))
-        :describe (if must-exist "directory (existing)" "directory")))
+        :describe (if must-exist "directory existing" "directory")))
 
 (clime-register-type 'dir #'clime-type--directory)
 
@@ -208,7 +208,7 @@ When MUST-EXIST is non-nil, validates that the path exists."
                      (unless (file-exists-p expanded)
                        (error "Path does not exist: %s" expanded)))
                    expanded))
-        :describe (if must-exist "path (existing)" "path")))
+        :describe (if must-exist "path existing" "path")))
 
 ;;; ─── Composite Types ────────────────────────────────────────────────────
 
