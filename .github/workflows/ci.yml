@@ -30,8 +30,5 @@ jobs:
       - name: Dist
         run: make dist
 
-      - name: Init (shebangs for integration tests)
-        run: make init
-
       - name: Test
         run: make test
