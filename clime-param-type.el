@@ -157,6 +157,15 @@ MIN and MAX, when non-nil, constrain the accepted range."
                    (_ (error "Expected boolean, got \"%s\"" value))))
         :describe "boolean"))
 
+(clime-deftype json ()
+  "JSON parser — parse a JSON string to an Elisp value."
+  (list :parse (lambda (value)
+                 (condition-case err
+                     (json-parse-string value :object-type 'alist :null-object nil)
+                   (json-parse-error
+                    (error "Invalid JSON: %s" (error-message-string err)))))
+        :describe "json"))
+
 ;;; ─── Short Aliases ──────────────────────────────────────────────────────
 
 (clime-register-type 'str #'clime-type--string)

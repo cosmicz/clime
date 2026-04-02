@@ -733,6 +733,41 @@
   (should-not (clime--type-describe-compact
                '(choice (member "a" "b") (string)))))
 
+;;; ─── JSON Type ──────────────────────────────────────────────────────
+
+(ert-deftest clime-test-type/json-bare ()
+  "JSON type resolves with :describe \"json\"."
+  (let ((plist (clime-resolve-type 'json)))
+    (should (clime-type-plist-p plist))
+    (should (equal "json" (plist-get plist :describe)))))
+
+(ert-deftest clime-test-type/json-parses-object ()
+  "JSON type parses an object string to alist."
+  (let* ((plist (clime-resolve-type 'json))
+         (parse (plist-get plist :parse))
+         (result (funcall parse "{\"key\": \"value\"}")))
+    (should (equal '((key . "value")) result))))
+
+(ert-deftest clime-test-type/json-parses-array ()
+  "JSON type parses an array string."
+  (let* ((plist (clime-resolve-type 'json))
+         (parse (plist-get plist :parse))
+         (result (funcall parse "[1, 2, 3]")))
+    (should (equal [1 2 3] result))))
+
+(ert-deftest clime-test-type/json-parses-scalar ()
+  "JSON type parses scalar values."
+  (let ((parse (plist-get (clime-resolve-type 'json) :parse)))
+    (should (equal 42 (funcall parse "42")))
+    (should (equal "hello" (funcall parse "\"hello\"")))
+    (should (equal t (funcall parse "true")))
+    (should (equal nil (funcall parse "null")))))
+
+(ert-deftest clime-test-type/json-rejects-invalid ()
+  "JSON type rejects malformed JSON."
+  (let ((parse (plist-get (clime-resolve-type 'json) :parse)))
+    (should-error (funcall parse "{bad json}"))))
+
 ;;; ─── File/Directory/Path Types ──────────────────────────────────────
 
 (ert-deftest clime-test-type/file-bare ()
