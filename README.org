@@ -17,12 +17,10 @@ definition, two surfaces:
 
 [[file:.github/assets/invoke-menu.png]]
 
-#+begin_src sh
-./bin/clime-make quickstart --help
-#+end_src
+And from the command line:
 
-#+RESULTS:
-#+begin_example shell
+#+begin_example sh
+> ./bin/clime-make quickstart --help
 Usage: clime-make quickstart [OPTIONS] <file>
 
 Scaffold entrypoint + add shebang (scaffold + init)
