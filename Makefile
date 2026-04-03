@@ -59,6 +59,12 @@ dist:
 	@$(CLIME_MAKE) init --standalone --env CLIME_MAIN_APP=clime \
 		$(DIST_DIR)/clime.el
 
+# ── Init shebangs on source files (for integration tests) ─────────
+init: dist
+	@./$(DIST_DIR)/clime.el init clime-make.el
+	@./clime-make.el quickstart examples/greeter.el -R ..
+	@./clime-make.el quickstart examples/pkm.el -R ..
+
 # ── Local executables (gitignored) ─────────────────────────────────
 BIN_DIR := bin
 
