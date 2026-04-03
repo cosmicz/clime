@@ -213,7 +213,8 @@ Does NOT call `kill-emacs'.  Returns nil."
          (err-msgs nil)
          (exit-code
           (let ((standard-output out-buf)
-                (inhibit-message t))
+                (inhibit-message t)
+                (debug-on-error nil))
             (cl-letf (((symbol-function 'message)
                        (lambda (fmt &rest margs)
                          (push (apply #'format fmt margs) err-msgs))))
