@@ -23,6 +23,18 @@
     (file-name-directory (or load-file-name buffer-file-name))))
   "Root directory of the clime project.")
 
+(defvar clime-test--clime-make
+  (expand-file-name "bin/clime-make" clime-test--project-root)
+  "Path to the clime-make executable (built by `make bin/clime-make').")
+
+(defvar clime-test--pkm
+  (expand-file-name "bin/pkm" clime-test--project-root)
+  "Path to the pkm example executable (built by `make bin/pkm').")
+
+(defvar clime-test--greeter
+  (expand-file-name "bin/greeter" clime-test--project-root)
+  "Path to the greeter example executable (built by `make bin/greeter').")
+
 (defun clime-test--run-script (script-path args &optional env)
   "Run SCRIPT-PATH with ARGS as a subprocess, returning (EXIT . OUTPUT).
 ENV is an optional alist of (NAME . VALUE) pairs to add to the
@@ -30,7 +42,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 \(run `make init' to set up shebangs)."
   (unless (file-executable-p script-path)
     (signal 'ert-test-skipped
-            (list (format "%s not executable (run make init)" script-path))))
+            (list (format "%s not executable (run make bins)" script-path))))
   (let* ((process-environment
           (append (mapcar (lambda (e) (format "%s=%s" (car e) (cdr e)))
                           env)
@@ -99,7 +111,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-adds-shebang ()
   "clime-make.el init adds a working shebang to an .el file."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      ;; Init it
@@ -118,7 +130,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-standalone ()
   "clime-make.el init --standalone skips the automatic clime load path."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      (clime-test--run-script clime-make (list "init" "--standalone" app-file))
@@ -131,7 +143,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-env ()
   "clime-make.el init --env injects environment variables into shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      (clime-test--run-script clime-make
@@ -147,7 +159,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-includes-version-tag ()
   "clime-make.el init embeds a clime:VERSION tag in the shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      (clime-test--run-script clime-make (list "init" app-file))
@@ -160,7 +172,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-updates-clime-shebang ()
   "clime-make.el init replaces an existing clime-tagged shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      ;; First init
@@ -177,7 +189,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-skips-same-version-shebang ()
   "clime-make.el init is idempotent: re-running on same version preserves content."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      ;; First init
@@ -195,7 +207,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-rejects-newer-shebang-version ()
   "clime-make.el init refuses to downgrade a newer shebang version."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      ;; Manually prepend a future-version shebang
@@ -216,7 +228,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-updates-legacy-shebang ()
   "clime-make.el init detects and replaces a legacy clime:X.Y.Z shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      ;; Manually prepend a legacy-format shebang
@@ -240,7 +252,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-update-changes-options ()
   "clime-make.el init update replaces shebang with new options."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      ;; First init without env
@@ -261,7 +273,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-rejects-non-clime-shebang ()
   "clime-make.el init errors on a file with a non-clime shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      ;; Manually prepend a non-clime shebang
@@ -279,7 +291,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-force-replaces-non-clime-shebang ()
   "clime-make.el init --force replaces a non-clime shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      ;; Manually add a non-clime shebang
@@ -303,7 +315,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 
 (ert-deftest clime-test-integration/init-rejects-missing-file ()
   "clime-make.el init errors on a nonexistent file."
-  (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+  (let* ((clime-make clime-test--clime-make)
          (result (clime-test--run-script
                   clime-make (list "init" "/tmp/does-not-exist.el"))))
     (should (= 2 (car result)))
@@ -312,7 +324,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-usage-shows-exe-name ()
   "Usage output shows the executable filename, not the DSL symbol."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           ;; Name the file differently from the DSL symbol (test-app)
           (app-file (expand-file-name "my-tool.el")))
      (clime-test--write-app-source app-file)
@@ -326,19 +338,19 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-rejects-unsafe-env ()
   "clime-make.el init rejects env values with shell metacharacters."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-source app-file)
      (let ((result (clime-test--run-script
                     clime-make
                     (list "init" "--env" "FOO=$(rm -rf /)" app-file))))
        (should (= 2 (car result)))
-       (should (string-match-p "invalid --env" (cdr result)))))))
+       (should (string-match-p "does not match.*--env" (cdr result)))))))
 
 (ert-deftest clime-test-integration/init-lexical-binding ()
   "Scripts generated by clime init run with lexical-binding enabled."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-closure.el")))
      ;; Write an app that uses a closure to prove lexical binding
      (with-temp-file app-file
@@ -378,7 +390,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-self-dir-resolves-symlinks ()
   "init --self-dir resolves symlinks so sibling files are found."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-dir (expand-file-name "app/"))
           (link-dir (expand-file-name "links/")))
      (make-directory app-dir t)
@@ -418,7 +430,7 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
 (ert-deftest clime-test-integration/init-rel-load-path-resolves-symlinks ()
   "init -R resolves symlinks so relative paths work through symlinks."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (project-dir (expand-file-name "project/"))
           (lib-dir (expand-file-name "project/lib/"))
           (bin-dir (expand-file-name "project/bin/"))
@@ -480,7 +492,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/scaffold-inserts-entrypoint ()
   "scaffold adds ;;; Entrypoint: section with guard and run-batch."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (let ((result (clime-test--run-script clime-make
@@ -501,7 +513,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/scaffold-uses-provide-over-app-symbol ()
   "scaffold uses (provide 'FEATURE) for the guard, not the clime-app symbol."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "mycli.el")))
      ;; App symbol is 'mycli-app' but provide is 'mycli'
      (with-temp-file app-file
@@ -525,7 +537,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/scaffold-falls-back-to-app-symbol ()
   "scaffold falls back to clime-app symbol when no (provide) form exists."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      ;; App with no (provide) form
      (with-temp-file app-file
@@ -547,7 +559,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/scaffold-skips-when-present ()
   "scaffold skips when ;;; Entrypoint: already exists."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      ;; Write app WITH an existing entrypoint
      (with-temp-file app-file
@@ -575,7 +587,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/scaffold-errors-without-clime-app ()
   "scaffold errors when no clime-app form is found."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "plain.el")))
      (with-temp-file app-file
        (insert ";;; plain.el --- test  -*- lexical-binding: t; -*-\n"
@@ -591,7 +603,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/scaffold-appends-without-ends-here ()
   "scaffold appends entrypoint at end when no ;;; ... ends here marker."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      ;; App without ends-here marker
      (with-temp-file app-file
@@ -616,7 +628,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/quickstart-scaffolds-and-inits ()
   "quickstart composes scaffold + init: adds entrypoint and shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (let ((result (clime-test--run-script clime-make
@@ -637,7 +649,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/quickstart-auto-clime-main-app ()
   "quickstart auto-adds CLIME_MAIN_APP env var to the shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (clime-test--run-script clime-make (list "quickstart" app-file))
@@ -650,7 +662,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/quickstart-explicit-env-overrides-auto ()
   "Explicit -e CLIME_MAIN_APP=custom wins over quickstart's auto-detection."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (clime-test--run-script clime-make
@@ -665,7 +677,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/quickstart-forwards-init-flags ()
   "quickstart forwards flags like --self-dir and -e to init."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (let ((result (clime-test--run-script
@@ -685,7 +697,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/quickstart-works-end-to-end ()
   "quickstart produces a file that runs correctly as a script."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el")))
      (clime-test--write-app-with-provide app-file)
      (let ((result (clime-test--run-script clime-make
@@ -701,7 +713,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/init-output-copies-to-target ()
   "init -o writes shebang to output file, leaving source untouched."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el"))
           (out-file (expand-file-name "out/test-app.el")))
      (clime-test--write-app-source app-file)
@@ -727,7 +739,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/init-output-creates-directories ()
   "init -o creates parent directories for the output file."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el"))
           (out-file (expand-file-name "deep/nested/dir/app.el")))
      (clime-test--write-app-source app-file)
@@ -739,7 +751,7 @@ The app has a `clime-app' form and `provide' but no `;;; Entrypoint:' section."
 (ert-deftest clime-test-integration/quickstart-output-copies-to-target ()
   "quickstart -o scaffolds+inits to output file, leaving source untouched."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-app.el"))
           (out-file (expand-file-name "out/test-app.el")))
      (clime-test--write-app-with-provide app-file)
@@ -783,7 +795,7 @@ FEATURE is the provide symbol, CODE is the body between markers."
 (ert-deftest clime-test-integration/bundle-basic ()
   "clime bundle concatenates multiple source files into one."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "bundle.el")))
      ;; Write two source modules
      (clime-test--write-module "core.el" 'mycore
@@ -817,7 +829,7 @@ FEATURE is the provide symbol, CODE is the body between markers."
   "clime bundle errors when source has (clime-run-batch ...) in library section.
 Users must move it below ;;; Entrypoint: marker."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "bundle.el")))
      (clime-test--write-module "app.el" 'myapp
                                "(defvar myapp nil)\n(clime-run-batch myapp)")
@@ -831,7 +843,7 @@ Users must move it below ;;; Entrypoint: marker."
 (ert-deftest clime-test-integration/bundle-main-guard ()
   "clime bundle --main FILE adds guarded entry point from file."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "bundle.el")))
      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
      ;; Main file — plain script, no ;;; Entrypoint: marker
@@ -857,7 +869,7 @@ Users must move it below ;;; Entrypoint: marker."
 (ert-deftest clime-test-integration/bundle-provide-defaults-to-filename ()
   "clime bundle defaults --provide to the output filename sans extension."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "mything.el")))
      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
      (let ((result (clime-test--run-script
@@ -872,7 +884,7 @@ Users must move it below ;;; Entrypoint: marker."
 (ert-deftest clime-test-integration/bundle-description ()
   "clime bundle --description sets the file header line."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "bundle.el")))
      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
      (let ((result (clime-test--run-script
@@ -888,7 +900,7 @@ Users must move it below ;;; Entrypoint: marker."
 (ert-deftest clime-test-integration/bundle-rejects-missing-main ()
   "clime bundle --main errors when the main file doesn't exist."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "bundle.el")))
      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
      (let ((result (clime-test--run-script
@@ -902,7 +914,7 @@ Users must move it below ;;; Entrypoint: marker."
 (ert-deftest clime-test-integration/bundle-rejects-main-with-entry-marker ()
   "clime bundle --main rejects files that contain ;;; Entrypoint: marker."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "bundle.el")))
      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
      (clime-test--write-module-with-entry "bad-main.el" 'myapp
@@ -918,7 +930,7 @@ Users must move it below ;;; Entrypoint: marker."
 
 (ert-deftest clime-test-integration/bundle-rejects-missing-source ()
   "clime bundle errors when a source file doesn't exist."
-  (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+  (let* ((clime-make clime-test--clime-make)
          (result (clime-test--run-script
                   clime-make
                   (list "bundle" "-o" "/tmp/out.el"
@@ -929,7 +941,7 @@ Users must move it below ;;; Entrypoint: marker."
 (ert-deftest clime-test-integration/bundle-rejects-missing-markers ()
   "clime bundle errors when a source file lacks ;;; Code: markers."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "bundle.el"))
          (bad-file (expand-file-name "bad.el")))
      (with-temp-file bad-file
@@ -943,7 +955,7 @@ Users must move it below ;;; Entrypoint: marker."
 (ert-deftest clime-test-integration/bundle-creates-output-dir ()
   "clime bundle creates the output directory if it doesn't exist."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "sub/dir/bundle.el")))
      (clime-test--write-module "app.el" 'myapp "(defvar myapp nil)")
      (let ((result (clime-test--run-script
@@ -973,7 +985,7 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
 (ert-deftest clime-test-integration/bundle-strips-entry-section ()
   "clime bundle strips ;;; Entrypoint: section from source files."
   (clime-test-with-temp-dir
-   (let ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let ((clime-make clime-test--clime-make)
          (out (expand-file-name "bundle.el")))
      (clime-test--write-module-with-entry "app.el" 'myapp
                                           "(defvar myapp nil)"
@@ -995,7 +1007,7 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
 
 (ert-deftest clime-test-integration/pkm-example ()
   "The pkm example app runs end-to-end."
-  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+  (let* ((pkm clime-test--pkm)
          (result (clime-test--run-script pkm '("install" "foo" "--tag" "dev"))))
     (should (= 0 (car result)))
     (should (string-match-p "Installing foo" (cdr result)))
@@ -1003,14 +1015,14 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
 
 (ert-deftest clime-test-integration/pkm-invalid-sort-choice ()
   "pkm list --sort with invalid choice reports a usage error."
-  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+  (let* ((pkm clime-test--pkm)
          (result (clime-test--run-script pkm '("list" "--sort" "invalid"))))
     (should (= 2 (car result)))
     (should (string-match-p "Invalid value" (cdr result)))))
 
 (ert-deftest clime-test-integration/pkm-mutex-table-csv ()
   "pkm list --table --csv reports mutual exclusion error."
-  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+  (let* ((pkm clime-test--pkm)
          (result (clime-test--run-script pkm '("list" "--table" "--csv"))))
     (should (= 2 (car result)))
     (should (string-match-p "mutually exclusive\\|cannot be used together\\|only one"
@@ -1018,21 +1030,21 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
 
 (ert-deftest clime-test-integration/pkm-missing-required-arg ()
   "pkm install without package name reports a usage error."
-  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+  (let* ((pkm clime-test--pkm)
          (result (clime-test--run-script pkm '("install"))))
     (should (= 2 (car result)))
     (should (string-match-p "required\\|missing" (cdr result)))))
 
 (ert-deftest clime-test-integration/pkm-valid-sort-choice ()
   "pkm list --sort date succeeds."
-  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+  (let* ((pkm clime-test--pkm)
          (result (clime-test--run-script pkm '("list" "--sort" "date"))))
     (should (= 0 (car result)))
     (should (string-match-p "sort=date" (cdr result)))))
 
 (ert-deftest clime-test-integration/pkm-negatable-color ()
   "pkm list --no-color reports color=off."
-  (let* ((pkm (expand-file-name "examples/pkm.el" clime-test--project-root))
+  (let* ((pkm clime-test--pkm)
          (result (clime-test--run-script pkm '("list" "--no-color"))))
     (should (= 0 (car result)))
     (should (string-match-p "color=nil" (cdr result)))))
@@ -1062,7 +1074,7 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
 (ert-deftest clime-test-integration/init-client-generates-wrapper ()
   "init --client --output generates a bash wrapper, not a shebang."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-client.el"))
           (out-file (expand-file-name "test-client")))
      (clime-test--write-client-app-source app-file)
@@ -1081,7 +1093,7 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
 (ert-deftest clime-test-integration/init-client-wrapper-structure ()
   "init --client wrapper has required IPC protocol elements."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-client.el"))
           (out-file (expand-file-name "test-client")))
      (clime-test--write-client-app-source app-file)
@@ -1114,7 +1126,7 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
 (ert-deftest clime-test-integration/init-client-output-note ()
   "init --client --output reports the target file path."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-client.el"))
           (out-file (expand-file-name "test-client-bin")))
      (clime-test--write-client-app-source app-file)
@@ -1127,7 +1139,7 @@ ENTRY-CODE is the entrypoint body after the Entrypoint marker."
 (ert-deftest clime-test-integration/init-client-requires-output ()
   "init --client without --output is a usage error."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-client.el")))
      (clime-test--write-client-app-source app-file)
      (let ((result (clime-test--run-script
@@ -1161,7 +1173,7 @@ The polyglot shebang uses `\":\"' which is valid Elisp (a string no-op),
 so (load ...) handles it correctly.  This verifies that clime-run-client
 can load app files that also have a batch shebang from `make init'."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-client.el")))
      (clime-test--write-client-app-source app-file)
      ;; Add a batch shebang (simulates `make init` running on the file)
@@ -1186,7 +1198,7 @@ can load app files that also have a batch shebang from `make init'."
 (ert-deftest clime-test-integration/init-client-no-overwrite ()
   "init --client refuses to overwrite an existing wrapper without --force."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "test-client.el"))
           (out-file (expand-file-name "test-client")))
      (clime-test--write-client-app-source app-file)
@@ -1208,7 +1220,7 @@ can load app files that also have a batch shebang from `make init'."
 (ert-deftest clime-test-integration/init-client-detects-app-symbol ()
   "init --client errors when source has no clime-app form."
   (clime-test-with-temp-dir
-   (let* ((clime-make (expand-file-name "clime-make.el" clime-test--project-root))
+   (let* ((clime-make clime-test--clime-make)
           (app-file (expand-file-name "plain.el"))
           (out-file (expand-file-name "plain")))
      (with-temp-file app-file
@@ -1228,7 +1240,7 @@ can load app files that also have a batch shebang from `make init'."
 (ert-deftest clime-test-integration/greeter-parens-balanced ()
   "examples/greeter.el has balanced parentheses.
 Catches the extra-paren bug that caused Invalid read syntax at runtime."
-  (let ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+  (let ((greeter clime-test--greeter))
     (with-temp-buffer
       (insert-file-contents greeter)
       (emacs-lisp-mode)
@@ -1238,7 +1250,7 @@ Catches the extra-paren bug that caused Invalid read syntax at runtime."
 
 (ert-deftest clime-test-integration/greeter-loadable ()
   "examples/greeter.el loads without errors in a fresh Emacs."
-  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root))
+  (let* ((greeter clime-test--greeter)
          (buf (generate-new-buffer " *clime-test-greeter*"))
          (exit-code
           (call-process "emacs" nil buf nil
@@ -1253,7 +1265,7 @@ Catches the extra-paren bug that caused Invalid read syntax at runtime."
 
 (ert-deftest clime-test-integration/greeter-batch-hello ()
   "examples/greeter.el runs hello command in batch mode."
-  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+  (let* ((greeter clime-test--greeter))
     (skip-unless (file-executable-p greeter))
     (let ((result (clime-test--run-script greeter '("hello" "World"))))
       (should (= 0 (car result)))
@@ -1261,7 +1273,7 @@ Catches the extra-paren bug that caused Invalid read syntax at runtime."
 
 (ert-deftest clime-test-integration/greeter-batch-hello-shout ()
   "examples/greeter.el hello --shout uppercases output."
-  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+  (let* ((greeter clime-test--greeter))
     (skip-unless (file-executable-p greeter))
     (let ((result (clime-test--run-script greeter '("hello" "World" "--shout"))))
       (should (= 0 (car result)))
@@ -1269,7 +1281,7 @@ Catches the extra-paren bug that caused Invalid read syntax at runtime."
 
 (ert-deftest clime-test-integration/greeter-batch-hello-json ()
   "examples/greeter.el hello --json outputs JSON."
-  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+  (let* ((greeter clime-test--greeter))
     (skip-unless (file-executable-p greeter))
     (let ((result (clime-test--run-script greeter '("--json" "hello" "World"))))
       (should (= 0 (car result)))
@@ -1278,7 +1290,7 @@ Catches the extra-paren bug that caused Invalid read syntax at runtime."
 
 (ert-deftest clime-test-integration/greeter-batch-fortune ()
   "examples/greeter.el fortune returns a non-empty string."
-  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+  (let* ((greeter clime-test--greeter))
     (skip-unless (file-executable-p greeter))
     (let ((result (clime-test--run-script greeter '("fortune"))))
       (should (= 0 (car result)))
@@ -1286,7 +1298,7 @@ Catches the extra-paren bug that caused Invalid read syntax at runtime."
 
 (ert-deftest clime-test-integration/greeter-batch-help ()
   "examples/greeter.el --help shows available commands."
-  (let* ((greeter (expand-file-name "examples/greeter.el" clime-test--project-root)))
+  (let* ((greeter clime-test--greeter))
     (skip-unless (file-executable-p greeter))
     (let ((result (clime-test--run-script greeter '("--help"))))
       (should (= 0 (car result)))

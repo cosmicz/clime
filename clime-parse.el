@@ -541,8 +541,15 @@ This enables a setup hook to run between passes."
                     (setq values (nth 0 consumed)
                           i (nth 1 consumed)
                           option-parsing (nth 2 consumed))
-                  ;; Not a known option: collect as rest value
-                  (push (clime--resolve-stdin-value tok) rest-values)
+                  ;; Not a known option: coerce and collect as rest value
+                  (let ((raw (clime--resolve-stdin-value tok)))
+                    (push (clime--transform-value
+                           raw
+                           (clime-arg-type arg-spec)
+                           (clime-arg-choices arg-spec)
+                           (clime-arg-coerce arg-spec)
+                           (format "<%s>" (clime-arg-name arg-spec)))
+                          rest-values))
                   (cl-incf i))))
             (let ((val (nreverse rest-values))
                   (name (clime-arg-name arg-spec)))

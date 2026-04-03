@@ -27,10 +27,6 @@
 
 (require 'clime)
 
-(defvar clime-make--self-path
-  (and load-file-name (file-truename load-file-name))
-  "Absolute path to this file, resolved through symlinks.")
-
 ;;; ─── Helpers ────────────────────────────────────────────────────────────
 
 (defconst clime-make--env-var-re
@@ -331,7 +327,7 @@ CTX is the clime context."
   (clime-let ctx (file output (extras extra-load-path)
                        (rels rel-load-path) self-dir standalone force env
                        client)
-    (let* ((clime-dir (file-name-directory clime-make--self-path))
+    (let* ((clime-dir (file-name-directory (locate-library "clime")))
            (source file)
            (target (or output source)))
       (let ((result
@@ -622,7 +618,7 @@ CTX is the clime context."
     (clime-opt self-dir ("--self-dir") :from make-self-dir)
 
     (clime-opt extra-load-path ("--load-path" "-L") :from make-load-path :type 'dir)
-    (clime-opt rel-load-path ("--rel-load-path" "-R") :from make-rel-load-path :type 'dir)
+    (clime-opt rel-load-path ("--rel-load-path" "-R") :from make-rel-load-path)
     (clime-opt standalone ("--standalone") :from make-standalone)
     (clime-opt force ("--force" "-f") :from make-force)
     (clime-opt env ("--env" "-e") :from make-env)

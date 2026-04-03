@@ -30,8 +30,8 @@ jobs:
       - name: Dist
         run: make dist
 
-      - name: Init (shebangs for integration tests)
-        run: make init
+      - name: Build executables (for integration tests)
+        run: make bin/clime-make bin/greeter bin/pkm
 
       - name: Test
         run: make test

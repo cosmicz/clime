@@ -59,12 +59,6 @@ dist:
 	@$(CLIME_MAKE) init --standalone --env CLIME_MAIN_APP=clime \
 		$(DIST_DIR)/clime.el
 
-# ── Init shebangs on source files (for integration tests) ─────────
-init: dist
-	@./$(DIST_DIR)/clime.el init clime-make.el
-	@./clime-make.el quickstart examples/greeter.el -R ..
-	@./clime-make.el quickstart examples/pkm.el -R ..
-
 # ── Local executables (gitignored) ─────────────────────────────────
 BIN_DIR := bin
 
@@ -86,7 +80,7 @@ bin/clime: $(DIST_SRCS) clime-make-main.el | $(BIN_DIR)
 
 # Examples use built clime-make as a self-check
 bin/greeter: examples/greeter.el bin/clime-make | $(BIN_DIR)
-	@./bin/clime-make init --client $< -o $@ -R .. --standalone
+	@./bin/clime-make quickstart $< -o $@ -R .. --standalone
 
 bin/cloq: examples/cloq.el bin/clime-make | $(BIN_DIR)
 	@./bin/clime-make quickstart $< -o $@ -R .. --standalone \
