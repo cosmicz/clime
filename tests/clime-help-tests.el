@@ -1234,5 +1234,157 @@ Width applies to content; prefix is extra visual indentation."
                 '("t" "cmd"))))
     (should-not (string-match-p "(required)" help))))
 
+;;; ─── Type Hint Integration ────────────────────────────────────────────
+
+(ert-deftest clime-test-help/option-type-hint-integer ()
+  "Options with integer type show (integer) in help."
+  (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list (clime-make-option :name 'port :flags '("--port")
+                                                                    :help "Port number"
+                                                                    :type 'integer))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "(integer)" help))))
+
+(ert-deftest clime-test-help/option-type-hint-bounded-integer ()
+  "Options with bounded integer show (integer 1–65535) in help."
+  (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list (clime-make-option :name 'port :flags '("--port")
+                                                                    :help "Port number"
+                                                                    :type '(integer :min 1 :max 65535)))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "(integer 1–65535)" help))))
+
+(ert-deftest clime-test-help/option-no-type-hint-for-string ()
+  "Options with string type do NOT show type hint."
+  (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list (clime-make-option :name 'name :flags '("--name")
+                                                                    :help "Your name"
+                                                                    :type 'string))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should-not (string-match-p "(string)" help))))
+
+(ert-deftest clime-test-help/option-type-choices-fallback ()
+  "Member type provides choices in help when explicit :choices is nil."
+  (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list (clime-make-option :name 'fmt :flags '("--format")
+                                                                    :help "Output format"
+                                                                    :type '(member "json" "csv")))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "choices: json, csv" help))))
+
+(ert-deftest clime-test-help/option-explicit-choices-override ()
+  "Explicit :choices overrides type-provided choices in help."
+  (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list (clime-make-option :name 'fmt :flags '("--format")
+                                                                    :help "Output format"
+                                                                    :type '(member "json" "csv")
+                                                                    :choices '("xml")))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "choices: xml" help))
+    (should-not (string-match-p "choices: json" help))))
+
+(ert-deftest clime-test-help/arg-type-hint ()
+  "Args with non-string type show type hint in help."
+  (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :args (list (clime-make-arg :name 'count
+                                                              :help "Number of items"
+                                                              :type 'integer))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "(integer)" help))))
+
+(ert-deftest clime-test-help/option-type-hint-choice ()
+  "Options with choice type show combined description in help."
+  (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list (clime-make-option :name 'port :flags '("--port")
+                                                                    :help "Port or off"
+                                                                    :type '(choice (integer :min 1) (const "off"))))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    (should (string-match-p "(integer ≥1|\"off\")" help))))
+
+(ert-deftest clime-test-help/option-type-hint-member-suppressed ()
+  "Member type suppresses type hint (redundant with choices display)."
+  (let* ((cmd (clime-make-command :name "cmd" :handler #'ignore
+                                  :options (list (clime-make-option :name 'fmt :flags '("--format")
+                                                                    :help "Output format"
+                                                                    :type '(member "json" "csv" "table")))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "cmd" cmd))))
+         (help (clime-format-help
+                (cdr (car (clime-group-children app)))
+                '("t" "cmd"))))
+    ;; Type hint suppressed — choices shown instead
+    (should-not (string-match-p "(json|csv|table)" help))
+    (should (string-match-p "choices: json, csv, table" help))))
+
+(ert-deftest clime-test-help/prepend-type-nil-help ()
+  "clime-help--prepend-type with nil help returns just the type."
+  (should (equal "(integer)" (clime-help--prepend-type nil 'integer nil))))
+
+(ert-deftest clime-test-help/prepend-type-nil ()
+  "clime-help--prepend-type returns help-text unchanged for nil type."
+  (should (equal "some help" (clime-help--prepend-type "some help" nil nil))))
+
+(ert-deftest clime-test-help/prepend-type-string ()
+  "clime-help--prepend-type returns help-text unchanged for string type."
+  (should (equal "some help" (clime-help--prepend-type "some help" 'string nil))))
+
+(ert-deftest clime-test-help/prepend-type-integer ()
+  "clime-help--prepend-type prepends (integer) to help text."
+  (should (equal "(integer) some help" (clime-help--prepend-type "some help" 'integer nil))))
+
+(ert-deftest clime-test-help/prepend-type-empty-help ()
+  "clime-help--prepend-type with empty help returns just the type."
+  (should (equal "(integer)" (clime-help--prepend-type "" 'integer nil))))
+
+(ert-deftest clime-test-help/prepend-type-suppressed-by-redundant-choices ()
+  "clime-help--prepend-type suppresses when redundant with choices."
+  (should (equal "some help"
+                 (clime-help--prepend-type "some help" '(member "a" "b") '("a" "b")))))
+
+(ert-deftest clime-test-help/append-type-integer ()
+  "clime-help--append-type appends (integer) to help text."
+  (should (equal "some help (integer)" (clime-help--append-type "some help" 'integer nil))))
+
+(ert-deftest clime-test-help/append-type-nil-help ()
+  "clime-help--append-type with nil help returns just the type."
+  (should (equal "(integer)" (clime-help--append-type nil 'integer nil))))
+
+(ert-deftest clime-test-help/append-type-nil-type ()
+  "clime-help--append-type returns help-text unchanged for nil type."
+  (should (equal "some help" (clime-help--append-type "some help" nil nil))))
+
+(ert-deftest clime-test-help/append-type-suppressed-by-redundant-choices ()
+  "clime-help--append-type suppresses when redundant with choices."
+  (should (equal "some help"
+                 (clime-help--append-type "some help" '(member "a" "b") '("a" "b")))))
+
 (provide 'clime-help-tests)
 ;;; clime-help-tests.el ends here

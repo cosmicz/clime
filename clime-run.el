@@ -45,13 +45,13 @@
 
 (defun clime-run--execute (handler ctx)
   "Call HANDLER with CTX, flushing output and returning exit code.
-Uses `clime--active-output-format' for output routing.
+Uses `clime-out--active-format' for output routing.
 Re-signals `clime-usage-error' and `clime-help-requested' to caller.
 Returns integer exit code: 0 success, 1 runtime error."
-  (let* ((fmt clime--active-output-format)
+  (let* ((fmt clime-out--active-format)
          (streaming (clime-output-format-streaming fmt))
-         (clime--output-items nil)
-         (clime--output-errors nil)
+         (clime-out--items nil)
+         (clime-out--errors nil)
          (retval nil)
          (exit-code
           (condition-case err
@@ -66,13 +66,14 @@ Returns integer exit code: 0 success, 1 runtime error."
                (if streaming
                    (funcall (clime-output-format-error-handler fmt)
                             (error-message-string err))
-                 (push (error-message-string err) clime--output-errors))
+                 (push (error-message-string err) clime-out--errors))
                1)))))
-    (let ((has-errors (or clime--output-errors (> exit-code 0))))
+    (let ((has-errors (or clime-out--errors (> exit-code 0))))
       (if streaming
           (when retval
-            (princ (funcall (clime-output-format-encoder fmt) retval)))
-        (clime--output-flush (clime-output-format-finalize fmt) retval))
+            (princ (funcall (clime-output-format-encoder fmt) retval))
+            (terpri))
+        (clime-out--flush (clime-output-format-finalize fmt) retval))
       (if has-errors 1 0))))
 
 ;;; ─── Public API ────────────────────────────────────────────────────────
@@ -91,13 +92,13 @@ Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error.
 Does NOT call `kill-emacs'; the caller decides what to do with the code.
 
 Output format detection: checks `clime-app-output-formats' for a matching
-flag in ARGV.  When matched, `clime--active-output-format' is bound to
+flag in ARGV.  When matched, `clime-out--active-format' is bound to
 the format and drives all output behavior through the format struct."
   ;; Reset stdin cache so each invocation reads fresh
   (setq clime--stdin-content nil)
   ;; Pre-parse output format before full parse so even parse errors emit correctly
   (let* ((active-fmt (clime--detect-output-format app argv))
-         (clime--active-output-format (or active-fmt clime--active-output-format)))
+         (clime-out--active-format (or active-fmt clime-out--active-format)))
     (condition-case err
         (let* ((setup (clime-app-setup app))
                (result (clime-parse app argv (and setup t))))
@@ -120,10 +121,10 @@ the format and drives all output behavior through the format struct."
        (clime--print-help (cdr err))
        0)
       (clime-usage-error
-       (funcall (clime-output-format-error-handler clime--active-output-format) (cadr err))
+       (funcall (clime-output-format-error-handler clime-out--active-format) (cadr err))
        (let ((err-path (caddr err)))
          (when err-path
-           (funcall (clime-output-format-error-handler clime--active-output-format)
+           (funcall (clime-output-format-error-handler clime-out--active-format)
                     (format "Try '%s --help' for more information."
                             (string-join err-path " ")))))
        2)
@@ -131,7 +132,7 @@ the format and drives all output behavior through the format struct."
        (if debug-on-error
            ;; Re-signal so backtrace prints
            (signal (car err) (cdr err))
-         (funcall (clime-output-format-error-handler clime--active-output-format) (error-message-string err))
+         (funcall (clime-output-format-error-handler clime-out--active-format) (error-message-string err))
          1)))))
 
 (defun clime-main-script-p (app-name)
@@ -172,6 +173,62 @@ No-op when called from an interactive Emacs session."
       ;; Prevent Emacs from processing these args itself
       (setq command-line-args-left nil)
       (kill-emacs (clime-run app args)))))
+
+;;; ─── Emacsclient Dispatch ─────────────────────────────────────────────
+
+(defun clime-run-client (app-sym dir &rest plist)
+  "Run the clime app named by APP-SYM via emacsclient IPC.
+DIR is the temp directory for file-based communication:
+  DIR/argv — null-delimited argument list (input)
+  DIR/in   — stdin content, read via CLIME_STDIN_FILE (input, optional)
+  DIR/out  — captured stdout (output)
+  DIR/err  — captured stderr/messages (output)
+  DIR/exit — integer exit code (output)
+
+PLIST accepts:
+  :load-path  List of directories to add to `load-path'.
+  :file       Path to the .el file defining the app (reloaded each call).
+
+Does NOT call `kill-emacs'.  Returns nil."
+  ;; Load app — always reload so file changes are picked up
+  (dolist (p (plist-get plist :load-path))
+    (add-to-list 'load-path p))
+  (let ((app-file (plist-get plist :file)))
+    (when app-file
+      (load app-file nil t)))
+  ;; Read args from null-delimited file
+  (let* ((argv-file (expand-file-name "argv" dir))
+         (args (when (file-exists-p argv-file)
+                 (with-temp-buffer
+                   (insert-file-contents argv-file)
+                   (split-string (buffer-string) "\0" t))))
+         ;; Set up stdin file if present
+         (in-file (expand-file-name "in" dir))
+         (process-environment
+          (if (file-exists-p in-file)
+              (cons (concat "CLIME_STDIN_FILE=" in-file) process-environment)
+            process-environment))
+         ;; Capture stdout
+         (out-buf (generate-new-buffer " *clime-client-out*"))
+         (err-msgs nil)
+         (exit-code
+          (let ((standard-output out-buf)
+                (inhibit-message t)
+                (debug-on-error nil))
+            (cl-letf (((symbol-function 'message)
+                       (lambda (fmt &rest margs)
+                         (push (apply #'format fmt margs) err-msgs))))
+              (clime-run (symbol-value app-sym) args)))))
+    ;; Write results
+    (with-temp-file (expand-file-name "out" dir)
+      (insert-buffer-substring out-buf))
+    (with-temp-file (expand-file-name "err" dir)
+      (dolist (msg (nreverse err-msgs))
+        (insert msg "\n")))
+    (with-temp-file (expand-file-name "exit" dir)
+      (insert (number-to-string (or exit-code 0))))
+    (kill-buffer out-buf)
+    nil))
 
 (provide 'clime-run)
 ;;; clime-run.el ends here

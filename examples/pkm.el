@@ -118,13 +118,13 @@
       :help "Registry to install from"
       :default "default")
 
-    ;; [25] Integer type — validates numeric input
-    (clime-opt timeout ("--timeout" "-T") :type 'integer
+    ;; [25] Parameterized integer type — bounded range (short alias)
+    (clime-opt timeout ("--timeout" "-T") :type '(int :min 1 :max 300)
                :help "Network timeout in seconds"
                :default "30")
 
     ;; [26] Requires constraint — retries only makes sense with timeout
-    (clime-opt retries ("--retries") :type 'integer
+    (clime-opt retries ("--retries") :type '(int :min 0 :max 10)
                :help "Number of retry attempts"
                :requires '(timeout))
 
@@ -149,15 +149,15 @@
     (clime-arg query :required nil
                :help "Search query (omit to list all)")
 
-    ;; [25] Integer type — catches non-numeric input
-    (clime-opt limit ("--limit" "-l") :type 'integer
+    ;; [25] Parameterized integer — bounded limit
+    (clime-opt limit ("--limit" "-l") :type '(integer :min 1 :max 500)
                :help "Max results to return"
                :default "20")
 
-    ;; [27] Choices option — restricts search scope
+    ;; [27] Member type — string enum with invoke completion
     (clime-opt scope ("--scope" "-S")
       :help "Search scope"
-      :choices '("local" "global" "all")
+      :type '(member "local" "global" "all")
       :default "all")
 
     (clime-handler (ctx)
@@ -222,20 +222,28 @@
     (clime-arg args :nargs :rest :required nil
                :help "Arguments passed to the script")
 
-    ;; [28] Env-backed option with choices
+    ;; [28] Member type with env — string enum
     (clime-opt runner ("--runner") :env "PKM_RUNNER"
                :help "Script runner to use"
-               :choices '("sh" "bash" "zsh" "node" "python"))
+               :type '(member "sh" "bash" "zsh" "node" "python"))
 
-    ;; [25] Number type — validates numeric input (integers and floats)
-    (clime-opt max-time ("--max-time" "-m") :type 'number
-               :help "Maximum execution time in seconds")
+    ;; [29] Choice type — member or integer (named preset or explicit count)
+    (clime-opt concurrency ("--concurrency" "-j")
+      :type '(choice (member "auto" "serial" "cpus") (integer :min 1))
+      :default "auto"
+      :help "Parallelism level")
+
+    ;; [25] Choice type — number or "off" (mixed type)
+    (clime-opt max-time ("--max-time" "-m")
+      :type '(choice (number :min 0) (const "off"))
+      :help "Maximum execution time in seconds, or \"off\"")
 
     (clime-handler (ctx)
-      (clime-let ctx (script args runner max-time)
-        (format "Running script %s%s%s%s"
+      (clime-let ctx (script args runner concurrency max-time)
+        (format "Running script %s%s%s%s%s"
                 script
                 (if runner (format " [runner=%s]" runner) "")
+                (if concurrency (format " [concurrency=%s]" concurrency) "")
                 (if max-time (format " [max-time=%ss]" max-time) "")
                 (if args (format " with args: %s" (string-join args " ")) "")))))
 
@@ -420,6 +428,4 @@
                  :help "Remove a repository (shortcut)")))
 
 (provide 'pkm)
-;;; Entrypoint:
-(clime-run-batch pkm)
 ;;; pkm.el ends here

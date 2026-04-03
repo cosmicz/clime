@@ -31,17 +31,18 @@
 
 (require 'clime-settings)
 (require 'clime-core)
+(require 'clime-param-type)
 (require 'clime-parse)
 (require 'clime-dsl)
 (require 'clime-help)
 (require 'clime-output)
 (require 'clime-run)
 
-(defconst clime-version "0.5.0"
+(defconst clime-version "0.6.0"
   "The clime package version string.")
 
 (defconst clime--modules
-  '(clime-settings clime-core clime-parse clime-dsl
+  '(clime-settings clime-core clime-param-type clime-parse clime-dsl
                    clime-help clime-output clime-run)
   "Clime modules in dependency order.")
 
@@ -76,7 +77,10 @@ Reloads modules in dependency order to avoid stale definitions."
       (when (featurep mod)
         (let ((file (locate-library (symbol-name mod))))
           (when file
-            (load file nil t t))))))
+            (load file nil t t)))))
+    ;; Mark invoke registry as stale so cached apps get refreshed
+    (when (boundp 'clime-invoke--stale)
+      (setq clime-invoke--stale t)))
   (message "Reloaded clime modules"))
 
 (provide 'clime)

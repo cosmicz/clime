@@ -1,6 +1,77 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-04-02
+
+### Type system
+
+- **Registry-based types**: `:type` now accepts type specs — symbols
+  or S-expression lists — that resolve via a type registry.  Built-in
+  types: `string`, `integer`, `number`, `boolean`, `json`, `file`,
+  `directory`, `path` (short aliases: `str`, `int`, `num`, `bool`,
+  `dir`).  Parameterized forms support constraints:
+  `(integer :min 1 :max 65535)`, `(string :match "^[a-z]+$")`,
+  `(file :must-exist t)`.  Composite types: `(member "json" "csv")`
+  for string enums with completion, `(const "off")` for exact match,
+  `(choice (integer :min 1) (const "off"))` for union types (first
+  match wins).
+
+- **`clime-deftype`**: define and register custom types.  The macro
+  creates a constructor function and registers it — the type is
+  immediately usable in `:type` specs.
+
+- **Type-aware help and invoke**: CLI help appends the type description
+  after help text — e.g., `(integer 1–65535)`.  Invoke prepends it in
+  the desc column.  Redundancy suppression hides the hint when it
+  duplicates choices.  Composite types provide `:choices` for invoke
+  completion automatically.
+
+- **Breaking: function `:type` removed**: `:type` no longer accepts a
+  bare function.  Use `clime-deftype` to register a named type, or use
+  `:coerce` for ad-hoc transforms.
+
+### Invoke
+
+- **`:key` slot**: options, arguments, commands, and groups now accept
+  `:key` to set the preferred single-char key in the `clime-invoke`
+  menu.  Overrides the auto-derived key (flag letter for options, first
+  letter of name for commands).  Collisions fall back to auto-assignment.
+
+- **`:ask` and `:immediate` keywords**: `clime-invoke` accepts `:ask`
+  and `:immediate` for pre-menu prompting and immediate execution.
+  `:ask t` prompts for all required params via minibuffer before showing
+  the menu; `:ask '(param ...)` prompts for specific params.
+  `:immediate t` runs the handler directly after prompting, bypassing
+  the menu — enabling `clime-invoke` as a drop-in for interactive Emacs
+  commands.  The menu is displayed during the ask phase with live value
+  updates.
+
+- **3-column layout**: menu reordered from Key|Desc|Value|Env to
+  Key|Value|Desc for easier value scanning.  Compact choices format
+  (`json|(csv)|html`), env-derived values (`($=/path)`) in value
+  column, env annotation (`[$VAR]`) in description.
+
+- **Desc column annotations**: required, multi, and type hints are
+  prepended to the description — e.g.,
+  `(required) (file existing) The .el file to set up`.
+
+### Features
+
+- **`:optional` keyword**: `clime-arg` and `clime-opt` accept
+  `:optional` as the inverse of `:required`.  Mutually exclusive with
+  `:required` (error if both present).
+
+- **`clime-defopt` templates with `:type`**: parameter templates now
+  support `:type`, with per-instance overrides via `:from`.
+
+### Internal
+
+- **Values map as single source of truth**: the runtime data carrier
+  for both parse and invoke is now a values map — an alist of
+  `(NAME :value V :source S)` entries with optional `:error` key.
+  Struct slots `:value` and `:source` removed from `clime-param`.
+  Dynamic vars `clime--building-values` and `clime--parse-values`
+  removed; values map threaded as a local.  Conformer errors accumulate
+  as `:error` entries before signaling a compound error.
 
 ## 0.5.0 — 2026-03-25
 
@@ -211,10 +282,10 @@
   enables future group aliasing.
 
 - **Format-driven output**: replaced `clime-output-mode` symbol variable
-  with `clime--active-output-format` (always a `clime-output-format` struct).
+  with `clime-out--active-format` (always a `clime-output-format` struct).
   Every output mode — including default text — is a format struct with
   `:encoder`, `:error-handler`, `:finalize`, and `:streaming` slots.  No if/else
-  branching in output functions.  Handlers query the active format via `(clime-output-name)`.
+  branching in output functions.  Handlers query the active format via `(clime-out-format)`.
   The `:json-mode` DSL keyword is unchanged (deprecated).
 
 - **DSL forms are real macros**: `clime-option`, `clime-arg`,
@@ -223,13 +294,13 @@
   when evaluated standalone (REPL-friendly).  Standard `emacs-lisp-mode`
   keyword completion works inside any DSL form — no custom capf needed.
 
-- **JSON output accumulation**: in JSON mode, `clime-output` calls are
+- **JSON output accumulation**: in JSON mode, `clime-out` calls are
   buffered and flushed as a single JSON array (2+ items) or bare object
   (1 item) after the handler returns.  Replaces the previous NDJSON
-  behavior.  Use `clime-output-stream` for explicit NDJSON when needed.
+  behavior.  Use `clime-out-emit` for explicit NDJSON when needed.
   Handler return-value wrapping in `{success, data}` envelope is
-  preserved when no `clime-output` calls are made.  Errors accumulate
-  via `clime-output-error` and are passed to finalize — errors take
+  preserved when no `clime-out` calls are made.  Errors accumulate
+  via `clime-out-error` and are passed to finalize — errors take
   priority over items and retval in the default envelope.
 
 - **`clime-output-format` DSL form**: declares output modes as first-class
@@ -297,18 +368,17 @@
   from `clime-option` — supports `:finalize` (custom envelope function),
   `:streaming` (bypass accumulator for NDJSON), and all standard option
   keywords (`:mutex`, `:hidden`, `:category`, etc.).
-- `clime-output-stream`: emit NDJSON immediately, bypassing the output
+- `clime-out-emit`: emit NDJSON immediately, bypassing the output
   accumulator.  For streaming use cases where per-call emission is
-  desired.
-- `clime-output-name`: return the active output format's name symbol
-  (e.g. `text`, `json`).  Replaces `clime-output-mode-json-p` with
-  a general-purpose query: `(eq (clime-output-name) 'json)`.
-- `clime--output-finalize-default`: named default finalize function.
+  desired.  (Renamed from `clime-output-stream`.)
+- `clime-out-format`: return the active output format's name symbol
+  (e.g. `text`, `json`).  (Renamed from `clime-output-name`.)
+- `clime-out--finalize-default`: named default finalize function.
   Signature: `(items retval errors)`.  Priority: errors → `{error}`
   envelope, items → array/bare, retval → `{success, data}`, nil → nil.
-- `clime-output-error`: report errors via the active format.  Streaming
+- `clime-out-error`: report errors via the active format.  Streaming
   formats dispatch immediately; buffered formats accumulate errors for
-  finalize.
+  finalize.  (Renamed from `clime-output-error`.)
 - `examples/cloq.el`: demo app wrapping org-ql into a CLI tool,
   showcasing output formats, aliases, and JSON mode.
 
@@ -318,7 +388,7 @@
   formatting is now handled by the `:error-handler` slot on each
   `clime-output-format` struct.
 - `clime-output-mode-json-p` (deprecated): use
-  `(eq (clime-output-name) 'json)` instead.
+  `(eq (clime-out-format) 'json)` instead.
 
 ### Fixed
 

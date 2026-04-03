@@ -3,7 +3,7 @@ EMACS ?= emacs
 BATCH = $(EMACS) --batch -Q -L . -L ./tests
 CLIME_MAKE = $(BATCH) -l clime-make-main.el --
 
-.PHONY: all compile lint test tests dist init strip readme clean clean-elc help
+.PHONY: all compile lint test test-all tests dist bins readme clean clean-elc help
 
 all: compile
 
@@ -32,18 +32,22 @@ lint:
 		2>&1 || true
 	@echo "Lint complete."
 
-SELECT ?= ^clime-test-
+SEL ?= ^clime-test-
+SELECT ?= $(SEL)
 SELECTOR ?= $(SELECT)
+# VERBOSE=1 to show message output from tests (not swallowed by ERT)
+VERBOSE ?=
 
+tests: test
 test: clean-elc
-	@$(BATCH) -l ./tests/clime-tests-runner.el \
+	@CLIME_TEST_VERBOSE=$(VERBOSE) $(BATCH) -l ./tests/clime-tests-runner.el \
 		--eval '(clime-run-tests-batch "$(SELECTOR)")' \
 		< /dev/null
 
-tests: test
+test-all: bin/clime-make bin/greeter bin/pkm test
 
 DIST_DIR ?= dist
-DIST_SRCS = clime-settings.el clime-core.el clime-parse.el \
+DIST_SRCS = clime-settings.el clime-core.el clime-param-type.el clime-parse.el \
 	clime-dsl.el clime-help.el clime-output.el clime-run.el clime.el \
 	clime-make.el
 
@@ -55,20 +59,37 @@ dist:
 	@$(CLIME_MAKE) init --standalone --env CLIME_MAIN_APP=clime \
 		$(DIST_DIR)/clime.el
 
-CLOQ_DEPS ?=
+# ── Local executables (gitignored) ─────────────────────────────────
+BIN_DIR := bin
 
-init:
-	@$(CLIME_MAKE) quickstart clime-make.el --self-dir --standalone
-	@$(CLIME_MAKE) init examples/pkm.el -R .. --standalone
-	@$(CLIME_MAKE) init examples/cloq.el -R .. --standalone \
-		--env CLIME_MAIN_APP=cloq $(CLOQ_DEPS)
+$(BIN_DIR):
+	@mkdir -p $@
 
-strip:
-	@for f in clime-make.el examples/*.el; do \
-		if head -1 "$$f" | grep -q '^#!'; then \
-			$(CLIME_MAKE) strip "$$f"; \
-		fi; \
-	done
+# Auto-discover straight.el repos for cloq dependencies
+STRAIGHT_DIR ?= $(HOME)/.emacs.d/.local/straight/repos
+CLOQ_DEPS_LIST := org-ql s.el dash.el ts.el
+CLOQ_LP := $(foreach d,$(CLOQ_DEPS_LIST),-L $(STRAIGHT_DIR)/$(d))
+
+# Bootstrap: build clime-make using batch loader
+bin/clime-make: clime-make.el | $(BIN_DIR)
+	@$(CLIME_MAKE) quickstart $< -o $@ -L . --standalone --env CLIME_MAIN_APP=clime-make
+
+bin/clime: $(DIST_SRCS) clime-make-main.el | $(BIN_DIR)
+	@$(MAKE) --no-print-directory dist
+	@cp $(DIST_DIR)/clime.el $@
+
+# Examples use built clime-make as a self-check
+bin/greeter: examples/greeter.el bin/clime-make | $(BIN_DIR)
+	@./bin/clime-make quickstart $< -o $@ -R .. --standalone
+
+bin/cloq: examples/cloq.el bin/clime-make | $(BIN_DIR)
+	@./bin/clime-make quickstart $< -o $@ -R .. --standalone \
+		--env CLIME_MAIN_APP=cloq $(CLOQ_LP)
+
+bin/pkm: examples/pkm.el bin/clime-make | $(BIN_DIR)
+	@./bin/clime-make quickstart $< -o $@ -R .. --standalone
+
+bins: bin/clime bin/clime-make bin/cloq bin/greeter bin/pkm
 
 readme:
 	@echo "Exporting README.org → README.md..."
@@ -82,20 +103,26 @@ clean-elc:
 
 clean: clean-elc
 	@echo "Cleaning up all build artifacts..."
-	@rm -rf .packages $(DIST_DIR)
+	@rm -rf .packages $(DIST_DIR) $(BIN_DIR)
 	@echo "Done."
 
 help:
 	@echo "clime Makefile targets:"
-	@echo "  all      - Default target. Same as 'compile'"
-	@echo "  compile  - Byte-compile all Elisp files"
-	@echo "  lint     - Byte-compile with warnings + checkdoc"
-	@echo "  test     - Run tests (SELECT= to filter)"
-	@echo "  tests    - Alias for 'test'"
-	@echo "  dist     - Build single-file dist/clime.el bundle"
-	@echo "  init     - Add shebangs to clime-make.el and examples"
-	@echo "             CLOQ_DEPS='-L /path/to/org-ql ...' for cloq deps"
-	@echo "  strip    - Remove shebangs from clime-make.el and examples"
-	@echo "  readme   - Export README.org to README.md"
-	@echo "  clean    - Remove .elc files and build artifacts"
-	@echo "  help     - Show this help message"
+	@echo "  all       - Default target. Same as 'compile'"
+	@echo "  compile   - Byte-compile all Elisp files"
+	@echo "  lint      - Byte-compile with warnings + checkdoc"
+	@echo "  test      - Run tests (SEL= to filter, VERBOSE=1 for messages)"
+	@echo "  test-all  - Build executables then run full test suite"
+	@echo "  tests     - Alias for 'test'"
+	@echo "  dist      - Build single-file dist/clime.el bundle"
+	@echo "  bins      - Build all local executables in bin/ (gitignored)"
+	@echo "              STRAIGHT_DIR= to override straight.el repos path"
+	@echo "  bin/clime-make - Build clime-make standalone binary"
+	@echo "  bin/clime      - Build bundled clime binary"
+	@echo "  bin/greeter    - Build greeter example (emacsclient wrapper)"
+	@echo "  bin/cloq       - Build cloq example"
+	@echo "  bin/pkm        - Build pkm example"
+	@echo "  readme    - Export README.org to README.md"
+	@echo "  clean     - Remove .elc files and build artifacts"
+	@echo "  clean-elc - Remove only .elc files"
+	@echo "  help      - Show this help message"

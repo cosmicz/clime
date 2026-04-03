@@ -140,7 +140,7 @@
          (output (with-output-to-string
                    (clime-test-with-messages
                      (clime-run app '("run" "--old" "val"))))))
-    (should (equal output "val"))))
+    (should (equal output "val\n"))))
 
 ;;; ─── Runtime Warnings (Commands) ────────────────────────────────────
 
@@ -180,7 +180,7 @@
          (output (with-output-to-string
                    (clime-test-with-messages
                      (clime-run app '("migrate"))))))
-    (should (equal output "migrated"))))
+    (should (equal output "migrated\n"))))
 
 ;;; ─── Hidden + Deprecated ────────────────────────────────────────────
 

@@ -449,7 +449,7 @@
                               :children (list (cons "deploy" cmd))))
          (output (with-output-to-string
                    (clime-run app '("deploy" "--token" "abc")))))
-    (should (equal output "abc"))))
+    (should (equal output "abc\n"))))
 
 (ert-deftest clime-test-parse/required-option-satisfied-by-env ()
   "Required option satisfied via env var succeeds."
@@ -465,7 +465,7 @@
                                        process-environment)))
       (let ((output (with-output-to-string
                       (clime-run app '("deploy")))))
-        (should (equal output "from-env"))))))
+        (should (equal output "from-env\n"))))))
 
 (ert-deftest clime-test-parse/short-bundle-non-boolean-error ()
   "Short bundle with non-boolean flag signals usage error."
@@ -977,6 +977,47 @@
     (should-error (clime-parse app '("create" "--tag" "dev" "--tag" "nope"))
                   :type 'clime-usage-error)))
 
+;;; ─── Function Type (removed) ────────────────────────────────────────
+
+(ert-deftest clime-test-parse/function-type-signals-error ()
+  "Function :type signals clime-type-error via clime-usage-error."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port")
+                                  :type (lambda (s) (string-to-number s))))
+         (cmd (clime-make-command :name "serve" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "serve" cmd)))))
+    (should-error (clime-parse app '("serve" "--port" "8080"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/keyword-types-unchanged ()
+  "Existing keyword types still work after function-type support."
+  (let* ((opt-int (clime-make-option :name 'count :flags '("--count") :type 'integer))
+         (opt-num (clime-make-option :name 'rate :flags '("--rate") :type 'number))
+         (opt-str (clime-make-option :name 'name :flags '("--name") :type 'string))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt-int opt-num opt-str)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "run" cmd))))
+         (result (clime-parse app '("run" "--count" "42" "--rate" "3.14" "--name" "hi"))))
+    (should (= (plist-get (clime-parse-result-params result) 'count) 42))
+    (should (= (plist-get (clime-parse-result-params result) 'rate) 3.14))
+    (should (equal (plist-get (clime-parse-result-params result) 'name) "hi"))))
+
+(ert-deftest clime-test-parse/coerce-error-signals-usage-error ()
+  ":coerce that signals error is wrapped as clime-usage-error."
+  (let* ((opt (clime-make-option :name 'path :flags '("--path")
+                                  :coerce (lambda (v)
+                                            (unless (string-prefix-p "/" v)
+                                              (error "Must be absolute path"))
+                                            v)))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "run" cmd)))))
+    (should-error (clime-parse app '("run" "--path" "relative/path"))
+                  :type 'clime-usage-error)))
+
 (ert-deftest clime-test-parse/choices-equals-syntax ()
   "Choices works with --flag=value syntax."
   (let* ((opt (clime-make-option :name 'format :flags '("--format")
@@ -1380,6 +1421,274 @@
       (clime-usage-error
        (should (string-match-p "for myapp ops log" (cadr err)))
        (should (equal (caddr err) '("myapp" "ops" "log")))))))
+
+;;; ─── Derive Params / Value-on-Struct Tests ─────────────────────────
+
+(ert-deftest clime-test-parse/values-map-matches-params-plist ()
+  "Values map and derived params plist contain the same data."
+  (let* ((app (clime-make-app
+               :name "test" :version "1"
+               :options (list (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0)
+                              (clime-make-option :name 'format :flags '("--format")))
+               :children (list (cons "run"
+                                     (clime-make-command
+                                      :name "run" :handler #'ignore
+                                      :args (list (clime-make-arg :name 'file)))))))
+         (result (clime-parse app '("--verbose" "--format" "csv" "run" "test.el")))
+         (params (clime-parse-result-params result))
+         (values (clime-parse-result-values result)))
+    (should (equal (plist-get params 'verbose) (clime-values-value values 'verbose)))
+    (should (equal (plist-get params 'format) (clime-values-value values 'format)))
+    (should (equal (plist-get params 'file) (clime-values-value values 'file)))))
+
+(ert-deftest clime-test-parse/values-source-set-for-cli-values ()
+  "Options/args parsed from CLI have :source 'user in values map."
+  (let* ((app (clime-make-app
+               :name "test" :version "1"
+               :options (list (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
+               :children (list (cons "run"
+                                     (clime-make-command
+                                      :name "run" :handler #'ignore
+                                      :args (list (clime-make-arg :name 'file)))))))
+         (result (clime-parse app '("--verbose" "run" "test.el")))
+         (values (clime-parse-result-values result)))
+    (should (eq 'user (clime-values-source values 'verbose)))
+    (should (eq t (clime-values-value values 'verbose)))
+    (should (eq 'user (clime-values-source values 'file)))
+    (should (equal "test.el" (clime-values-value values 'file)))))
+
+(ert-deftest clime-test-parse/values-source-default ()
+  "Options with defaults get :source 'default in values map."
+  (let* ((app (clime-make-app
+               :name "test" :version "1"
+               :options (list (clime-make-option :name 'format :flags '("--format")
+                                                  :default "text"))
+               :children (list (cons "run"
+                                     (clime-make-command :name "run" :handler #'ignore)))))
+         (result (clime-parse app '("run")))
+         (values (clime-parse-result-values result)))
+    (should (eq 'default (clime-values-source values 'format)))
+    (should (equal "text" (clime-values-value values 'format)))))
+
+(ert-deftest clime-test-parse/tree-isolated-from-original ()
+  "Parse result tree is a deep copy — original app is unmodified."
+  (let* ((app (clime-make-app
+               :name "test" :version "1"
+               :options (list (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
+               :children (list (cons "run"
+                                     (clime-make-command :name "run" :handler #'ignore)))))
+         (_result (clime-parse app '("--verbose" "run")))
+         (orig-opt (car (clime-node-options app))))
+    ;; Original option unmodified (help slot untouched as proxy for struct isolation)
+    (should-not (clime-param-help orig-opt))))
+
+(ert-deftest clime-test-parse/values-source-env ()
+  "Options set from env vars have :source 'env in values map."
+  (let* ((opt (clime-make-option :name 'token :flags '("--token") :env t))
+         (cmd (clime-make-command :name "deploy" :handler #'ignore))
+         (app (clime-make-app :name "myapp" :version "1" :env-prefix "TST"
+                              :options (list opt)
+                              :children (list (cons "deploy" cmd)))))
+    (let ((process-environment (append '("TST_TOKEN=secret") process-environment)))
+      (let* ((result (clime-parse app '("deploy")))
+             (values (clime-parse-result-values result)))
+        (should (eq 'env (clime-values-source values 'token)))
+        (should (equal "secret" (clime-values-value values 'token)))))))
+
+(ert-deftest clime-test-parse/values-source-preserved-after-conform ()
+  "Conformer transforms value but does not change source in values map."
+  (let* ((opt (clime-make-option :name 'name :flags '("--name")
+                                  :conform #'upcase))
+         (cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :options (list opt)
+                              :children (list (cons "run" cmd)))))
+    (let* ((result (clime-parse app '("--name" "hello" "run")))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'name)))
+      (should (equal "HELLO" (clime-values-value values 'name))))))
+
+(ert-deftest clime-test-parse/values-negated-flag-nil-value-user-source ()
+  "Negated --no-X flag sets nil value with :source 'user in values map."
+  (let* ((opt (clime-make-option :name 'color :flags '("--color") :negatable t))
+         (cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :options (list opt)
+                              :children (list (cons "run" cmd)))))
+    (let* ((result (clime-parse app '("--no-color" "run")))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'color)))
+      (should (null (clime-values-value values 'color))))))
+
+(ert-deftest clime-test-parse/values-count-option-source ()
+  "Count option incremented twice has :source 'user and value 2 in values map."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :count t))
+         (cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :options (list opt)
+                              :children (list (cons "run" cmd)))))
+    (let* ((result (clime-parse app '("-v" "-v" "run")))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'verbose)))
+      (should (equal 2 (clime-values-value values 'verbose))))))
+
+(ert-deftest clime-test-parse/values-multiple-option-source ()
+  "Multiple option collects values into list with :source 'user in values map."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag") :multiple t))
+         (cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :options (list opt)
+                              :children (list (cons "run" cmd)))))
+    (let* ((result (clime-parse app '("--tag" "a" "--tag" "b" "run")))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'tag)))
+      (should (equal '("a" "b") (clime-values-value values 'tag))))))
+
+(ert-deftest clime-test-parse/values-rest-arg-source ()
+  "Rest arg collects values into list with :source 'user in values map."
+  (let* ((cmd (clime-make-command
+               :name "run" :handler #'ignore
+               :args (list (clime-make-arg :name 'files :nargs :rest))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd)))))
+    (let* ((result (clime-parse app '("run" "a.el" "b.el")))
+           (values (clime-parse-result-values result)))
+      (should (eq 'user (clime-values-source values 'files)))
+      (should (equal '("a.el" "b.el") (clime-values-value values 'files))))))
+
+(ert-deftest clime-test-parse/params-includes-defaults ()
+  "Parse result params include default-sourced values."
+  (let* ((app (clime-make-app
+               :name "test" :version "1"
+               :options (list (clime-make-option :name 'format :flags '("--format")
+                                                  :default "text"))
+               :children (list (cons "run"
+                                     (clime-make-command :name "run" :handler #'ignore)))))
+         (result (clime-parse app '("run")))
+         (params (clime-parse-result-params result)))
+    (should (equal "text" (plist-get params 'format)))))
+
+(ert-deftest clime-test-parse/params-includes-locked ()
+  "Parse result params include locked alias vals with :source 'app."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                   :options (list opt)))
+         (alias (clime-alias--create
+                 :name "csv"
+                 :target '("list")
+                 :vals '((format . "csv"))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "list" cmd)
+                                              (cons "csv" alias)))))
+    (let* ((result (clime-parse app '("csv")))
+           (params (clime-parse-result-params result))
+           (values (clime-parse-result-values result)))
+      (should (equal "csv" (plist-get params 'format)))
+      ;; Values map entry has app source from alias :vals
+      (should (equal "csv" (clime-values-value values 'format)))
+      (should (eq 'app (clime-values-source values 'format))))))
+
+;;; ─── validate-param-value (shared) ─────────────────────────────────
+
+(ert-deftest clime-test-validate-param-value/valid-string-nil ()
+  "Valid string value returns nil."
+  (let* ((opt (clime-make-option :name 'name :flags '("--name")))
+         (values (clime-values-set '() 'name "hello" 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/valid-integer ()
+  "Valid integer string returns nil."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer))
+         (values (clime-values-set '() 'count "42" 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/invalid-integer ()
+  "Non-numeric string for integer type returns error string."
+  (let* ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer))
+         (values (clime-values-set '() 'count "abc" 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
+(ert-deftest clime-test-validate-param-value/valid-choice ()
+  "Value matching choices returns nil."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                  :choices '("json" "text")))
+         (values (clime-values-set '() 'fmt "json" 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/invalid-choice ()
+  "Value not in choices returns error string."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                  :choices '("json" "text")))
+         (values (clime-values-set '() 'fmt "xml" 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
+(ert-deftest clime-test-validate-param-value/unset-skipped ()
+  "Unset param returns nil (no validation)."
+  (let ((opt (clime-make-option :name 'count :flags '("--count") :type 'integer)))
+    (should-not (clime--validate-param-value opt '()))))
+
+(ert-deftest clime-test-validate-param-value/non-string-skips-type ()
+  "Non-string value (e.g. boolean t) skips type coercion."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("-v") :nargs 0))
+         (values (clime-values-set '() 'verbose t 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/dynamic-choices ()
+  "Dynamic choice function is resolved and validated."
+  (let* ((opt (clime-make-option :name 'fmt :flags '("--format")
+                                  :choices (lambda () '("json" "text"))))
+         (valid (clime-values-set '() 'fmt "json" 'user))
+         (invalid (clime-values-set '() 'fmt "xml" 'user)))
+    (should-not (clime--validate-param-value opt valid))
+    (should (stringp (clime--validate-param-value opt invalid)))))
+
+(ert-deftest clime-test-validate-param-value/conform-pass ()
+  "Conform that succeeds returns nil."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :conform (lambda (v _p)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
+         (values (clime-values-set '() 'id "42" 'user)))
+    (should-not (clime--validate-param-value opt values))))
+
+(ert-deftest clime-test-validate-param-value/conform-fail ()
+  "Conform that signals error returns error string."
+  (let* ((opt (clime-make-option :name 'id :flags '("--id")
+                                  :conform (lambda (v _p)
+                                             (unless (string-match-p "^[0-9]+$" v)
+                                               (error "Must be numeric"))
+                                             v)))
+         (values (clime-values-set '() 'id "abc" 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
+(ert-deftest clime-test-validate-param-value/arg-works ()
+  "Works with arg structs, not just options."
+  (let* ((arg (clime-make-arg :name 'count :type 'integer))
+         (values (clime-values-set '() 'count "5" 'user)))
+    (should-not (clime--validate-param-value arg values))))
+
+(ert-deftest clime-test-validate-param-value/non-string-conform-runs ()
+  "Non-string value still runs conform (skipping type/choices)."
+  (let* ((opt (clime-make-option :name 'count :flags '("-n") :nargs 0
+                                  :conform (lambda (_v _p)
+                                             (error "conform ran"))))
+         (values (clime-values-set '() 'count t 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
+(ert-deftest clime-test-validate-param-value/function-type-rejected ()
+  "Function :type is rejected through validate-param-value."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port")
+                                  :type (lambda (s) (string-to-number s))))
+         (values (clime-values-set '() 'port "8080" 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
+
+(ert-deftest clime-test-validate-param-value/coerce-error ()
+  ":coerce error returns error string through validate-param-value."
+  (let* ((opt (clime-make-option :name 'path :flags '("--path")
+                                  :coerce (lambda (_v) (error "bad path"))))
+         (values (clime-values-set '() 'path "/tmp" 'user)))
+    (should (stringp (clime--validate-param-value opt values)))))
 
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

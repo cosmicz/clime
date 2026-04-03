@@ -60,7 +60,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--color")))))
-    (should (equal output "t"))))
+    (should (equal output "t\n"))))
 
 ;;; ─── Parser: Negated Flag ─────────────────────────────────────────
 
@@ -79,7 +79,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--no-color")))))
-    (should (equal output "set:nil"))))
+    (should (equal output "set:nil\n"))))
 
 (ert-deftest clime-test-negatable/no-flag-overrides-default ()
   "--no-X overrides :default t."
@@ -93,7 +93,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--no-color")))))
-    (should (equal output "nil"))))
+    (should (equal output "nil\n"))))
 
 ;;; ─── Ternary State ─────────────────────────────────────────────────
 
@@ -111,13 +111,13 @@
                                :children (list (cons "run" cmd)))))
     ;; No flag → unset → default 'auto → "auto"
     (should (equal (with-output-to-string (clime-run app '("run")))
-                   "auto"))
+                   "auto\n"))
     ;; --color → t → "on"
     (should (equal (with-output-to-string (clime-run app '("run" "--color")))
-                   "on"))
+                   "on\n"))
     ;; --no-color → explicit nil → "off"
     (should (equal (with-output-to-string (clime-run app '("run" "--no-color")))
-                   "off"))))
+                   "off\n"))))
 
 ;;; ─── Env Var Override ──────────────────────────────────────────────
 
@@ -134,7 +134,7 @@
                                        process-environment)))
       (let ((output (with-output-to-string
                       (clime-run app '("run" "--no-color")))))
-        (should (equal output "nil"))))))
+        (should (equal output "nil\n"))))))
 
 ;;; ─── Short Flags Not Negated ───────────────────────────────────────
 
@@ -223,11 +223,11 @@
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd)))))
     ;; Both positive forms work
-    (should (equal (with-output-to-string (clime-run app '("run" "--color"))) "t"))
-    (should (equal (with-output-to-string (clime-run app '("run" "--colour"))) "t"))
+    (should (equal (with-output-to-string (clime-run app '("run" "--color"))) "t\n"))
+    (should (equal (with-output-to-string (clime-run app '("run" "--colour"))) "t\n"))
     ;; Both negated forms work
-    (should (equal (with-output-to-string (clime-run app '("run" "--no-color"))) "nil"))
-    (should (equal (with-output-to-string (clime-run app '("run" "--no-colour"))) "nil"))))
+    (should (equal (with-output-to-string (clime-run app '("run" "--no-color"))) "nil\n"))
+    (should (equal (with-output-to-string (clime-run app '("run" "--no-colour"))) "nil\n"))))
 
 ;;; ─── DSL Integration ───────────────────────────────────────────────
 

@@ -8,7 +8,7 @@
 
 ;; Tests for the unified :conform model:
 ;; - Option/arg :conform signature: (value, param) → value
-;; - Node :conform signature: (params, node) → params
+;; - Node :conform signature: (values, node) → values
 ;; - Leaf→root walk order during finalization
 ;; - Composition (list of conform fns on a node)
 ;; - Exclusive/paired checks as node conform functions
@@ -137,25 +137,26 @@
     (should (equal (plist-get (clime-parse-result-params result) 'name)
                    "world"))))
 
-;;; ─── Node :conform (params, node) → params ──────────────────────────
+;;; ─── Node :conform (values, node) → values ──────────────────────────
 
 (ert-deftest clime-test-conform/node-conform-on-command ()
-  "Command-level :conform receives (params, node) and transforms params."
+  "Command-level :conform receives (values, node) and transforms values."
   (let* ((opt-a (clime-make-option :name 'a :flags '("--aa") :nargs 0))
          (opt-b (clime-make-option :name 'b :flags '("--bb") :nargs 0))
          (cmd (clime-make-command :name "run"
                                   :handler (lambda (ctx)
                                              (format "%s" (clime-ctx-get ctx 'derived)))
                                   :options (list opt-a opt-b)
-                                  :conform (lambda (params _node)
+                                  :conform (lambda (values _node)
                                              ;; Inject a derived value
-                                             (plist-put params 'derived
-                                                        (if (plist-get params 'a) "got-a" "no-a")))))
+                                             (clime-values-set values 'derived
+                                                               (if (clime-values-value values 'a) "got-a" "no-a")
+                                                               'conform))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--aa")))))
-    (should (equal output "got-a"))))
+    (should (equal output "got-a\n"))))
 
 (ert-deftest clime-test-conform/node-conform-receives-node ()
   "Node :conform second arg is the node struct itself."
@@ -242,12 +243,12 @@
   "Node :conform accepts a list of functions, run in sequence."
   (let* ((order '())
          (cmd (clime-make-command :name "run" :handler #'ignore
-                                  :conform (list (lambda (params _node)
+                                  :conform (list (lambda (values _node)
                                                    (push 'first order)
-                                                   (plist-put params 'x 1))
-                                                 (lambda (params _node)
+                                                   (clime-values-set values 'x 1 'conform))
+                                                 (lambda (values _node)
                                                    (push 'second order)
-                                                   (plist-put params 'y 2)))))
+                                                   (clime-values-set values 'y 2 'conform)))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd))))
          (result (clime-parse app '("run"))))
@@ -256,14 +257,15 @@
     (should (= (plist-get (clime-parse-result-params result) 'y) 2))))
 
 (ert-deftest clime-test-conform/node-conform-list-threads-params ()
-  "List of conform fns threads params: output of first is input to second."
+  "List of conform fns threads values: output of first is input to second."
   (let* ((cmd (clime-make-command :name "run" :handler #'ignore
-                                  :conform (list (lambda (params _node)
-                                                   (plist-put params 'x 10))
-                                                 (lambda (params _node)
+                                  :conform (list (lambda (values _node)
+                                                   (clime-values-set values 'x 10 'conform))
+                                                 (lambda (values _node)
                                                    ;; Second fn sees x=10 from first
-                                                   (plist-put params 'y
-                                                              (* 2 (plist-get params 'x)))))))
+                                                   (clime-values-set values 'y
+                                                                     (* 2 (clime-values-value values 'x))
+                                                                     'conform)))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd))))
          (result (clime-parse app '("run"))))
@@ -282,7 +284,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--json")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 (ert-deftest clime-test-conform/exclusive-two-error ()
   "Exclusive check via node :conform: two members signals error."
@@ -308,7 +310,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 (ert-deftest clime-test-conform/exclusive-derived-value ()
   "Exclusive check injects winner option name under group key."
@@ -323,7 +325,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--csv")))))
-    (should (equal output "csv"))))
+    (should (equal output "csv\n"))))
 
 ;;; ─── Exclusive: Default Value ───────────────────────────────────────
 
@@ -341,11 +343,11 @@
     ;; No member set → default injected
     (let ((output (with-output-to-string
                     (clime-run app '("run")))))
-      (should (equal output "text")))
+      (should (equal output "text\n")))
     ;; Member set → derived value overrides default
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--json")))))
-      (should (equal output "json")))))
+      (should (equal output "json\n")))))
 
 (ert-deftest clime-test-conform/exclusive-default-suppressed-on-sibling ()
   "Setting one exclusive member suppresses defaults on siblings."
@@ -364,11 +366,11 @@
     ;; Setting --json suppresses csv's default
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--json")))))
-      (should (equal output "json=t csv=nil")))
+      (should (equal output "json=t csv=nil\n")))
     ;; No member set: csv default applies normally
     (let ((output (with-output-to-string
                     (clime-run app '("run")))))
-      (should (equal output "json=nil csv=t")))))
+      (should (equal output "json=nil csv=t\n")))))
 
 (ert-deftest clime-test-conform/exclusive-no-default-no-injection ()
   "Without :default, no group key injected when no member set."
@@ -382,7 +384,7 @@
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "nil"))))
+    (should (equal output "nil\n"))))
 
 (ert-deftest clime-test-conform/dsl-mutex-default ()
   "clime-mutex DSL :default passes through to clime-check-exclusive."
@@ -401,11 +403,11 @@
     ;; No member → default
     (let ((output (with-output-to-string
                     (clime-run app '("run")))))
-      (should (equal output "text")))
+      (should (equal output "text\n")))
     ;; Member set → derived value
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--csv")))))
-      (should (equal output "csv")))))
+      (should (equal output "csv\n")))))
 
 ;;; ─── Exclusive :required ─────────────────────────────────────────────
 
@@ -432,7 +434,7 @@
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd)))))
     (should (equal (with-output-to-string (clime-run app '("run" "--json")))
-                   "json"))))
+                   "json\n"))))
 
 (ert-deftest clime-test-conform/exclusive-required-error-message ()
   "Exclusive :required error lists all member names."
@@ -468,7 +470,7 @@
     (should (= (clime-run app '("run")) 2))
     ;; Member set → ok
     (should (equal (with-output-to-string (clime-run app '("run" "--json")))
-                   "json"))))
+                   "json\n"))))
 
 (ert-deftest clime-test-conform/exclusive-required-default-option-warns ()
   "Option inside mutex with :required t and :default triggers warning."
@@ -501,7 +503,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
     (should (= (clime-run app '("run")) 2))
     ;; Explicit choice → ok
     (should (equal (with-output-to-string (clime-run app '("run" "--csv")))
-                   "csv"))))
+                   "csv\n"))))
 
 (ert-deftest clime-test-conform/dsl-mutex-required-default-warns ()
   "clime-mutex with both :required and :default warns — :default is vacuous."
@@ -522,7 +524,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
     (let ((app (symbol-value 'clime-test--mutex-req-def-app)))
       (should (= (clime-run app '("run")) 2))
       (should (equal (with-output-to-string (clime-run app '("run" "--json")))
-                     "json")))))
+                     "json\n")))))
 
 (ert-deftest clime-test-conform/dsl-zip-required ()
   "clime-zip :required errors when no members are provided."
@@ -613,7 +615,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--csv" "--remote")))))
-    (should (equal output "csv/remote"))))
+    (should (equal output "csv/remote\n"))))
 
 (ert-deftest clime-test-conform/two-groups-independent-errors ()
   "Violation in one group doesn't mask violations in another."
@@ -642,17 +644,18 @@ satisfy the at-least-one requirement — user must explicitly choose."
   (let* ((opt-v (clime-make-option :name 'verbose :flags '("--verbose") :nargs 0))
          (cmd (clime-make-command :name "run" :handler (lambda (ctx)
                                                           (format "%s" (clime-ctx-get ctx 'log-level)))
-                                  :conform (lambda (params _node)
+                                  :conform (lambda (values _node)
                                              ;; Command conform runs first
-                                             (plist-put params 'cmd-seen t))))
+                                             (clime-values-set values 'cmd-seen t 'conform))))
          (app (clime-make-app :name "t" :version "1"
                                :options (list opt-v)
                                :children (list (cons "run" cmd))
-                               :conform (lambda (params _node)
+                               :conform (lambda (values _node)
                                            ;; App conform runs second, can see cmd-seen
-                                           (plist-put params 'log-level
-                                                      (if (plist-get params 'cmd-seen)
-                                                          "debug" "info"))))))
+                                           (clime-values-set values 'log-level
+                                                             (if (clime-values-value values 'cmd-seen)
+                                                                 "debug" "info")
+                                                             'conform)))))
     (let ((result (clime-parse app '("run"))))
       (should (equal (plist-get (clime-parse-result-params result) 'log-level)
                      "debug")))))
@@ -713,7 +716,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "nil"))))
+    (should (equal output "nil\n"))))
 
 ;;; ─── Exclusive: Value-Taking Options ───────────────────────────────
 
@@ -733,7 +736,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd)))))
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--file" "/tmp/x")))))
-      (should (equal output "file:/tmp/x")))
+      (should (equal output "file:/tmp/x\n")))
     (should-error
      (clime-parse app '("run" "--file" "/tmp/x" "--url" "http://y"))
      :type 'clime-usage-error)))
@@ -816,7 +819,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 ;;; ─── Paired: Three Options ─────────────────────────────────────────
 
@@ -875,7 +878,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--skip" "SPEC" "--reason" "no spec")))))
-    (should (equal output "(\"SPEC\") (\"no spec\")"))))
+    (should (equal output "(\"SPEC\") (\"no spec\")\n"))))
 
 ;;; ─── Paired: Env Var Participates ──────────────────────────────────
 
@@ -913,7 +916,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd))))
          (output (with-output-to-string
                    (clime-run app '("run" "--csv")))))
-    (should (equal output "ok"))))
+    (should (equal output "ok\n"))))
 
 (ert-deftest clime-test-conform/ancestor-exclusive-conflict ()
   "Exclusive conform on app catches conflict across app+command options."
@@ -955,9 +958,9 @@ satisfy the at-least-one requirement — user must explicitly choose."
   (let* ((conform-ran nil)
          (cmd (clime-make-command :name "run" :handler (lambda (_ctx) "ok")))
          (sibling-grp (clime-make-group :name "meta" :inline t
-                                         :conform (lambda (params _node)
+                                         :conform (lambda (values _node)
                                                     (setq conform-ran t)
-                                                    (plist-put params 'meta-seen t))))
+                                                    (clime-values-set values 'meta-seen t 'conform))))
          (parent-grp (clime-make-group :name "cmds"
                                         :children (list (cons "meta" sibling-grp)
                                                         (cons "run" cmd))))
@@ -985,7 +988,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
     ;; Should succeed and derive value
     (let ((output (with-output-to-string
                     (clime-run app '("run" "--json")))))
-      (should (equal output "fmt-json")))
+      (should (equal output "fmt-json\n")))
     ;; Should error with both
     (should-error
      (clime-parse app '("run" "--json" "--csv"))
@@ -1078,16 +1081,16 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd)))))
     ;; --plain wins: color suppressed to nil, default skipped
     (should (equal (with-output-to-string (clime-run app '("run" "--plain")))
-                   "color=nil plain=t display=plain"))
+                   "color=nil plain=t display=plain\n"))
     ;; nothing set: color gets default t, no winner
     (should (equal (with-output-to-string (clime-run app '("run")))
-                   "color=t plain=nil display=nil"))
+                   "color=t plain=nil display=nil\n"))
     ;; --color explicit: color wins
     (should (equal (with-output-to-string (clime-run app '("run" "--color")))
-                   "color=t plain=nil display=color"))
+                   "color=t plain=nil display=color\n"))
     ;; --no-color: explicitly set but not a winner — no derived key
     (should (equal (with-output-to-string (clime-run app '("run" "--no-color")))
-                   "color=nil plain=nil display=nil"))))
+                   "color=nil plain=nil display=nil\n"))))
 
 (ert-deftest clime-test-conform/exclusive-negatable-default-nil-absent ()
   "Negatable option with :default nil stays absent (no special interaction)."
@@ -1104,7 +1107,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd)))))
     ;; :default nil is no-op — color stays absent, clime-param returns fallback
     (should (equal (with-output-to-string (clime-run app '("run")))
-                   "color=auto"))))
+                   "color=auto\n"))))
 
 ;;; ─── Edge Cases ─────────────────────────────────────────────────────
 
@@ -1121,7 +1124,7 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :children (list (cons "run" cmd)))))
     (clime-test-with-env (("TEST_PORT_CONFORM" "8080"))
       (should (equal (with-output-to-string (clime-run app '("run")))
-                     "8080")))))
+                     "8080\n")))))
 
 (ert-deftest clime-test-conform/node-conform-sees-option-conform-result ()
   "Node :conform receives the already-conformed option value."
@@ -1129,10 +1132,10 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                   :conform (lambda (v _p) (string-to-number v))))
          (cmd (clime-make-command :name "run" :handler #'ignore
                                   :options (list opt)
-                                  :conform (lambda (params _node)
+                                  :conform (lambda (values _node)
                                              ;; Should see the number, not the string
-                                             (should (numberp (plist-get params 'port)))
-                                             params)))
+                                             (should (numberp (clime-values-value values 'port)))
+                                             values)))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd)))))
     (clime-parse app '("run" "--port" "3000"))))
@@ -1143,9 +1146,9 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                :conform (lambda (v _p) (string-to-number v))))
          (cmd (clime-make-command :name "run" :handler #'ignore
                                   :args (list arg)
-                                  :conform (lambda (params _node)
-                                             (should (numberp (plist-get params 'count)))
-                                             params)))
+                                  :conform (lambda (values _node)
+                                             (should (numberp (clime-values-value values 'count)))
+                                             values)))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "run" cmd)))))
     (clime-parse app '("run" "42"))))
@@ -1184,12 +1187,12 @@ satisfy the at-least-one requirement — user must explicitly choose."
                                  :handler (lambda (ctx)
                                             (format "val=%s"
                                                     (clime-ctx-get ctx 'derived)))
-                                 :conform (lambda (params _node)
-                                            (plist-put params 'derived "injected"))))
+                                 :conform (lambda (values _node)
+                                            (clime-values-set values 'derived "injected" 'conform))))
          (app (clime-make-app :name "t" :version "1"
                                :children (list (cons "config" grp)))))
     (should (equal (with-output-to-string (clime-run app '("config")))
-                   "val=injected"))))
+                   "val=injected\n"))))
 
 ;;; ─── Inline Group Structure (clime-swl) ────────────────────────────
 
@@ -1382,6 +1385,92 @@ satisfy the at-least-one requirement — user must explicitly choose."
     (should (= 2 (length received-args)))
     (should (equal "val" (car received-args)))
     (should (clime-option-p (cadr received-args)))))
+
+;;; ─── Values-Map Conformer Specs (clime-7je) ─────────────────────────
+
+(ert-deftest clime-test-conform/run-conformers-reads-values-map ()
+  "clime--run-conformers reads value from values map, not struct."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port")
+                                  :conform (lambda (val _param)
+                                             (if (< val 1024)
+                                                 (error "Port too low")
+                                               val))))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (values (list (list 'port :value 8080 :source 'user))))
+    ;; Call with nodes and values map
+    (let ((result (clime--run-conformers (list cmd) values)))
+      ;; Conformed value in returned values map
+      (should (= 8080 (clime-values-value result 'port))))))
+
+(ert-deftest clime-test-conform/run-conformers-writes-values-map ()
+  "clime--run-conformers writes conformed value to values map, returns updated map."
+  (let* ((opt (clime-make-option :name 'name :flags '("--name")
+                                  :conform #'upcase))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (values (list (list 'name :value "alice" :source 'user))))
+    (let ((result (clime--run-conformers (list cmd) values)))
+      ;; Values map updated with conformed value
+      (should (equal "ALICE" (clime-values-value result 'name)))
+      ;; Source unchanged
+      (should (eq 'user (clime-values-source result 'name))))))
+
+(ert-deftest clime-test-conform/node-conform-receives-values-and-node ()
+  "Node :conform receives (values, node), returns updated values."
+  (let* ((received-args nil)
+         (cmd (clime-make-command
+               :name "run" :handler #'ignore
+               :conform (lambda (values node)
+                          (setq received-args (list values node))
+                          values)))
+         (values '()))
+    (clime--apply-node-conform cmd values)
+    (should (= 2 (length received-args)))
+    (should (listp (car received-args)))
+    (should (clime-command-p (cadr received-args)))))
+
+(ert-deftest clime-test-conform/exclusive-writes-values-map ()
+  "check-exclusive writes group-name entry to values map."
+  (let* ((values (list (list 'json :value t :source 'user)))
+         (grp (clime-make-group :name "format" :inline t
+                                 :options (list (clime-make-option :name 'json :flags '("--json") :nargs 0)
+                                               (clime-make-option :name 'csv :flags '("--csv") :nargs 0))
+                                 :conform (clime-check-exclusive 'format '(json csv)))))
+    (let ((result (clime--apply-node-conform grp values)))
+      ;; Winner written under group-name key with source 'conform
+      (should (eq 'json (clime-values-value result 'format)))
+      (should (eq 'conform (clime-values-source result 'format))))))
+
+(ert-deftest clime-test-conform/paired-writes-values-map ()
+  "check-paired writes zipped alist to values map."
+  (let* ((values (list (list 'skip :value '("a") :source 'user)
+                       (list 'reason :value '("why") :source 'user)))
+         (grp (clime-make-group :name "pairs" :inline t
+                                 :options (list (clime-make-option :name 'skip :flags '("--skip") :multiple t)
+                                               (clime-make-option :name 'reason :flags '("--reason") :multiple t))
+                                 :conform (clime-check-paired 'pairs '(skip reason)))))
+    (let ((result (clime--apply-node-conform grp values)))
+      (let ((pairs (clime-values-value result 'pairs)))
+        (should (= 1 (length pairs)))
+        (should (equal '((skip . "a") (reason . "why")) (car pairs)))
+        (should (eq 'conform (clime-values-source result 'pairs)))))))
+
+(ert-deftest clime-test-conform/finalize-produces-values-map ()
+  "parse-finalize populates :values slot on parse-result."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port") :type 'integer
+                                  :conform (lambda (val _p) (1+ val))))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "run" cmd))))
+         (result (clime-parse app '("run" "--port" "80"))))
+    ;; Values map has conformed value
+    (let ((values (clime-parse-result-values result)))
+      (should (= 81 (clime-values-value values 'port)))
+      (should (eq 'user (clime-values-source values 'port))))
+    ;; Params plist also has it (derived for backward compat)
+    (should (= 81 (plist-get (clime-parse-result-params result) 'port)))))
 
 (provide 'clime-conform-tests)
 ;;; clime-conform-tests.el ends here

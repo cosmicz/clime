@@ -31,7 +31,7 @@
 
 (defconst clime--boolean-keywords
   '(:bool :flag :count :multiple :negatable :hidden :required
-    :optional :rest :inline :json-mode :streaming :deprecated :env)
+          :optional :rest :inline :json-mode :streaming :deprecated :env)
   "DSL keywords that accept bare form as shorthand for t.
 A bare boolean keyword (not followed by a non-keyword, non-cons value)
 is normalized to keyword t before further processing.")
@@ -70,6 +70,24 @@ Returns a new list; ITEMS is not modified."
           (setq items (cdr items))))))
     (nreverse result)))
 
+;;; ─── :optional → :required Normalization ────────────────────────────────
+
+(defun clime--normalize-optional (plist)
+  "Normalize :optional into :required in PLIST.
+If :optional is truthy and :required is also present, signal an error.
+If :optional is truthy, strip :optional and set :required nil.
+If :optional is nil (explicit), strip :optional and set :required t.
+Returns a new plist; PLIST is not modified."
+  (if (not (plist-member plist :optional))
+      plist
+    (let ((opt-val (plist-get plist :optional))
+          (new (cl-copy-list plist)))
+      (cl-remf new :optional)
+      (when (plist-member plist :required)
+        (error ":optional and :required are mutually exclusive"))
+      (setq new (plist-put new :required (not opt-val)))
+      new)))
+
 ;;; ─── Body Parser ────────────────────────────────────────────────────────
 
 (defun clime--extract-keywords (body valid-keys)
@@ -105,6 +123,8 @@ and `function' wrappers like #\\='(lambda ...)."
   (pcase form
     (`(apply ,(or `(function ,fn) `(quote ,fn)) . ,_) fn)
     (`(function (lambda . ,_)) 'lambda)
+    (`(function ,(pred symbolp)) 'function)
+    (`(quote ,(pred symbolp)) 'quote)
     (`(cons ,_ ,inner) (clime--expanded-constructor inner))
     (`(,head . ,_) head)
     (_ nil)))
@@ -116,7 +136,9 @@ and `function' wrappers like #\\='(lambda ...)."
     (clime-alias--create       . :children)
     (clime-make-group          . :children)
     (clime-make-output-format  . :output-formats)
-    (lambda                    . :handler))
+    (lambda                    . :handler)
+    (function                  . :handler)
+    (quote                     . :handler))
   "Map from expanded constructor symbol to `clime--classify-body' category.")
 
 (defun clime--classify-body (forms)
@@ -160,7 +182,8 @@ Returns the updated plist with :bool/:flag removed and :nargs 0 set."
     (when (and has-bool has-flag)
       (error "clime-option: use :bool or :flag, not both"))
     (when has-flag
-      (display-warning 'clime ":flag is deprecated, use :bool instead")
+      (display-warning
+       'clime ":flag is deprecated, use :bool instead")
       (setq plist (cl-copy-list plist))
       (cl-remf plist :flag)
       (setq plist (plist-put plist :nargs 0)))
@@ -178,7 +201,7 @@ Returns the updated plist with :bool/:flag removed and :nargs 0 set."
 Expands to (defvar clime--opt-NAME PLIST).
 PLIST contains default option slot values (evaluated at load time).
 Must not contain :name or :flags (those are per-instance).
-Supports DSL shorthands: :bool t normalizes to :nargs 0,
+Supports DSL shorthands: :bool normalizes to :nargs 0,
 :separator implies :multiple t."
   (declare (indent 1))
   (setq plist (clime--normalize-bare-booleans plist clime--boolean-keywords))
@@ -321,6 +344,8 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defopt' template.
     (when from-name
       (setq plist (cl-copy-list plist))
       (cl-remf plist :from))
+    ;; :optional → :required nil (DSL-only shorthand, not a real slot)
+    (setq plist (clime--normalize-optional plist))
     ;; :bool/:flag t → :nargs 0 (DSL-only shorthand, not a real slot)
     (setq plist (clime--normalize-bool-flag plist))
     ;; :separator implies :multiple t
@@ -344,6 +369,8 @@ Supports :from TEMPLATE-NAME to inherit defaults from a `clime-defarg' template.
     (when from-name
       (setq plist (cl-copy-list plist))
       (cl-remf plist :from))
+    ;; :optional → :required nil (DSL-only shorthand, not a real slot)
+    (setq plist (clime--normalize-optional plist))
     (if from-name
         (let ((template-sym (intern (format "clime--arg-%s" from-name))))
           `(apply #'clime-make-arg
@@ -399,17 +426,19 @@ Resolves DSL aliases via `macroexpand'."
                    name (car form))))))
     (setq member-names (nreverse member-names))
     (when (and required default)
-      (display-warning 'clime
-        (format "clime-mutex `%s': :default is vacuous when :required is set"
-                name)))
+      (display-warning
+       'clime
+       (format "clime-mutex `%s': :default is vacuous when :required is set"
+               name)))
     (when required
       (dolist (opt-form (reverse option-forms))
         (let ((plist (clime--expanded-option-plist opt-form)))
           (when (and plist (plist-get plist :default))
-            (display-warning 'clime
-              (format "clime-mutex `%s': option `%s' has :default, \
+            (display-warning
+             'clime
+             (format "clime-mutex `%s': option `%s' has :default, \
 which is vacuous — defaults apply after exclusivity check"
-                      name (cadr (plist-get plist :name))))))))
+                     name (cadr (plist-get plist :name))))))))
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
@@ -452,10 +481,11 @@ Resolves DSL aliases via `macroexpand'."
       (dolist (opt-form (reverse option-forms))
         (let ((plist (clime--expanded-option-plist opt-form)))
           (when (and plist (plist-get plist :default))
-            (display-warning 'clime
-              (format "clime-zip `%s': option `%s' has :default, \
+            (display-warning
+             'clime
+             (format "clime-zip `%s': option `%s' has :default, \
 which is vacuous — defaults apply after paired check"
-                      name (cadr (plist-get plist :name))))))))
+                     name (cadr (plist-get plist :name))))))))
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
@@ -481,8 +511,8 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :epilog :examples :category :deprecated
-                       :options :args)))
+                     '(:help :doc :aliases :key :hidden :epilog :examples :category :deprecated
+                             :options :args)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms))
@@ -494,7 +524,7 @@ ARGS is (NAME &rest BODY)."
            (clime-make-command
             :name ,name-str
             :handler ,handler
-            ,@(clime--emit-kw keywords '(:help :aliases :hidden :epilog :examples :category :deprecated))
+            ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :epilog :examples :category :deprecated))
             ,@(clime--emit-merged keywords classified '(:conform :options :args :children))))))
 
 (defun clime--build-alias-for (args)
@@ -508,15 +538,15 @@ Supports :defaults and :vals alists for preset/locked option values."
          (path-strings (mapcar #'symbol-name path-form))
          (extracted (clime--extract-keywords
                      (cddr args)
-                     '(:help :doc :aliases :hidden :category :deprecated
-                       :defaults :vals)))
+                     '(:help :doc :aliases :key :hidden :category :deprecated
+                             :defaults :vals)))
          (keywords (car extracted)))
     (setq keywords (clime--prepare-aliases keywords))
     `(cons ,name-str
            (clime-alias--create
             :name ,name-str
             :target ',path-strings
-            ,@(clime--emit-kw keywords '(:defaults :vals :help :aliases :hidden :category :deprecated))))))
+            ,@(clime--emit-kw keywords '(:defaults :vals :help :key :aliases :hidden :category :deprecated))))))
 
 (defun clime--build-group (args)
   "Build a `clime-group' constructor form from DSL ARGS.
@@ -525,8 +555,8 @@ ARGS is (NAME &rest BODY)."
          (name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      (cdr args)
-                     '(:help :doc :aliases :hidden :inline :epilog :examples :category :deprecated
-                       :options :args :children)))
+                     '(:help :doc :aliases :key :hidden :inline :epilog :examples :category :deprecated
+                             :options :args :children)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -534,7 +564,7 @@ ARGS is (NAME &rest BODY)."
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
-            ,@(clime--emit-kw keywords '(:help :aliases :hidden :inline :epilog :examples :category :deprecated))
+            ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :inline :epilog :examples :category :deprecated))
             ,@(clime--emit-merged keywords classified '(:conform :options :args :children :handler))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
@@ -562,7 +592,7 @@ Child forms:
          (extracted (clime--extract-keywords
                      body
                      '(:version :env-prefix :help :doc :json-mode :epilog :examples :setup
-                       :options :args :children :output-formats)))
+                                :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -587,13 +617,14 @@ Child forms:
 ;; Container forms use `defmacro' with &rest body (keywords interleaved
 ;; with child forms prevent &key usage).
 
-(cl-defmacro clime-opt (name flags
+(cl-defmacro clime-opt (name
+                        flags
                         &rest plist
-                        &key bool flag from type help required default
-                        nargs env count multiple choices coerce conform
-                        separator category hidden deprecated
-                           negatable requires
-                           &allow-other-keys)
+                        &key bool flag from type help required optional
+                        default nargs env count multiple choices coerce
+                        conform separator category hidden deprecated
+                        negatable requires key
+                        &allow-other-keys)
   "Define a CLI option NAME with FLAGS.
 NAME is a symbol — the canonical parameter name.
 FLAGS is a list of flag strings, e.g. (\"--verbose\" \"-v\").
@@ -605,23 +636,25 @@ Keyword arguments:
   :separator SEP    Split value by SEP (implies :multiple)
   :negatable t      Generate --no-X variant
   :required t       Option must be provided
+  :optional t       Option is not required (exclusive with :required)
   :requires SYMS    Other options that must also be set
   :nargs N          Number of arguments (0 = boolean)
-  :type SYM         Type converter (\\='string, \\='integer, \\='number)
+  :type SYM-OR-FN   Type converter: symbol (\\='string, \\='integer, \\='number) or function
   :choices LIST     Allowed values or function
   :coerce FN        Transform after type coercion
   :conform FN       Pass-2 validation/normalization
   :default VAL      Default value when not provided
   :env STR|t        Env var suffix (prefixed by :env-prefix) or t to auto-derive
   :category STR     Help display category
+  :key CHAR-OR-STR  Preferred invoke menu key (single char)
   :hidden t         Omit from help
   :deprecated STR   Deprecation message or t
   :help STR         One-line help text
   :from SYM         Inherit from `clime-defopt' template"
   (declare (indent 2))
-  (ignore bool flag from type help required default nargs env count
+  (ignore bool flag from type help required optional default nargs env count
           multiple choices coerce conform separator category hidden
-          deprecated negatable requires)
+          deprecated negatable requires key)
   (clime--build-option (cons name (cons flags plist))))
 
 (defalias 'clime-option 'clime-opt)
@@ -629,26 +662,28 @@ Keyword arguments:
 
 (cl-defmacro clime-arg (name
                         &rest plist
-                        &key from type help required default nargs
-                        choices coerce conform deprecated
+                        &key from type help required optional default
+                        nargs choices coerce conform deprecated key
                         &allow-other-keys)
   "Define a positional argument NAME.
 NAME is a symbol — the canonical parameter name.
 
 Keyword arguments:
-  :type SYM         Type converter (\\='string, \\='integer, \\='number)
+  :type SYM-OR-FN   Type converter: symbol (\\='string, \\='integer, \\='number) or function
   :choices LIST     Allowed values or function
   :coerce FN        Transform after type coercion
   :conform FN       Pass-2 validation/normalization
   :default VAL      Default value when not provided
   :nargs N          Number of arguments (:rest for rest args)
   :required BOOL    Whether arg is required (default t)
+  :optional BOOL    Arg is not required (exclusive with :required)
+  :key CHAR-OR-STR  Preferred invoke menu key (single char)
   :deprecated STR   Deprecation message or t
   :help STR         One-line help text
   :from SYM         Inherit from `clime-defarg' template"
   (declare (indent 1))
-  (ignore from type help required default nargs choices coerce conform
-          deprecated)
+  (ignore from type help required optional default nargs choices coerce
+          conform deprecated key)
   (clime--build-arg (cons name plist)))
 
 (defalias 'clime-argument 'clime-arg)
@@ -661,6 +696,7 @@ NAME is a symbol — the command name.
 BODY is a mix of keyword args and child forms:
   :help STRING       — command description
   :aliases LIST      — alternative names
+  :key CHAR-OR-STR   — preferred invoke menu key
   :hidden BOOL       — omit from help
   :epilog STRING     — text after help
   :category STRING   — help display category
@@ -673,9 +709,10 @@ Child forms:
   (declare (indent 1))
   (clime--build-command (cons name body)))
 
-(cl-defmacro clime-alias-for (name path
+(cl-defmacro clime-alias-for (name
+                              path
                               &rest plist
-                              &key help doc aliases hidden category
+                              &key help doc aliases key hidden category
                               deprecated defaults vals
                               &allow-other-keys)
   "Define an alias NAME for the command at PATH.
@@ -685,13 +722,14 @@ PATH is a list of symbols naming the target command.
 Keyword arguments:
   :help STR         Help text (inherits from target if omitted)
   :aliases LIST     Alternative names
+  :key CHAR-OR-STR  Preferred invoke menu key
   :hidden t         Omit from help
   :category STR     Help display category
   :deprecated STR   Deprecation message or t
   :defaults ALIST   Preset option values (user can override)
   :vals ALIST       Locked option values (hidden from CLI)"
   (declare (indent 2))
-  (ignore help doc aliases hidden category deprecated defaults vals)
+  (ignore help doc aliases key hidden category deprecated defaults vals)
   (clime--build-alias-for (cons name (cons path plist))))
 
 (defmacro clime-group (name &rest body)
@@ -701,6 +739,7 @@ NAME is a symbol — the group name.
 BODY is a mix of keyword args and child forms:
   :help STRING       — group description
   :aliases LIST      — alternative names
+  :key CHAR-OR-STR   — preferred invoke menu key
   :hidden BOOL       — omit from help
   :inline BOOL       — promote children to parent level
   :epilog STRING     — text after help
@@ -717,7 +756,8 @@ Child forms:
   (declare (indent 1))
   (clime--build-group (cons name body)))
 
-(cl-defmacro clime-output-format (name flags
+(cl-defmacro clime-output-format (name
+                                  flags
                                   &rest plist
                                   &key help finalize streaming encoder error-handler
                                   hidden category deprecated
@@ -763,12 +803,18 @@ Expands to an inline group with conformer via `clime-check-paired'."
   (declare (indent 1))
   (clime--build-zip-conform (cons name body)))
 
-(defmacro clime-handler (arglist &rest body)
-  "Define a command handler with ARGLIST and BODY.
-ARGLIST is typically (CTX) — receives the parse context.
-BODY is the handler implementation."
+(defmacro clime-handler (arglist-or-fn &rest body)
+  "Define a command handler.
+With ARGLIST-OR-FN as a list and BODY, produces (lambda ARGLIST-OR-FN BODY).
+With a single function reference, passes it through:
+  (clime-handler #\\='my-fn)  → #\\='my-fn
+  (clime-handler \\='my-fn)   → \\='my-fn"
   (declare (indent 1))
-  `(lambda ,arglist ,@body))
+  (if (and (null body)
+           (or (not (listp arglist-or-fn))
+               (memq (car-safe arglist-or-fn) '(function quote))))
+      arglist-or-fn
+    `(lambda ,arglist-or-fn ,@body)))
 
 (provide 'clime-dsl)
 ;;; clime-dsl.el ends here

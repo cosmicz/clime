@@ -652,6 +652,50 @@
     (clime--merge-template tpl :help "changed")
     (should (equal (plist-get tpl :help) "orig"))))
 
+(ert-deftest clime-test-merge-template/conform-compose ()
+  "Both template and override :conform are concatenated into a list."
+  (let* ((fn-a (lambda (v _p) (upcase v)))
+         (fn-b (lambda (v _p) (concat v "!")))
+         (tpl (list :conform fn-a))
+         (result (clime--merge-template tpl :conform fn-b)))
+    (should (= 2 (length (plist-get result :conform))))
+    (should (eq (car (plist-get result :conform)) fn-a))
+    (should (eq (cadr (plist-get result :conform)) fn-b))))
+
+(ert-deftest clime-test-merge-template/coerce-compose ()
+  "Both template and override :coerce are concatenated into a list."
+  (let* ((fn-a (lambda (n) (* n 10)))
+         (fn-b (lambda (n) (+ n 1)))
+         (tpl (list :coerce fn-a))
+         (result (clime--merge-template tpl :coerce fn-b)))
+    (should (= 2 (length (plist-get result :coerce))))
+    (should (eq (car (plist-get result :coerce)) fn-a))
+    (should (eq (cadr (plist-get result :coerce)) fn-b))))
+
+(ert-deftest clime-test-merge-template/conform-compose-lists ()
+  "Merging list :conform values concatenates them."
+  (let* ((fn-a (lambda (v _p) (upcase v)))
+         (fn-b (lambda (v _p) (concat v "!")))
+         (tpl (list :conform (list fn-a)))
+         (result (clime--merge-template tpl :conform (list fn-b))))
+    (should (= 2 (length (plist-get result :conform))))
+    (should (eq (car (plist-get result :conform)) fn-a))
+    (should (eq (cadr (plist-get result :conform)) fn-b))))
+
+;;; ─── Conform Call ───────────────────────────────────────────────────────
+
+(ert-deftest clime-test-conform-call/2-arg ()
+  "clime--conform-call passes both val and param to 2-arg function."
+  (should (equal (clime--conform-call (lambda (v p) (format "%s:%s" v p))
+                                      "val" "param")
+                 "val:param")))
+
+(ert-deftest clime-test-conform-call/1-arg ()
+  "clime--conform-call passes only val to 1-arg function."
+  (should (equal (clime--conform-call (lambda (v) (upcase v))
+                                      "abc" "ignored")
+                 "ABC")))
+
 ;;; ─── Tree Validation ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-validate/duplicate-flag-error ()
@@ -737,6 +781,151 @@
                 (clime-make-arg :name 'file :required t))))
     (should-not (cl-some (lambda (m) (string-match-p ":required is vacuous" m))
                          msgs))))
+
+;;; ─── Deep Copy Tests ───────────────────────────────────────────────
+
+(ert-deftest clime-test-deep-copy/option-mutation-isolated ()
+  "Mutating a copied option does not affect the original."
+  (let* ((app (clime-make-app
+               :name "test" :version "1"
+               :options (list (clime-make-option :name 'verbose :flags '("--verbose")))))
+         (copy (clime--deep-copy-tree app)))
+    (setf (clime-param-help (car (clime-node-options copy))) "changed")
+    (should-not (clime-param-help (car (clime-node-options app))))))
+
+(ert-deftest clime-test-deep-copy/arg-mutation-isolated ()
+  "Mutating a copied arg does not affect the original."
+  (let* ((cmd (clime-make-command
+               :name "run" :handler #'ignore
+               :args (list (clime-make-arg :name 'file))))
+         (app (clime-make-app
+               :name "test" :version "1"
+               :children (list (cons "run" cmd))))
+         (copy (clime--deep-copy-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (setf (clime-param-help (car (clime-node-args copy-cmd))) "mutated")
+    (should-not (clime-param-help (car (clime-node-args cmd))))))
+
+(ert-deftest clime-test-deep-copy/parent-refs-correct ()
+  "Copied children point to copied parent, not original."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app
+               :name "test" :version "1"
+               :children (list (cons "run" cmd))))
+         (_ (clime--set-parent-refs-1 app))
+         (copy (clime--deep-copy-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (should (eq copy (clime-node-parent copy-cmd)))
+    (should-not (eq app (clime-node-parent copy-cmd)))))
+
+(ert-deftest clime-test-deep-copy/original-tree-unchanged ()
+  "Deep copy does not modify any part of the original tree."
+  (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose")))
+         (arg (clime-make-arg :name 'file))
+         (cmd (clime-make-command
+               :name "run" :handler #'ignore
+               :args (list arg)))
+         (app (clime-make-app
+               :name "test" :version "1"
+               :options (list opt)
+               :children (list (cons "run" cmd))))
+         (copy (clime--deep-copy-tree app)))
+    ;; Mutate everything on the copy
+    (setf (clime-param-help (car (clime-node-options copy))) "x")
+    (setf (clime-node-name copy) "mutated")
+    (let ((copy-cmd (cdr (car (clime-group-children copy)))))
+      (setf (clime-param-help (car (clime-node-args copy-cmd))) "y"))
+    ;; Original is untouched
+    (should (equal "test" (clime-node-name app)))
+    (should-not (clime-param-help opt))
+    (should-not (clime-param-help arg))))
+
+(ert-deftest clime-test-deep-copy/handlers-shared ()
+  "Handler functions are shared (not copied) between original and copy."
+  (let* ((handler #'ignore)
+         (cmd (clime-make-command :name "run" :handler handler))
+         (app (clime-make-app
+               :name "test" :version "1"
+               :children (list (cons "run" cmd))))
+         (copy (clime--deep-copy-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (should (eq handler (clime-node-handler copy-cmd)))))
+
+(ert-deftest clime-test-deep-copy/inline-group-options-isolated ()
+  "Inline group options are deep-copied and isolated from original."
+  (let* ((opt-a (clime-make-option :name 'mode-a :flags '("--mode-a") :nargs 0))
+         (opt-b (clime-make-option :name 'mode-b :flags '("--mode-b") :nargs 0))
+         (grp (clime-group--create :name "modes" :inline t
+                                    :options (list opt-a opt-b)))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                   :children (list (cons "modes" grp))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd))))
+         (_ (clime--set-parent-refs app))
+         (copy (clime--deep-copy-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy))))
+         (copy-grp (cdr (car (clime-group-children copy-cmd))))
+         (copy-opt (car (clime-node-options copy-grp))))
+    ;; Mutating copy option doesn't affect original
+    (setf (clime-param-help copy-opt) "changed")
+    (should-not (clime-param-help opt-a))
+    ;; Copy inline group parent points to copy cmd
+    (should (eq copy-cmd (clime-node-parent copy-grp)))))
+
+;;; ─── Prepare Tree Tests ───────────────────────────────────────────────
+
+(ert-deftest clime-test-prepare-tree/sets-parent-refs ()
+  "Prepare-tree sets parent refs on child nodes."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd))))
+         (copy (clime--prepare-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (should (eq copy (clime-node-parent copy-cmd)))))
+
+(ert-deftest clime-test-prepare-tree/resolves-aliases ()
+  "Prepare-tree resolves alias nodes into full commands."
+  (let* ((opt (clime-make-option :name 'format :flags '("--format")))
+         (cmd (clime-make-command :name "list" :handler #'ignore
+                                   :options (list opt)))
+         (alias (clime-alias--create :name "csv" :target '("list")
+                                      :vals '((format . "csv"))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "list" cmd)
+                                              (cons "csv" alias))))
+         (copy (clime--prepare-tree app))
+         (csv-node (cdr (assoc "csv" (clime-group-children copy)))))
+    ;; Alias resolved: csv is now a command with handler, not an alias
+    (should (clime-command-p csv-node))
+    (should (clime-node-handler csv-node))))
+
+(ert-deftest clime-test-prepare-tree/deep-copy-isolated ()
+  "Prepare-tree returns an isolated copy; mutations don't affect original."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore
+                                   :args (list (clime-make-arg :name 'file))))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd))))
+         (copy (clime--prepare-tree app))
+         (copy-cmd (cdr (car (clime-group-children copy)))))
+    (setf (clime-param-help (car (clime-node-args copy-cmd))) "mutated")
+    (should-not (clime-param-help (car (clime-node-args cmd))))))
+
+(ert-deftest clime-test-prepare-tree/idempotent-on-original ()
+  "Calling prepare-tree twice on same app produces equivalent results."
+  (let* ((cmd (clime-make-command :name "run" :handler #'ignore))
+         (alias (clime-alias--create :name "go" :target '("run")))
+         (app (clime-make-app :name "test" :version "1"
+                              :children (list (cons "run" cmd)
+                                              (cons "go" alias))))
+         (copy1 (clime--prepare-tree app))
+         (copy2 (clime--prepare-tree app))
+         (go1 (cdr (assoc "go" (clime-group-children copy1))))
+         (go2 (cdr (assoc "go" (clime-group-children copy2)))))
+    ;; Both copies resolved the alias
+    (should (clime-command-p go1))
+    (should (clime-command-p go2))
+    ;; But they are distinct structs
+    (should-not (eq go1 go2))))
 
 (provide 'clime-core-tests)
 ;;; clime-core-tests.el ends here

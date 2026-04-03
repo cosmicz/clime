@@ -18,6 +18,7 @@
 (require 'cl-lib)
 
 (declare-function json-encode "json")
+(declare-function clime-resolve-type "clime-param-type")
 
 ;;; ─── Param (abstract base) ──────────────────────────────────────────────
 
@@ -27,7 +28,8 @@
   (name nil :type symbol :documentation "Canonical param name.")
   (help nil :type (or string null) :documentation "One-line help text.")
   (required nil :type boolean)
-  (default nil :documentation "Default value, or a function for lazy defaults."))
+  (default nil :documentation "Default value, or a function for lazy defaults.")
+  (key nil :type (or character string null) :documentation "Preferred invoke menu key (single char)."))
 
 ;;; ─── Option ─────────────────────────────────────────────────────────────
 
@@ -36,21 +38,21 @@
                             (:copier nil))
   "A CLI option (flag) specification."
   (flags nil :type list :documentation "List of flag strings, e.g. (\"--verbose\" \"-v\").")
-  (type 'string :type symbol :documentation "Type converter symbol.")
+  (type 'string :type (or symbol list) :documentation "Type spec: symbol (`string', `integer', `number') or list (`(integer :min 1 :max 100)').")
   (nargs nil :type (or integer null) :documentation "Arg count: nil=1, 0=boolean, N=fixed.")
   (env nil :type (or string boolean null) :documentation "Env var name: string suffix (prefixed by app :env-prefix), t for auto-derive, or nil.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
   (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
-  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
-  (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error.")
+  (coerce nil :type list :documentation "List of transform functions applied after type coercion (in order).  Errors are wrapped as `clime-usage-error'.")
+  (conform nil :type list :documentation "List of pass-2 conformer functions; each receives value (and optionally param), returns conformed value or signals error.")
   (separator nil :type (or string null) :documentation "Split each value by this string; implies :multiple t.")
   (category nil :type (or string null) :documentation "Help display category label.")
   (hidden nil :type boolean :documentation "If non-nil, omit from help.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
   (negatable nil :type boolean :documentation "If non-nil, auto-generate --no-X variant. Implies boolean (nargs 0).")
   (requires nil :type list :documentation "List of option name symbols that must also be set when this option is used.")
-  (locked nil :type boolean :documentation "When non-nil, option is locked (from alias :vals).  Locked options are hidden from CLI/help and rendered as read-only in invoke.  The locked value is stored in :default."))
+  (locked nil :type boolean :documentation "When non-nil, option is locked (from alias :vals).  Locked options are hidden from CLI/help and rendered as read-only in invoke."))
 
 (defun clime-make-option (&rest args)
   "Create a `clime-option' with validation.
@@ -69,7 +71,17 @@ ARGS is a plist of slot values."
       (when (plist-get args :count)
         (error "clime-make-option: :negatable is incompatible with :count")))
     (clime--check-required-default "Option" args)
+    (setq args (clime--normalize-fn-lists args))
     (apply #'clime-option--create args)))
+
+(defun clime--normalize-fn-lists (args)
+  "Normalize :conform and :coerce in ARGS plist to lists.
+A bare function is wrapped in a one-element list."
+  (dolist (key '(:conform :coerce))
+    (let ((val (plist-get args key)))
+      (when val
+        (setq args (plist-put args key (clime--ensure-list val))))))
+  args)
 
 (defun clime--check-required-default (kind args)
   "Warn if ARGS plist has both :required and :default.
@@ -79,12 +91,45 @@ KIND is a string like \"Option\" or \"Arg\" for the warning message."
       (format "%s `%s': :required is vacuous when :default is set"
               kind (plist-get args :name)))))
 
+(defun clime--conform-call (cfn val param)
+  "Call conform function CFN with VAL and optionally PARAM.
+If CFN accepts exactly 1 argument, call (CFN VAL).
+Otherwise call (CFN VAL PARAM)."
+  (let ((max-args (cdr (func-arity cfn))))
+    (if (and (numberp max-args) (= max-args 1))
+        (funcall cfn val)
+      (funcall cfn val param))))
+
+(defun clime--ensure-list (val)
+  "Return VAL as a list.  If VAL is a function, wrap it."
+  (cond ((null val) nil)
+        ((and (listp val) (not (functionp val))) val)
+        (t (list val))))
+
 (defun clime--merge-template (template &rest overrides)
   "Merge option TEMPLATE plist with OVERRIDES plist.
-OVERRIDES take precedence over TEMPLATE values."
+OVERRIDES take precedence over TEMPLATE values.  For :conform and
+:coerce, when both template and override provide a value, they are
+concatenated (template fns first, override fns after)."
   (let ((result (copy-sequence template)))
     (cl-loop for (key val) on overrides by #'cddr
              do (setq result (plist-put result key val)))
+    ;; Concatenate :conform lists when both sides provide one
+    (let ((tmpl-conform (plist-get template :conform))
+          (over-conform (plist-get overrides :conform)))
+      (when (and tmpl-conform over-conform)
+        (setq result
+              (plist-put result :conform
+                         (append (clime--ensure-list tmpl-conform)
+                                 (clime--ensure-list over-conform))))))
+    ;; Concatenate :coerce lists when both sides provide one
+    (let ((tmpl-coerce (plist-get template :coerce))
+          (over-coerce (plist-get overrides :coerce)))
+      (when (and tmpl-coerce over-coerce)
+        (setq result
+              (plist-put result :coerce
+                         (append (clime--ensure-list tmpl-coerce)
+                                 (clime--ensure-list over-coerce))))))
     result))
 
 (defun clime-option-boolean-p (option)
@@ -99,17 +144,90 @@ OVERRIDES take precedence over TEMPLATE values."
 Used for lazy slots like :choices and :default."
   (if (functionp value) (funcall value) value))
 
+(defun clime--type-describe (type)
+  "Return resolved :describe for TYPE spec, or nil for plain/nil types.
+Returns nil for nil and \"string\" types (no annotation needed)."
+  (when type
+    (condition-case nil
+        (let ((desc (plist-get (clime-resolve-type type) :describe)))
+          (unless (equal desc "string") desc))
+      (clime-type-error nil))))
+
+(defun clime--type-describe-compact (type)
+  "Return a compact :describe for TYPE, collapsing choices branches.
+For choice types, member/const branches are collapsed to \"choice\"
+and non-choice branches keep their :describe.  Returns nil when fully
+redundant (pure member/const) or for nil/string types.
+Examples:
+  (choice (member ...) (integer :min 1)) → \"choice|integer ≥1\"
+  (choice (number :min 0) (const \"off\")) → \"number ≥0|choice\"
+  (member \"a\" \"b\") → nil  (pure choices, redundant)
+  (integer :min 1) → \"integer ≥1\"  (no change)"
+  (if (and type (consp type) (eq (car type) 'choice))
+      (let ((has-choices nil)
+            (others '()))
+        (dolist (spec (cdr type))
+          (let ((head (and (consp spec) (car spec))))
+            (if (memq head '(member const))
+                (setq has-choices t)
+              ;; Resolve the sub-type to get its :describe
+              (condition-case nil
+                  (let ((desc (plist-get (clime-resolve-type spec) :describe)))
+                    (when (and desc (not (equal desc "string")))
+                      (push desc others)))
+                (clime-type-error nil)))))
+        (let ((parts (nreverse others)))
+          (when has-choices
+            (push "choice" parts))
+          ;; Pure member/const with no other branches → redundant
+          (unless (and (= (length parts) 1) (equal (car parts) "choice"))
+            (mapconcat #'identity parts "|"))))
+    ;; Non-choice: delegate to standard describe, but suppress
+    ;; pure member/const (redundant with choices display)
+    (if (and (consp type) (memq (car type) '(member const)))
+        nil
+      (clime--type-describe type))))
+
+(defun clime--type-describe-redundant-p (type effective-choices)
+  "Return non-nil if TYPE :describe is redundant with EFFECTIVE-CHOICES.
+True when the type's own :choices match EFFECTIVE-CHOICES and
+:describe is just those choices joined with \" | \"."
+  (when (and type effective-choices)
+    (condition-case nil
+        (let* ((resolved (clime-resolve-type type))
+               (desc (plist-get resolved :describe))
+               (type-choices (plist-get resolved :choices)))
+          (and desc type-choices
+               (equal type-choices effective-choices)
+               (equal desc (mapconcat (lambda (v) (format "%s" v))
+                                      type-choices "|"))))
+      (clime-type-error nil))))
+
+(defun clime--effective-choices (param)
+  "Return effective choices for PARAM (option or arg).
+Explicit :choices slot wins.  Falls back to type-provided :choices."
+  (or (clime--resolve-value
+       (if (clime-option-p param)
+           (clime-option-choices param)
+         (clime-arg-choices param)))
+      (let ((type (if (clime-option-p param)
+                      (clime-option-type param)
+                    (clime-arg-type param))))
+        (condition-case nil
+            (plist-get (clime-resolve-type type) :choices)
+          (clime-type-error nil)))))
+
 ;;; ─── Arg ────────────────────────────────────────────────────────────────
 
 (cl-defstruct (clime-arg (:include clime-param)
                          (:constructor clime-arg--create)
                          (:copier nil))
   "A CLI positional argument specification."
-  (type 'string :type symbol :documentation "Type converter symbol.")
+  (type 'string :type (or symbol list) :documentation "Type spec: symbol (`string', `integer', `number') or list (`(integer :min 1 :max 100)').")
   (nargs nil :documentation "Arg count: nil=1, integer N, or :rest.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
-  (coerce nil :type (or function null) :documentation "Custom transform applied after type coercion.")
-  (conform nil :type (or function null) :documentation "Pass-2 conformer; receives value, returns conformed value or signals error.")
+  (coerce nil :type list :documentation "List of transform functions applied after type coercion (in order).  Errors are wrapped as `clime-usage-error'.")
+  (conform nil :type list :documentation "List of pass-2 conformer functions; each receives value (and optionally param), returns conformed value or signals error.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning)."))
 
 (defun clime-make-arg (&rest args)
@@ -123,6 +241,7 @@ Defaults :required to t (unlike options which default to nil)."
   (unless (plist-member args :required)
     (setq args (plist-put (cl-copy-list args) :required t)))
   (clime--check-required-default "Arg" args)
+  (setq args (clime--normalize-fn-lists args))
   (apply #'clime-arg--create args))
 
 ;;; ─── Conform Helpers ────────────────────────────────────────────────────
@@ -136,6 +255,85 @@ Always returns a list."
    ((functionp existing) (list existing fn))
    (t (append existing (list fn)))))
 
+;;; ─── Values Map API ─────────────────────────────────────────────────────
+;;
+;; A values map is an alist of (NAME . PLIST) entries.
+;; NAME is a symbol (param name).  PLIST has keys:
+;;   :value  — the resolved value (absent when no value set)
+;;   :source — provenance symbol: user, app, env, default, conform
+;;   :error  — error string (optional, present when validation failed)
+;;
+;; Source precedence (highest first): user > app > env > default > conform.
+;; `clime-values-merge' respects this ordering.
+
+(defconst clime--source-precedence '(user app env default conform)
+  "Source precedence order, highest first.")
+
+(defun clime-values-get (values name)
+  "Return the plist for NAME in VALUES, or nil."
+  (cdr (assq name values)))
+
+(defun clime-values-value (values name)
+  "Return the resolved value for NAME in VALUES."
+  (plist-get (clime-values-get values name) :value))
+
+(defun clime-values-source (values name)
+  "Return the source symbol for NAME in VALUES."
+  (plist-get (clime-values-get values name) :source))
+
+(defun clime-values-error (values name)
+  "Return the error string for NAME in VALUES, or nil."
+  (plist-get (clime-values-get values name) :error))
+
+(defun clime-values-set (values name value source)
+  "Set NAME to (:value VALUE :source SOURCE) in VALUES, unconditionally.
+Returns the updated alist."
+  (cons (cons name (list :value value :source source))
+        (assq-delete-all name values)))
+
+(defun clime-values-set-error (values name error)
+  "Set :error on NAME's entry in VALUES.
+If NAME exists, add/replace :error while preserving other keys.
+If NAME is absent, create an error-only entry with :error and :source nil.
+Returns the updated alist."
+  (let ((existing (clime-values-get values name)))
+    (if existing
+        (cons (cons name (plist-put (copy-sequence existing) :error error))
+              (assq-delete-all name values))
+      (cons (cons name (list :error error))
+            values))))
+
+(defun clime-values-errors (values)
+  "Return alist of (NAME . ERROR-STRING) for entries with :error."
+  (cl-loop for (name . plist) in values
+           when (plist-get plist :error)
+           collect (cons name (plist-get plist :error))))
+
+(defun clime-values-merge (values name value source)
+  "Merge NAME into VALUES, respecting source precedence.
+Insert if NAME is absent.  If present, overwrite only when SOURCE
+has strictly higher precedence than the existing entry's source.
+Returns the updated alist."
+  (let ((existing (assq name values)))
+    (if (not existing)
+        (cons (cons name (list :value value :source source)) values)
+      (let* ((existing-source (plist-get (cdr existing) :source))
+             (new-rank (cl-position source clime--source-precedence))
+             (old-rank (cl-position existing-source clime--source-precedence)))
+        (if (and new-rank old-rank (< new-rank old-rank))
+            (cons (cons name (list :value value :source source))
+                  (assq-delete-all name values))
+          values)))))
+
+(defun clime-values-plist (values)
+  "Derive a flat plist (NAME VALUE ...) from VALUES for backward compat.
+Skips entries that have :error but no :value."
+  (mapcan (lambda (entry)
+            (let ((plist (cdr entry)))
+              (when (plist-member plist :value)
+                (list (car entry) (plist-get plist :value)))))
+          values))
+
 ;;; ─── Node-Level Conform Checks ──────────────────────────────────────────
 
 (defun clime-check-exclusive (group-name member-names &optional default required)
@@ -144,13 +342,13 @@ GROUP-NAME is a symbol for the derived value key.  MEMBER-NAMES is a list
 of param name symbols (e.g. \\='(json csv)).  DEFAULT, when non-nil, is
 injected under GROUP-NAME when no member is set.  REQUIRED, when non-nil,
 signals an error if no member is set.  The returned callable takes
-\(params, node) and returns updated PARAMS with the winner's name
+\(values, node) and returns updated VALUES with the winner's name
 injected under GROUP-NAME.
 
 The returned symbol is a named function for debugging convenience."
-  (let* ((fn (lambda (params _node)
+  (let* ((fn (lambda (values _node)
     (let ((set-names (cl-remove-if-not
-                      (lambda (k) (plist-member params k))
+                      (lambda (k) (assq k values))
                       member-names)))
       (when (> (length set-names) 1)
         (signal 'clime-usage-error
@@ -161,16 +359,16 @@ The returned symbol is a named function for debugging convenience."
       (cond
        ((= (length set-names) 1)
         (let ((winner (car set-names)))
-          (if (plist-get params winner)
+          (if (clime-values-value values winner)
               ;; Truthy winner: suppress defaults on siblings, set derived key
               (progn
                 (dolist (k member-names)
-                  (unless (or (eq k winner) (plist-member params k))
-                    (setq params (plist-put params k nil))))
-                (plist-put params group-name winner))
+                  (unless (or (eq k winner) (assq k values))
+                    (setq values (clime-values-set values k nil 'conform))))
+                (clime-values-set values group-name winner 'conform))
             ;; Falsy (e.g. negated flag): explicitly set but not a winner —
             ;; don't suppress siblings or inject derived key
-            params)))
+            values)))
        (required
         (signal 'clime-usage-error
                 (list (format "One of %s is required"
@@ -178,8 +376,8 @@ The returned symbol is a named function for debugging convenience."
                                          member-names ", "))
                       :params member-names)))
        (default
-        (plist-put params group-name default))
-       (t params)))))
+        (clime-values-set values group-name default 'conform))
+       (t values)))))
          (sym (make-symbol (format "clime-exclusive-%s" group-name))))
     (fset sym fn)
     sym))
@@ -189,11 +387,11 @@ The returned symbol is a named function for debugging convenience."
 GROUP-NAME is a symbol for the zipped value key.  MEMBER-NAMES is a list
 of param name symbols (e.g. \\='(skip reason)).  REQUIRED, when non-nil,
 signals an error if no members are set.  The returned function takes
-\(params, node) and returns updated PARAMS with a zipped alist injected
+\(values, node) and returns updated VALUES with a zipped alist injected
 under GROUP-NAME."
-  (lambda (params _node)
+  (lambda (values _node)
     (let* ((set-names (cl-remove-if-not
-                       (lambda (k) (plist-member params k))
+                       (lambda (k) (assq k values))
                        member-names))
            (any-set (> (length set-names) 0))
            (all-set (= (length set-names) (length member-names))))
@@ -207,7 +405,7 @@ under GROUP-NAME."
       ;; Partial presence check
       (when (and any-set (not all-set))
         (let ((missing (cl-remove-if
-                        (lambda (k) (plist-member params k))
+                        (lambda (k) (assq k values))
                         member-names)))
           (signal 'clime-usage-error
                   (list (format "%s requires %s"
@@ -218,13 +416,13 @@ under GROUP-NAME."
       ;; Cardinality check
       (when all-set
         (let ((counts (mapcar (lambda (k)
-                                (let ((val (plist-get params k)))
+                                (let ((val (clime-values-value values k)))
                                   (if (listp val) (length val) 0)))
                               member-names)))
           (unless (apply #'= counts)
             (let ((parts (mapcar (lambda (k)
                                    (format "%s (%d)" k
-                                           (let ((val (plist-get params k)))
+                                           (let ((val (clime-values-value values k)))
                                              (if (listp val) (length val) 0))))
                                  member-names)))
               (signal 'clime-usage-error
@@ -237,10 +435,10 @@ under GROUP-NAME."
             (dotimes (i n)
               (let ((row '()))
                 (dolist (k member-names)
-                  (let ((vals (plist-get params k)))
+                  (let ((vals (clime-values-value values k)))
                     (push (cons k (nth i vals)) row)))
                 (push (nreverse row) zipped)))
-            (plist-put params group-name (nreverse zipped))))))))
+            (clime-values-set values group-name (nreverse zipped) 'conform)))))))
 
 ;;; ─── Node (base) ────────────────────────────────────────────────────────
 
@@ -249,6 +447,7 @@ under GROUP-NAME."
   "Abstract base for CLI tree nodes (commands, groups, apps)."
   (name nil :type string :documentation "Node name as typed by user.")
   (aliases nil :type list :documentation "Alternative names for this node.")
+  (key nil :type (or character string null) :documentation "Preferred invoke menu key (single char).")
   (help nil :type (or string null) :documentation "One-line description.")
   (options nil :type list :documentation "List of `clime-option' structs.")
   (args nil :type list :documentation "Ordered list of `clime-arg' structs.")
@@ -261,10 +460,12 @@ under GROUP-NAME."
   (examples nil :type list :documentation "List of example invocations for help output.
 Each element is (INVOCATION . DESCRIPTION), (INVOCATION), or a bare INVOCATION string.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
-  (locked-vals nil :type list :documentation "Alist of (name . value) injected into params during finalize.  Locked vals hide their options from CLI and help.")
+  (value-entries nil :type list :documentation "Alist of (NAME . PLIST) entries.
+Declarative values a node contributes to the values map during finalize.
+Each PLIST has :value and :source keys.  Alias vals have source `app'.")
   (conform nil :type (or function list null)
            :documentation "Transform/validate hook (run during finalization).
-Single function or list of functions, each: (params, node) → params.
+Single function or list of functions, each: (values, node) → values.
 For lists, functions are called in sequence, threading params."))
 
 ;;; ─── Alias ──────────────────────────────────────────────────────────────
@@ -305,6 +506,37 @@ ARGS is a plist of slot values."
   (unless (plist-get args :handler)
     (error "clime-make-command: :handler is required"))
   (apply #'clime-command--create args))
+
+(defun clime--prepare-tree (app)
+  "Return a deep copy of APP ready for parsing or invoke.
+Set parent refs, resolve aliases (idempotent), then deep-copy.
+Mutations on the returned tree do not affect APP."
+  (clime--set-parent-refs app)
+  (clime--resolve-aliases app)
+  (clime--deep-copy-tree app))
+
+(defun clime--deep-copy-tree (node)
+  "Return a deep copy of NODE and its descendants.
+Options, args, and child nodes are copied; parent refs are fixed up.
+Shared immutable data (handlers, help strings, functions) is not copied."
+  (let ((copy (copy-sequence node)))
+    ;; Copy options list and each option struct
+    (when (clime-node-options copy)
+      (setf (clime-node-options copy)
+            (mapcar #'copy-sequence (clime-node-options copy))))
+    ;; Copy args list and each arg struct
+    (when (clime-node-args copy)
+      (setf (clime-node-args copy)
+            (mapcar #'copy-sequence (clime-node-args copy))))
+    ;; Recurse into children for groups/commands/apps
+    (when (clime-group-p copy)
+      (setf (clime-group-children copy)
+            (mapcar (lambda (entry)
+                      (let ((child-copy (clime--deep-copy-tree (cdr entry))))
+                        (setf (clime-node-parent child-copy) copy)
+                        (cons (car entry) child-copy)))
+                    (clime-group-children copy))))
+    copy))
 
 (defun clime--set-direct-parents (node)
   "Set the :parent of each direct child in NODE's children alist to NODE."
@@ -425,17 +657,17 @@ resolved command copies."
             ;; Apply :vals — lock options with their values
             (dolist (val-entry vals)
               (let* ((name (car val-entry))
-                     (val (cdr val-entry))
                      (opt (cl-find-if (lambda (o) (eq (clime-option-name o) name))
                                       (clime-node-all-options resolved))))
                 (unless opt
                   (error "Alias %s: :vals names unknown option `%s'"
                          (clime-node-name child) name))
-                (setf (clime-option-locked opt) t
-                      (clime-option-default opt) val)))
+                (setf (clime-option-locked opt) t)))
             ;; Store vals for injection during finalize
             (when vals
-              (setf (clime-node-locked-vals resolved) vals))
+              (setf (clime-node-value-entries resolved)
+                    (mapcar (lambda (e) (cons (car e) (list :value (cdr e) :source 'app)))
+                            vals)))
             ;; Replace alias with resolved command in children
             (setcdr entry resolved)
             ;; Set parent ref (set-parent-refs ran before resolution)
@@ -494,9 +726,9 @@ ARGS is a plist of slot values."
 Declares an output mode (e.g. JSON, YAML) as a CLI flag with
 per-format finalize and streaming behavior."
   (finalize nil :type (or function null) :documentation "Envelope function: (items retval errors) → data | nil.")
-  (streaming nil :type boolean :documentation "When non-nil, `clime-output' emits immediately (no accumulator).")
+  (streaming nil :type boolean :documentation "When non-nil, `clime-out' emits immediately (no accumulator).")
   (encoder nil :type (or function null) :documentation "Encoder function: data → string.")
-  (error-handler nil :type (or function null) :documentation "Error handler: (msg) → side effect.  Called by `clime-output-error'."))
+  (error-handler nil :type (or function null) :documentation "Error handler: (msg) → side effect.  Called by `clime-out-error'."))
 
 (defun clime-make-output-format (&rest args)
   "Create a `clime-output-format' with defaults.
