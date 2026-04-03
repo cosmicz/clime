@@ -3,7 +3,7 @@ EMACS ?= emacs
 BATCH = $(EMACS) --batch -Q -L . -L ./tests
 CLIME_MAKE = $(BATCH) -l clime-make-main.el --
 
-.PHONY: all compile lint test .tests tests dist bins readme clean clean-elc help
+.PHONY: all compile lint test test-all tests dist bins readme clean clean-elc help
 
 all: compile
 
@@ -38,13 +38,13 @@ SELECTOR ?= $(SELECT)
 # VERBOSE=1 to show message output from tests (not swallowed by ERT)
 VERBOSE ?=
 
+tests: test
 test: clean-elc
 	@CLIME_TEST_VERBOSE=$(VERBOSE) $(BATCH) -l ./tests/clime-tests-runner.el \
 		--eval '(clime-run-tests-batch "$(SELECTOR)")' \
 		< /dev/null
 
-.tests: test
-tests: test
+test-all: bin/clime-make bin/greeter bin/pkm test
 
 DIST_DIR ?= dist
 DIST_SRCS = clime-settings.el clime-core.el clime-param-type.el clime-parse.el \
@@ -112,6 +112,7 @@ help:
 	@echo "  compile   - Byte-compile all Elisp files"
 	@echo "  lint      - Byte-compile with warnings + checkdoc"
 	@echo "  test      - Run tests (SEL= to filter, VERBOSE=1 for messages)"
+	@echo "  test-all  - Build executables then run full test suite"
 	@echo "  tests     - Alias for 'test'"
 	@echo "  dist      - Build single-file dist/clime.el bundle"
 	@echo "  bins      - Build all local executables in bin/ (gitignored)"
