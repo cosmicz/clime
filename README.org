@@ -12,37 +12,13 @@ structured output formats, a polyglot shebang for direct shell
 execution, and a bundler that produces single-file distributions
 usable as both standalone CLIs and Emacs libraries.
 
-Here's ~clime-make~ (clime's own build tool, built with clime) — same
-definition, two surfaces:
+Here's clime's own build tool, ~clime-make~ (built with clime):
 
 [[file:.github/assets/invoke-menu.png]]
 
-And from the command line:
+And from the command line — same definition, two surfaces:
 
-#+begin_example sh
-> ./bin/clime-make quickstart --help
-Usage: clime-make quickstart [OPTIONS] <file>
-
-Scaffold entrypoint + add shebang (scaffold + init)
-
-Arguments:
-  <file>    The .el file to set up (file existing)
-
-Options:
-  --self-dir                       Add script's own directory to load path (uses
-                                   $(dirname "$0") at runtime)
-  -L, --load-path VALUE ...        Additional load paths to include in the
-                                   shebang (directory) [$CLIME_LOAD_PATH]
-  -R, --rel-load-path VALUE ...    Load path relative to script dir (directory)
-                                   [$CLIME_REL_LOAD_PATH=lib/s.el,lib/foo.el]
-  --standalone                     Skip the automatic clime load path (for
-                                   vendored/bundled setups)
-  -f, --force                      Replace an existing non-clime shebang
-  -e, --env VALUE ...              Set environment variable in shebang
-                                   (NAME=VALUE)
-  -o, --output VALUE               Write to OUTPUT instead of modifying the
-                                   source file (file)
-#+end_example
+[[file:.github/assets/cli-help.png]]
 
 * Getting Started
 
@@ -100,11 +76,11 @@ Or interactively from Emacs:
 (clime-invoke greet)
 #+end_src
 
-Same definition, different surface.  The handler code doesn't change.
-
 * Installation
 
 ** Git clone / submodule
+
+Pull the code locally.
 
 #+begin_src bash
 # Clone directly
@@ -114,7 +90,7 @@ git clone https://github.com/cosmicz/clime lib/clime
 git submodule add https://github.com/cosmicz/clime lib/clime
 #+end_src
 
-Then set up your app file:
+Then set up your app file.
 
 #+begin_src bash
 lib/clime/clime-make.el quickstart myapp.el
@@ -122,12 +98,6 @@ lib/clime/clime-make.el quickstart myapp.el
 
 This inserts the entrypoint boilerplate, prepends a polyglot shebang,
 and makes the file executable.
-
-** package-vc (Emacs 29+)
-
-#+begin_src emacs-lisp
-(package-vc-install "https://github.com/cosmicz/clime")
-#+end_src
 
 ** Download release (single file)
 
@@ -144,6 +114,12 @@ Or use it as a library from Emacs:
 
 #+begin_src emacs-lisp
 (require 'clime)
+#+end_src
+
+** package-vc (Emacs 29+)
+
+#+begin_src emacs-lisp
+(package-vc-install "https://github.com/cosmicz/clime")
 #+end_src
 
 ** Vendoring (build from source)
@@ -176,34 +152,6 @@ clime-app (root)
         +-- clime-command (add)
         +-- clime-command (remove)
 #+end_example
-
-** Option propagation
-
-Options declared at any level are available to all descendants.  A
-~--verbose~ flag on the app can be accessed from any child command.
-In ~--help~, inherited options appear in a "Global Options:" section.
-
-** Values map and two-pass pipeline
-
-Every surface feeds parameter values into a shared *values map* --- an
-alist of ~(NAME . (:value V :source S))~ entries that tracks each
-parameter's resolved value and provenance (~user~, ~app~, ~env~,
-~default~, ~conform~).
-
-For CLI, the pipeline runs in two passes with an optional ~:setup~
-hook between them.  Pass 1 extracts values from argv (type coercion,
-static ~:choices~, ~:coerce~) into the values map with source ~user~.
-Pass 2 merges env vars, runs ~:conform~ hooks (accumulating errors as
-~:error~ entries), applies defaults, and checks required params.  The
-~:setup~ hook runs between passes, letting apps load configuration
-that influences pass-2 behavior.
-
-Invoke builds the values map interactively (key-by-key), then runs
-the same pass-2 finalization before calling the handler.
-
-Handlers receive a flat params plist derived from the values map
-(via ~clime-values-plist~) --- they don't know which surface provided
-the values.
 
 * Surfaces
 
@@ -469,6 +417,10 @@ from help but still warns when used.
 
 ** Options
 
+Options declared at any level are available to all descendants.  A
+~--verbose~ flag on the app can be accessed from any child command.
+In ~--help~, inherited options appear in a "Global Options:" section.
+
 *** Boolean flags
 
 Boolean flags consume no value.  Use ~:bool~ (shorthand for ~:nargs 0~):
@@ -673,6 +625,31 @@ Error: Zip group options must be used the same number of times: --skip (2), --re
 
 Combine with ~:required~ on any member to require at least one pair.
 
+*** ~--flag=value~ and ~--~ (CLI)
+
+Options accept ~--flag=value~ syntax:
+
+#+begin_src bash
+./myapp.el show --format=json 123
+#+end_src
+
+Use ~--~ to stop option parsing --- everything after is treated as
+positional arguments:
+
+#+begin_src bash
+./myapp.el show -- --not-a-flag
+#+end_src
+
+*** Collapsed short flags (CLI)
+
+Single-character flags can be collapsed: ~-abc~ expands to ~-a -b -c~.
+This works when all flags in the group are boolean.  A trailing
+value-taking flag consumes the next argument:
+
+#+begin_src bash
+./myapp.el -vvf show 123   # -v -v -f show 123
+#+end_src
+
 ** Arguments
 
 *** Positional arguments
@@ -719,32 +696,8 @@ The value pipeline and validation stages apply uniformly across all
 surfaces.  The features below describe CLI-specific parsing behavior
 and the shared validation pipeline.
 
-*** Collapsed short flags (CLI)
-
-Single-character flags can be collapsed: ~-abc~ expands to ~-a -b -c~.
-This works when all flags in the group are boolean.  A trailing
-value-taking flag consumes the next argument:
-
-#+begin_src bash
-./myapp.el -vvf show 123   # -v -v -f show 123
-#+end_src
-
-*** ~--flag=value~ and ~--~ (CLI)
-
-Options accept ~--flag=value~ syntax:
-
-#+begin_src bash
-./myapp.el show --format=json 123
-#+end_src
-
-Use ~--~ to stop option parsing --- everything after is treated as
-positional arguments:
-
-#+begin_src bash
-./myapp.el show -- --not-a-flag
-#+end_src
-
 *** Value pipeline
+
 
 Each option and arg value flows through a multi-stage pipeline split
 across two passes.  CLI args and env vars enter through the same
@@ -895,36 +848,6 @@ All four slots chain in order --- ~:type~ → ~:choices~ → ~:coerce~ →
              v)
   :help "Listen port")
 #+end_src
-
-*** Environment variables
-
-Options opt in to env var resolution with ~:env~ (or ~:env t~) for an
-auto-derived name, or ~:env "SUFFIX"~ for an explicit suffix.  Set
-~:env-prefix~ on the app to provide the prefix:
-
-#+begin_src emacs-lisp
-(clime-app greet
-  :version "1.0.0"
-  :help "A friendly greeter."
-  :env-prefix "GREET"
-
-  (clime-opt shout ("--shout") :bool :env
-    :help "SHOUT THE GREETING"))
-#+end_src
-
-Now ~--shout~ can also be set via ~GREET_SHOUT=1~.  Options without
-~:env~ are not affected by ~:env-prefix~.
-
-For individual options, override the env var name with ~:env~:
-
-#+begin_src emacs-lisp
-(clime-opt token ("--token") :env "API_TOKEN"
-  :help "Auth token")
-#+end_src
-
-Boolean flags accept ~1~/~true~/~yes~ and ~0~/~false~/~no~.  Multiple
-options split on comma: ~MYAPP_TAGS=dev,ci~ becomes ~("dev" "ci")~.
-
 *** Setup hook
 
 The ~:setup~ hook runs after pass-1 parsing (all values extracted from
@@ -955,6 +878,57 @@ dynamic option values:
 Static ~:choices~ (literal lists) are validated immediately in pass 1.
 Dynamic ~:choices~ (functions) are deferred to pass 2 after the setup
 hook has run.
+
+*** Environment variables
+
+Options opt in to env var resolution with ~:env~ (or ~:env t~) for an
+auto-derived name, or ~:env "SUFFIX"~ for an explicit suffix.  Set
+~:env-prefix~ on the app to provide the prefix:
+
+#+begin_src emacs-lisp
+(clime-app greet
+  :version "1.0.0"
+  :help "A friendly greeter."
+  :env-prefix "GREET"
+
+  (clime-opt shout ("--shout") :bool :env
+    :help "SHOUT THE GREETING"))
+#+end_src
+
+Now ~--shout~ can also be set via ~GREET_SHOUT=1~.  Options without
+~:env~ are not affected by ~:env-prefix~.
+
+For individual options, override the env var name with ~:env~:
+
+#+begin_src emacs-lisp
+(clime-opt token ("--token") :env "API_TOKEN"
+  :help "Auth token")
+#+end_src
+
+Boolean flags accept ~1~/~true~/~yes~ and ~0~/~false~/~no~.  Multiple
+options split on comma: ~MYAPP_TAGS=dev,ci~ becomes ~("dev" "ci")~.
+
+*** Values map
+
+Every surface feeds parameter values into a shared *values map* --- an
+alist of ~(NAME . (:value V :source S))~ entries that tracks each
+parameter's resolved value and provenance (~user~, ~app~, ~env~,
+~default~, ~conform~).
+
+For CLI, the pipeline runs in two passes with an optional ~:setup~
+hook between them.  Pass 1 extracts values from argv (type coercion,
+static ~:choices~, ~:coerce~) into the values map with source ~user~.
+Pass 2 merges env vars, runs ~:conform~ hooks (accumulating errors as
+~:error~ entries), applies defaults, and checks required params.  The
+~:setup~ hook runs between passes, letting apps load configuration
+that influences pass-2 behavior.
+
+Invoke builds the values map interactively (key-by-key), then runs
+the same pass-2 finalization before calling the handler.
+
+Handlers receive a flat params plist derived from the values map
+(via ~clime-values-plist~) --- they don't know which surface provided
+the values.
 
 ** Help & Output
 
