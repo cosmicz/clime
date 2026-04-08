@@ -1255,6 +1255,24 @@ satisfy the at-least-one requirement — user must explicitly choose."
       (should-not cmd-conform)
       (should (= 2 (length (clime-node-options grp)))))))
 
+(ert-deftest clime-test-conform/zip-no-members-preserves-values ()
+  "clime-zip conformer returns values unchanged when no members are set.
+Regression: conformer returned nil, wiping the values map."
+  (eval
+   '(clime-app clime-test--zip-preserve-app
+      :version "1"
+      (clime-command run
+        :help "Run"
+        (clime-zip sr
+          (clime-option skip ("--skip"))
+          (clime-option reason ("--reason")))
+        (clime-arg name)
+        (clime-handler (ctx)
+          (clime-ctx-get ctx 'name))))
+   t)
+  (let ((app (symbol-value 'clime-test--zip-preserve-app)))
+    (should (= 0 (clime-run app '("run" "hello"))))))
+
 (ert-deftest clime-test-conform/mutex-inline-group-at-app-level ()
   "clime-mutex at app level creates inline group child on app."
   (eval

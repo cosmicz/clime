@@ -1389,8 +1389,8 @@
       (clime-usage-error
        ;; The error message should say "myapp log", not "myapp ops log"
        (should (string-match-p "for myapp log" (cadr err)))
-       ;; The hint path (third element) should also exclude "ops"
-       (should (equal (caddr err) '("myapp" "log")))))))
+       ;; The hint :path should also exclude "ops"
+       (should (equal (plist-get (cddr err) :path) '("myapp" "log")))))))
 
 (ert-deftest clime-test-parse/inline-group-error-nested ()
   "Nested inline groups are all excluded from error paths."
@@ -1406,7 +1406,7 @@
         (clime-parse app '("start"))
       (clime-usage-error
        (should (string-match-p "for myapp start" (cadr err)))
-       (should (equal (caddr err) '("myapp" "start")))))))
+       (should (equal (plist-get (cddr err) :path) '("myapp" "start")))))))
 
 (ert-deftest clime-test-parse/non-inline-group-error-includes-name ()
   "Non-inline group names still appear in error paths."
@@ -1420,7 +1420,7 @@
         (clime-parse app '("ops" "log"))
       (clime-usage-error
        (should (string-match-p "for myapp ops log" (cadr err)))
-       (should (equal (caddr err) '("myapp" "ops" "log")))))))
+       (should (equal (plist-get (cddr err) :path) '("myapp" "ops" "log")))))))
 
 ;;; ─── Derive Params / Value-on-Struct Tests ─────────────────────────
 

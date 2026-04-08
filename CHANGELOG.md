@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+## 0.6.1 — 2026-04-07
+
+### Fixed
+
+- **Shebang error handling**: the polyglot shebang now catches load-time
+  errors (bad syntax, missing `require`) and prints them to stderr with
+  exit code 1, instead of silently exiting 255.  Shebang format bumped
+  to v2.
+
+- **`clime-check-paired` values preservation**: the paired conformer
+  returned nil when no members were set, wiping the entire values map
+  during finalization.  Commands with `clime-zip` and positional
+  arguments no longer lose their parsed values.
+
+### Internal
+
+- **`clime-usage-error` plist protocol**: signal data unified to
+  `(MSG &rest PLIST)` with optional `:path` and `:params` keys.
+  Readers use `plist-get` instead of positional access.  The parser's
+  error enrichment preserves existing plist keys when adding `:path`.
+
 ## 0.6.0 — 2026-04-02
 
 ### Type system

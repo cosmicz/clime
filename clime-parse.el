@@ -640,7 +640,7 @@ This enables a setup hook to run between passes."
       ;; Enrich usage errors with the current parse path for hints
       (clime-usage-error
        (signal 'clime-usage-error
-               (list (cadr err) display-path))))))
+               (cons (cadr err) (append (cddr err) (list :path display-path))))))))
 
 ;;; ─── Pass-2 Finalization ────────────────────────────────────────────────
 

@@ -438,7 +438,8 @@ under GROUP-NAME."
                   (let ((vals (clime-values-value values k)))
                     (push (cons k (nth i vals)) row)))
                 (push (nreverse row) zipped)))
-            (clime-values-set values group-name (nreverse zipped) 'conform)))))))
+            (setq values (clime-values-set values group-name (nreverse zipped) 'conform)))))
+      values)))
 
 ;;; ─── Node (base) ────────────────────────────────────────────────────────
 

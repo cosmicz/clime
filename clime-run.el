@@ -122,11 +122,10 @@ the format and drives all output behavior through the format struct."
        0)
       (clime-usage-error
        (funcall (clime-output-format-error-handler clime-out--active-format) (cadr err))
-       (let ((err-path (caddr err)))
-         (when err-path
-           (funcall (clime-output-format-error-handler clime-out--active-format)
-                    (format "Try '%s --help' for more information."
-                            (string-join err-path " ")))))
+       (when-let ((err-path (plist-get (cddr err) :path)))
+         (funcall (clime-output-format-error-handler clime-out--active-format)
+                  (format "Try '%s --help' for more information."
+                          (string-join err-path " "))))
        2)
       (error
        (if debug-on-error

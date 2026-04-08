@@ -337,6 +337,21 @@
                   (clime-run app '("dep" "add")))))
       (should (cl-some (lambda (m) (string-match-p "t dep add --help" m)) msgs)))))
 
+(ert-deftest clime-test-run/usage-error-non-list-err-path-no-crash ()
+  "Usage error with non-list third element (e.g. :params) does not crash.
+The parser enriches conformer errors with display-path, but a handler
+could signal with non-standard data.  The guard must handle this."
+  (let* ((cmd (clime-make-command
+               :name "go"
+               :handler (lambda (_ctx)
+                          (signal 'clime-usage-error
+                                  (list "bad input" :params '(a b))))))
+         (app (clime-make-app :name "t" :version "1"
+                              :children (list (cons "go" cmd)))))
+    ;; :params keyword as third element — must not crash string-join
+    (let ((code (clime-run app '("go"))))
+      (should (= code 2)))))
+
 ;;; ─── Setup Hook ────────────────────────────────────────────────────────
 
 (ert-deftest clime-test-run/setup-hook-called ()

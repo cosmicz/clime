@@ -1526,10 +1526,12 @@ both shell script and Elisp:
     (insert-file-contents load-file-name) \
     (setq lexical-binding t) \
     (goto-char(point-min)) \
-    (condition-case nil \
+    (condition-case err \
       (while t(eval(read(current-buffer))t)) \
-      (end-of-file nil)))" \
-  -- "$@" # clime-sh!:v1 -*- mode: emacs-lisp; lexical-binding: t; -*-
+      (end-of-file nil) \
+      (error(princ(format \"clime-sh!: load error: %S\\n\" err) \
+        #'external-debugging-output)(kill-emacs 1))))" \
+  -- "$@" # clime-sh!:v2 -*- mode: emacs-lisp; lexical-binding: t; -*-
 #+end_src
 
 Line 2 is both a shell no-op (~":"~) and the Emacs invocation.  It uses

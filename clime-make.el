@@ -42,7 +42,7 @@ Signals `clime-usage-error' on the first invalid entry."
               (list (format "invalid --env value %S (expected NAME=VALUE with safe characters)" e))))))
 
 
-(defconst clime-make--shebang-version "1"
+(defconst clime-make--shebang-version "2"
   "Shebang format version, independent of `clime-version'.
 Bumped when the polyglot launcher structure changes.")
 
@@ -108,9 +108,11 @@ the lexical flag."
                      "(insert-file-contents load-file-name)"
                      "(setq lexical-binding t)"
                      "(goto-char(point-min))"
-                     "(condition-case nil"
+                     "(condition-case err"
                      "(while t(eval(read(current-buffer))t))"
-                     "(end-of-file nil)))\"")))
+                     "(end-of-file nil)"
+                     "(error(princ(format \\\"clime-sh!: load error: %S\\\\n\\\" err)"
+                     " #'external-debugging-output)(kill-emacs 1))))\"")))
     (format "#!/bin/sh\n\":\"; %s%sexec emacs --batch -Q%s %s -- \"$@\" # clime-sh!:v%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
             resolve-prefix env-prefix load-paths eval-form clime-make--shebang-version)))
 

@@ -374,6 +374,58 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
        (should (= 0 (car result)))
        (should (equal "t:2" (cdr result)))))))
 
+;;; ─── Shebang Error Handling ─────────────────────────────────────────────
+
+(ert-deftest clime-test-integration/shebang-version-is-2 ()
+  "clime-make--shebang-version is 2 (error handling added)."
+  (should (equal "2" clime-make--shebang-version)))
+
+(ert-deftest clime-test-integration/shebang-contains-error-handler ()
+  "Generated shebang catches errors, not just end-of-file."
+  (let ((shebang (clime-make--make-shebang nil '("-L .") nil)))
+    (should (string-match-p "condition-case err" shebang))
+    (should (string-match-p "end-of-file nil" shebang))
+    (should (string-match-p "error.*clime-sh!: load error" shebang))
+    (should (string-match-p "kill-emacs 1" shebang))))
+
+(ert-deftest clime-test-integration/shebang-reports-read-errors ()
+  "A shebanged script with invalid read syntax exits 1 with a clear message."
+  (clime-test-with-temp-dir
+   (let* ((clime-make clime-test--clime-make)
+          (app-file (expand-file-name "test-bad-read.el")))
+     ;; Write a file with invalid read syntax
+     (with-temp-file app-file
+       (insert ";;; test-bad-read.el --- test  -*- lexical-binding: t; -*-\n"
+               ";;; Code:\n"
+               "(message \"before\")\n"
+               "#&invalid\n"
+               "(message \"after\")\n"))
+     ;; Init it
+     (clime-test--run-script clime-make (list "init" app-file))
+     ;; Run: should fail with error message
+     (let ((result (clime-test--run-script app-file '())))
+       (should (= 1 (car result)))
+       (should (string-match-p "clime-sh!: load error:" (cdr result)))
+       (should (string-match-p "invalid-read-syntax" (cdr result)))))))
+
+(ert-deftest clime-test-integration/shebang-reports-eval-errors ()
+  "A shebanged script with an eval-time error exits 1 with a clear message."
+  (clime-test-with-temp-dir
+   (let* ((clime-make clime-test--clime-make)
+          (app-file (expand-file-name "test-bad-eval.el")))
+     ;; Write a file that requires a nonexistent package
+     (with-temp-file app-file
+       (insert ";;; test-bad-eval.el --- test  -*- lexical-binding: t; -*-\n"
+               ";;; Code:\n"
+               "(require 'clime-nonexistent-package-xyz)\n"))
+     ;; Init it
+     (clime-test--run-script clime-make (list "init" app-file))
+     ;; Run: should fail with error message
+     (let ((result (clime-test--run-script app-file '())))
+       (should (= 1 (car result)))
+       (should (string-match-p "clime-sh!: load error:" (cdr result)))
+       (should (string-match-p "clime-nonexistent-package-xyz" (cdr result)))))))
+
 ;;; ─── Symlink Resolution ─────────────────────────────────────────────────
 
 (defun clime-test--write-lib-module (file-path feature code)
