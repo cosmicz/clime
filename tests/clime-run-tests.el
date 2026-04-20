@@ -470,15 +470,15 @@ could signal with non-standard data.  The guard must handle this."
 (ert-deftest clime-test-run/after-execute-called ()
   "After-execute hook is called with ctx, exit-code, duration."
   (let ((log nil))
-    (let ((hook (lambda (ctx exit-code duration)
+    (eval '(clime-app clime-test--after-exec-app
+             :version "1"
+             (clime-command go
+               :help "Go"
+               (clime-handler (ctx) (princ "done") nil)))
+          t)
+    (setf (clime-app-after-execute clime-test--after-exec-app)
+          (list (lambda (ctx exit-code duration)
                   (push (list ctx exit-code duration) log))))
-      (eval `(clime-app clime-test--after-exec-app
-               :version "1"
-               :after-execute ,hook
-               (clime-command go
-                 :help "Go"
-                 (clime-handler (ctx) (princ "done") nil)))
-            t))
     (with-output-to-string (clime-run clime-test--after-exec-app '("go")))
     (should (= 1 (length log)))
     (let ((entry (car log)))
@@ -496,15 +496,15 @@ could signal with non-standard data.  The guard must handle this."
 (ert-deftest clime-test-run/after-execute-receives-error-exit-code ()
   "After-execute hook receives exit code 1 on handler error."
   (let ((log nil))
-    (let ((hook (lambda (ctx exit-code duration)
+    (eval '(clime-app clime-test--after-exec-err-app
+             :version "1"
+             (clime-command boom
+               :help "Boom"
+               (clime-handler (ctx) (error "kaboom"))))
+          t)
+    (setf (clime-app-after-execute clime-test--after-exec-err-app)
+          (list (lambda (ctx exit-code duration)
                   (push (list exit-code duration) log))))
-      (eval `(clime-app clime-test--after-exec-err-app
-               :version "1"
-               :after-execute ,hook
-               (clime-command boom
-                 :help "Boom"
-                 (clime-handler (ctx) (error "kaboom"))))
-            t))
     (let ((debug-on-error nil))
       (with-output-to-string
         (clime-run clime-test--after-exec-err-app '("boom"))))
@@ -555,15 +555,15 @@ could signal with non-standard data.  The guard must handle this."
 (ert-deftest clime-test-run/after-execute-not-called-for-help ()
   "After-execute hook does NOT fire for --help (no handler execution)."
   (let ((log nil))
-    (let ((hook (lambda (ctx exit-code duration)
+    (eval '(clime-app clime-test--after-exec-help-app
+             :version "1"
+             (clime-command go
+               :help "Go"
+               (clime-handler (ctx) nil)))
+          t)
+    (setf (clime-app-after-execute clime-test--after-exec-help-app)
+          (list (lambda (ctx exit-code duration)
                   (push t log))))
-      (eval `(clime-app clime-test--after-exec-help-app
-               :version "1"
-               :after-execute ,hook
-               (clime-command go
-                 :help "Go"
-                 (clime-handler (ctx) nil)))
-            t))
     (with-output-to-string
       (clime-run clime-test--after-exec-help-app '("--help")))
     (should (null log))))
