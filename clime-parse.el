@@ -36,7 +36,17 @@
   (params nil :type list :documentation "Plist of (param-name value) for all scopes.")
   (values nil :type list :documentation "Values map: alist of (NAME . (VALUE . SOURCE)) pairs.")
   (tree nil :documentation "Deep-copied app tree with :value/:source slots populated.")
-  (finalized nil :type boolean :documentation "Non-nil after pass-2 finalization."))
+  (finalized nil :type boolean :documentation "Non-nil after pass-2 finalization.")
+  (config-provider nil :type (or function null) :documentation "Resolved config provider set between passes."))
+
+(defun clime-parse-result-param (result name &optional default)
+  "Get param NAME from parse RESULT, returning DEFAULT if not set.
+Distinguishes between explicitly nil and absent — returns DEFAULT
+only when NAME is not in the params plist."
+  (let ((params (clime-parse-result-params result)))
+    (if (plist-member params name)
+        (plist-get params name)
+      default)))
 
 ;;; ─── Internal Helpers ───────────────────────────────────────────────────
 
@@ -373,6 +383,71 @@ APP is the root app node (for :env-prefix).  Returns updated VALUES."
               (setq values (clime-values-set values name env-val 'env))))))))
   values)
 
+(defun clime--apply-config (nodes values app provider)
+  "Apply config PROVIDER values for params in NODES not already in VALUES.
+APP is the root app node (for path computation).
+PROVIDER is a function (COMMAND-PATH PARAM-NAME) → value, or nil.
+Returns updated VALUES."
+  (when provider
+    (dolist (node nodes)
+      (let ((cmd-path (clime--config-node-path node app)))
+        (setq values (clime--apply-config-node node cmd-path values provider)))))
+  values)
+
+(defun clime--apply-config-node (node cmd-path values provider)
+  "Apply config PROVIDER for NODE's own params at CMD-PATH.
+Recurses into inline group children with extended paths.
+Returns updated VALUES."
+  ;; Direct options on this node
+  (dolist (opt (clime-node-options node))
+    (let ((name (clime-option-name opt)))
+      (unless (clime-values-get values name)
+        (let ((val (funcall provider cmd-path (symbol-name name))))
+          (when val
+            (let ((coerced
+                   (if (stringp val)
+                       (clime--transform-value
+                        val (clime-option-type opt)
+                        (clime-option-choices opt)
+                        (clime-option-coerce opt)
+                        (format "config[%s]" name))
+                     val)))
+              (setq values (clime-values-set values name coerced 'config))))))))
+  ;; Args
+  (dolist (arg (clime-node-args node))
+    (let ((name (clime-arg-name arg)))
+      (unless (clime-values-get values name)
+        (let ((val (funcall provider cmd-path (symbol-name name))))
+          (when val
+            (let ((coerced
+                   (if (stringp val)
+                       (clime--transform-value
+                        val (clime-arg-type arg) nil nil
+                        (format "config[%s]" name))
+                     val)))
+              (setq values (clime-values-set values name coerced 'config))))))))
+  ;; Recurse into inline group children with extended path
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (let ((child (cdr entry)))
+        (when (and (clime-group-p child) (clime-node-inline child))
+          (setq values (clime--apply-config-node
+                        child
+                        (append cmd-path (list (clime-node-name child)))
+                        values provider))))))
+  values)
+
+(defun clime--config-node-path (node app)
+  "Return the command path for NODE relative to APP.
+Collects node names from root to NODE, excluding the app itself.
+For a leaf command `start' under group `server', returns (\"server\" \"start\")."
+  (let ((path '())
+        (current node))
+    (while (and current (not (eq current app)))
+      (push (clime-node-name current) path)
+      (setq current (clime-node-parent current)))
+    path))
+
 (defun clime--apply-defaults (nodes values)
   "Apply default values for options and args in NODES not already in VALUES.
 NODES is a list of nodes whose params to process.  Returns updated VALUES.
@@ -636,6 +711,11 @@ This enables a setup hook to run between passes."
                    :tree app)))
       (if skip-finalize
           result
+        ;; Resolve config factory before finalize (when not using two-pass via clime-run)
+        (when-let ((config-factory (and (clime-app-p app) (clime-app-config app))))
+          (let ((provider (funcall config-factory app result)))
+            (when provider
+              (setf (clime-parse-result-config-provider result) provider))))
         (clime-parse-finalize result))))
       ;; Enrich usage errors with the current parse path for hints
       (clime-usage-error
@@ -717,6 +797,39 @@ Non-string values (already coerced) skip type/choices/coerce."
                     (setq result (clime--call-conform fn result param)))
                   nil)
               (error (error-message-string err)))))))))
+
+(defun clime--coerce-string-values (scope values)
+  "Coerce string values in VALUES to declared types for params in SCOPE.
+SCOPE is a list of nodes (leaf→root).  Only coerces values that are
+still strings and have a declared non-string type.  Applies type
+coercion only (via `clime--coerce-value'); choices validation is
+handled separately by `clime--validate-dynamic-choices' and :coerce
+functions run during pass-1 parsing.  Non-string values are left as-is.
+Returns updated VALUES."
+  (dolist (node scope)
+    (dolist (opt (clime-node-options node))
+      (let* ((name (clime-option-name opt))
+             (val (clime-values-value values name))
+             (type (clime-option-type opt)))
+        (when (and val (stringp val) type)
+          (let ((coerced (clime--coerce-value
+                          val type
+                          (or (car (clime-option-flags opt))
+                              (symbol-name name)))))
+            (setq values (clime-values-set values name coerced
+                                           (or (clime-values-source values name)
+                                               'user)))))))
+    (dolist (arg (clime-node-args node))
+      (let* ((name (clime-param-name arg))
+             (val (clime-values-value values name))
+             (type (clime-arg-type arg)))
+        (when (and val (stringp val) type (not (eq type 'string)))
+          (let ((coerced (clime--coerce-value
+                          val type (symbol-name name))))
+            (setq values (clime-values-set values name coerced
+                                           (or (clime-values-source values name)
+                                               'user))))))))
+  values)
 
 (defun clime--run-conformers (nodes values)
   "Run :conform functions for options and args in NODES against VALUES.
@@ -842,6 +955,9 @@ defaults, and checks required params.  Returns the updated RESULT."
     (clime--validate-dynamic-choices scope values)
     ;; Apply env vars (external input, needs conforming)
     (setq values (clime--apply-env scope values root))
+    ;; Apply config provider (after env, before conformers)
+    (setq values (clime--apply-config scope values root
+                                      (clime-parse-result-config-provider result)))
     ;; Run option/arg :conform functions (after env, before defaults —
     ;; defaults are developer-authored and should already be valid)
     (setq values (clime--run-conformers scope values))
@@ -862,6 +978,7 @@ defaults, and checks required params.  Returns the updated RESULT."
     ;; Derive params plist from values map and mark finalized
     (setf (clime-parse-result-params result) (clime-values-plist values))
     (setf (clime-parse-result-values result) values)
+    (setf (clime-parse-result-config-provider result) nil)
     (setf (clime-parse-result-finalized result) t)
     result))
 

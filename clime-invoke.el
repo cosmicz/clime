@@ -23,11 +23,6 @@
 
 ;;; ─── Faces ───────────────────────────────────────────────────────────
 
-(defface clime-invoke-key
-  '((t :inherit font-lock-variable-name-face :weight bold))
-  "Face for key bindings in the menu (generic fallback)."
-  :group 'clime)
-
 (defface clime-invoke-option-key
   '((t :inherit font-lock-variable-name-face :weight bold))
   "Face for option key bindings (-X)."
@@ -452,8 +447,7 @@ When more than 5 choices, truncate around the active choice with ellipsis."
               (if suffix-dots (concat sep (propertize "..." 'face 'shadow)) "")))))
 
 (defun clime-invoke--format-value (option &optional _app)
-  "Format the display value for OPTION from the values map.
-APP is the root app (for env var resolution)."
+  "Format the display value for OPTION from the values map."
   (let* ((name (clime-option-name option))
          (val (clime-values-value clime-invoke--values name))
          (source (clime-values-source clime-invoke--values name)))
@@ -723,6 +717,161 @@ At root, shows appname vVERSION."
           (push (format "\n  $ %s" ex) parts)))))
     (string-join (nreverse parts))))
 
+(defun clime-invoke--render-options (grouped key-map val-width root
+                                            param-errors prefix-state)
+  "Render option groups GROUPED into a list of propertized lines.
+GROUPED is a list of (CATEGORY . OPTIONS) pairs.
+KEY-MAP, VAL-WIDTH, ROOT, PARAM-ERRORS, and PREFIX-STATE are passed
+through from the orchestrator."
+  (let ((lines '()))
+    (dolist (cat-entry grouped)
+      (let ((cat (or (car cat-entry) "Options"))
+            (opts (cdr cat-entry)))
+        (push (propertize cat 'face 'clime-invoke-heading) lines)
+        (dolist (opt opts)
+          (if (clime-option-locked opt)
+              (let* ((desc (clime-invoke--format-desc opt root))
+                     (locked-val (clime-values-value clime-invoke--values
+                                                     (clime-option-name opt)))
+                     (has-val (not (null locked-val)))
+                     (val-str (if has-val
+                                  (propertize (format "%s" locked-val)
+                                              'face 'clime-invoke-locked)
+                                (propertize "(excluded)" 'face 'clime-invoke-dimmed)))
+                     (lock-ann (if has-val
+                                   (propertize "(locked)" 'face 'clime-invoke-dimmed)
+                                 "")))
+                (push (format "      %s  %s %s"
+                              (clime-invoke--pad-to val-str val-width)
+                              (propertize desc 'face 'clime-invoke-dimmed)
+                              lock-ann)
+                      lines))
+            (let* ((name (clime-option-name opt))
+                   (key (car (cl-find-if
+                              (lambda (entry)
+                                (and (eq (cadr entry) :option)
+                                     (eq (clime-option-name (caddr entry)) name)))
+                              key-map)))
+                   (val-str (clime-invoke--format-value opt root))
+                   (desc (clime-invoke--format-desc opt root))
+                   (param-err (cdr (assq name param-errors))))
+              (when key
+                (let ((display-key (if prefix-state
+                                       (clime-invoke--prefix-display-key key prefix-state)
+                                     (clime-invoke--display-key key))))
+                  (push (concat
+                         (format " %s %s  %s"
+                                 (propertize (format "%3s" display-key)
+                                             'face 'clime-invoke-option-key)
+                                 (clime-invoke--pad-to val-str val-width)
+                                 desc)
+                         (when param-err
+                           (concat "  " (propertize (concat "← " param-err)
+                                                    'face 'clime-invoke-invalid))))
+                        lines))))))))
+    (nreverse lines)))
+
+(defun clime-invoke--render-args (args key-map val-width param-errors dimmed)
+  "Render positional ARGS into a list of propertized lines.
+KEY-MAP, VAL-WIDTH, PARAM-ERRORS, and DIMMED are passed through
+from the orchestrator."
+  (let ((lines '()))
+    (push (propertize "Arguments" 'face (if dimmed 'clime-invoke-dimmed
+                                           'clime-invoke-heading))
+          lines)
+    (dolist (arg args)
+      (let* ((name (clime-arg-name arg))
+             (key (car (cl-find-if
+                        (lambda (entry)
+                          (and (eq (cadr entry) :arg)
+                               (eq (clime-arg-name (caddr entry)) name)))
+                        key-map)))
+             (val (clime-values-value clime-invoke--values name))
+             (val-str (if val
+                          (propertize (format "%s" val) 'face 'clime-invoke-active)
+                        (propertize "(unset)" 'face 'clime-invoke-unset)))
+             (desc (clime-invoke--format-desc arg))
+             (param-err (cdr (assq name param-errors))))
+        (when key
+          (push (concat
+                 (format " %s %s  %s"
+                         (propertize (format "%3s" key)
+                                     'face (if dimmed 'clime-invoke-dimmed
+                                             'clime-invoke-arg-key))
+                         (clime-invoke--pad-to val-str val-width)
+                         desc)
+                 (when param-err
+                   (concat "  " (propertize (concat "← " param-err)
+                                            'face 'clime-invoke-invalid))))
+                lines))))
+    (nreverse lines)))
+
+(defun clime-invoke--render-children (node key-map dimmed)
+  "Render child commands of NODE into a list of propertized lines.
+KEY-MAP and DIMMED are passed through from the orchestrator."
+  (let ((lines '())
+        (children (clime-invoke--visible-children node)))
+    (when children
+      (push (propertize "Commands" 'face (if dimmed 'clime-invoke-dimmed
+                                             'clime-invoke-heading))
+            lines)
+      (dolist (entry children)
+        (let* ((name (car entry))
+               (child (cdr entry))
+               (key (car (cl-find-if
+                          (lambda (e)
+                            (and (eq (cadr e) :child)
+                                 (equal (caddr e) name)))
+                          key-map)))
+               (help (or (clime-node-help child) name))
+               (ann (concat
+                     (if (clime-node-hidden child)
+                         (concat " " (propertize "(hidden)"
+                                                 'face 'clime-invoke-hidden))
+                       "")
+                     (if (clime-node-deprecated child)
+                         (concat " " (propertize "(deprecated)"
+                                                 'face 'warning))
+                       ""))))
+          (when key
+            (push (format " %s %s%s"
+                          (propertize (format "%3s" key)
+                                      'face (if dimmed 'clime-invoke-dimmed
+                                              'clime-invoke-command-key))
+                          help ann)
+                  lines)))))
+    (nreverse lines)))
+
+(defun clime-invoke--render-actions (node at-root dimmed)
+  "Render the actions footer for NODE into a list of propertized lines.
+AT-ROOT non-nil means q exits entirely.  DIMMED dims all keys."
+  (let ((actions '())
+        (act-face (if dimmed 'clime-invoke-dimmed 'clime-invoke-action-key)))
+    (push (propertize "Actions" 'face (if dimmed 'clime-invoke-dimmed
+                                          'clime-invoke-heading))
+          actions)
+    (let ((items '()))
+      (when (clime-node-handler node)
+        (push (format "%s %s"
+                      (propertize "RET" 'face act-face)
+                      "Run")
+              items))
+      (unless at-root
+        (push (format "%s %s"
+                      (propertize "DEL" 'face act-face)
+                      "Back")
+              items))
+      (push (format "%s %s"
+                    (propertize "ESC" 'face act-face)
+                    "Quit")
+            items)
+      (push (format "%s %s"
+                    (propertize "?" 'face act-face)
+                    (symbol-name clime-invoke--show-mode))
+            items)
+      (push (concat " " (string-join (nreverse items) "    ")) actions))
+    (nreverse actions)))
+
 (defun clime-invoke--render-to-string (node key-map error-msg
                                             &optional at-root validation-result
                                             prefix-state)
@@ -734,178 +883,53 @@ PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active.
 Uses 3-column layout: Key | Value | Desc."
   (unless key-map
     (setq key-map (clime-invoke--build-key-map node)))
-  (let ((lines '())
-        (param-errors (car validation-result))
-        (general-errors (cdr validation-result))
-        (dimmed prefix-state)
-        (root (let ((n node)) (while (clime-node-parent n) (setq n (clime-node-parent n))) n)))
-    ;; Header (breadcrumb)
+  (let* ((param-errors (car validation-result))
+         (general-errors (cdr validation-result))
+         (dimmed prefix-state)
+         (root (let ((n node)) (while (clime-node-parent n) (setq n (clime-node-parent n))) n))
+         (own (cl-remove-if (lambda (o)
+                              (or (and (clime-option-hidden o)
+                                       (not (eq clime-invoke--show-mode 'all)))
+                                  (and (eq clime-invoke--show-mode 'clean)
+                                       (clime-option-deprecated o))))
+                            (clime-node-all-options node)))
+         (ancestor (clime-help--collect-ancestor-options node))
+         (args (clime-node-args node))
+         (val-width (clime-invoke--compute-value-width (append own ancestor) args root))
+         (grouped (append
+                   (when own (list (cons nil own)))
+                   (when ancestor (list (cons "Global Options" ancestor)))))
+         (sections '()))
+    ;; Header
     (let ((header (clime-invoke--format-header node)))
       (unless (string-empty-p header)
-        (push header lines)
-        (push "" lines)))
-    ;; Error (user errors + general validation errors)
-    (let ((all-errors
-           (append (when error-msg (list error-msg))
-                   general-errors)))
+        (push (list header) sections)))
+    ;; Errors
+    (let ((all-errors (append (when error-msg (list error-msg))
+                              general-errors)))
       (when all-errors
-        (push (propertize (string-join all-errors "; ")
-                          'face 'clime-invoke-error)
-              lines)
-        (push "" lines)))
-    ;; Compute value column width for all visible options + args
-    (let* ((own (cl-remove-if (lambda (o)
-                                (or (and (clime-option-hidden o)
-                                         (not (eq clime-invoke--show-mode 'all)))
-                                    (and (eq clime-invoke--show-mode 'clean)
-                                         (clime-option-deprecated o))))
-                              (clime-node-all-options node)))
-           (ancestor (clime-help--collect-ancestor-options node))
-           (all-opts (append own ancestor))
-           (args (clime-node-args node))
-           (val-width (clime-invoke--compute-value-width all-opts args root))
-           (grouped (append
-                     (when own (list (cons nil own)))
-                     (when ancestor (list (cons "Global Options" ancestor))))))
-      ;; Options grouped: own options by category, then ancestor as "Global Options"
-      (dolist (cat-entry grouped)
-        (let ((cat (or (car cat-entry) "Options"))
-              (opts (cdr cat-entry)))
-          (push (propertize cat 'face 'clime-invoke-heading) lines)
-          (dolist (opt opts)
-            (if (clime-option-locked opt)
-                ;; Locked option: show value in locked face, then desc
-                (let* ((desc (clime-invoke--format-desc opt root))
-                       (locked-val (clime-values-value clime-invoke--values
-                                                       (clime-option-name opt)))
-                       (has-val (not (null locked-val)))
-                       (val-str (if has-val
-                                    (propertize (format "%s" locked-val)
-                                                'face 'clime-invoke-locked)
-                                  (propertize "(excluded)" 'face 'clime-invoke-dimmed)))
-                       (lock-ann (if has-val
-                                     (propertize "(locked)" 'face 'clime-invoke-dimmed)
-                                   "")))
-                  (push (format "      %s  %s %s"
-                                (clime-invoke--pad-to val-str val-width)
-                                (propertize desc 'face 'clime-invoke-dimmed)
-                                lock-ann)
-                        lines))
-              ;; Normal option: interactive with key binding
-              (let* ((name (clime-option-name opt))
-                     (key (car (cl-find-if
-                                (lambda (entry)
-                                  (and (eq (cadr entry) :option)
-                                       (eq (clime-option-name (caddr entry)) name)))
-                                key-map)))
-                     (val-str (clime-invoke--format-value opt root))
-                     (desc (clime-invoke--format-desc opt root))
-                     (param-err (cdr (assq name param-errors))))
-                (when key
-                  (let ((display-key (if prefix-state
-                                         (clime-invoke--prefix-display-key key prefix-state)
-                                       (clime-invoke--display-key key))))
-                    (push (concat
-                           (format " %s %s  %s"
-                                   (propertize (format "%3s" display-key)
-                                               'face 'clime-invoke-option-key)
-                                   (clime-invoke--pad-to val-str val-width)
-                                   desc)
-                           (when param-err
-                             (concat "  " (propertize (concat "← " param-err)
-                                                      'face 'clime-invoke-invalid))))
-                          lines)))))))
-        (push "" lines))
-      ;; Positional args
-      (when args
-        (push (propertize "Arguments" 'face (if dimmed 'clime-invoke-dimmed
-                                              'clime-invoke-heading))
-              lines)
-        (dolist (arg args)
-          (let* ((name (clime-arg-name arg))
-                 (key (car (cl-find-if
-                            (lambda (entry)
-                              (and (eq (cadr entry) :arg)
-                                   (eq (clime-arg-name (caddr entry)) name)))
-                            key-map)))
-                 (val (clime-values-value clime-invoke--values name))
-                 (val-str (if val
-                              (propertize (format "%s" val) 'face 'clime-invoke-active)
-                            (propertize "(unset)" 'face 'clime-invoke-unset)))
-                 (desc (clime-invoke--format-desc arg))
-                 (param-err (cdr (assq name param-errors))))
-            (when key
-              (push (concat
-                     (format " %s %s  %s"
-                             (propertize (format "%3s" key)
-                                         'face (if dimmed 'clime-invoke-dimmed
-                                                 'clime-invoke-arg-key))
-                             (clime-invoke--pad-to val-str val-width)
-                             desc)
-                     (when param-err
-                       (concat "  " (propertize (concat "← " param-err)
-                                                'face 'clime-invoke-invalid))))
-                    lines))))
-        (push "" lines))
-    ;; Children (only on branch nodes, not commands)
+        (push (list (propertize (string-join all-errors "; ")
+                                'face 'clime-invoke-error))
+              sections)))
+    ;; Options
+    (when grouped
+      (push (clime-invoke--render-options grouped key-map val-width root
+                                          param-errors prefix-state)
+            sections))
+    ;; Args
+    (when args
+      (push (clime-invoke--render-args args key-map val-width param-errors dimmed)
+            sections))
+    ;; Children
     (when (clime-branch-p node)
-      (let ((children (clime-invoke--visible-children node)))
-        (when children
-          (push (propertize "Commands" 'face (if dimmed 'clime-invoke-dimmed
-                                               'clime-invoke-heading))
-                lines)
-          (dolist (entry children)
-            (let* ((name (car entry))
-                   (child (cdr entry))
-                   (key (car (cl-find-if
-                              (lambda (e)
-                                (and (eq (cadr e) :child)
-                                     (equal (caddr e) name)))
-                              key-map)))
-                   (help (or (clime-node-help child) name))
-                   (ann (concat
-                         (if (clime-node-hidden child)
-                             (concat " " (propertize "(hidden)"
-                                                     'face 'clime-invoke-hidden))
-                           "")
-                         (if (clime-node-deprecated child)
-                             (concat " " (propertize "(deprecated)"
-                                                     'face 'warning))
-                           ""))))
-              (when key
-                (push (format " %s %s%s"
-                              (propertize (format "%3s" key)
-                                          'face (if dimmed 'clime-invoke-dimmed
-                                                  'clime-invoke-command-key))
-                              help ann)
-                      lines))))
-          (push "" lines))))
-    ;; Actions footer
-    (push (propertize "Actions" 'face (if dimmed 'clime-invoke-dimmed
-                                        'clime-invoke-heading))
-          lines)
-    (let ((actions '())
-          (act-face (if dimmed 'clime-invoke-dimmed 'clime-invoke-action-key)))
-      (when (clime-node-handler node)
-        (push (format "%s %s"
-                      (propertize "RET" 'face act-face)
-                      "Run")
-              actions))
-      (unless at-root
-        (push (format "%s %s"
-                      (propertize "DEL" 'face act-face)
-                      "Back")
-              actions))
-      (push (format "%s %s"
-                    (propertize "ESC" 'face act-face)
-                    "Quit")
-            actions)
-      (push (format "%s %s"
-                    (propertize "?" 'face act-face)
-                    (symbol-name clime-invoke--show-mode))
-            actions)
-      (push (concat " " (string-join (nreverse actions) "    ")) lines)))
-    (string-join (nreverse lines) "\n")))
+      (let ((child-lines (clime-invoke--render-children node key-map dimmed)))
+        (when child-lines
+          (push child-lines sections))))
+    ;; Actions
+    (push (clime-invoke--render-actions node at-root dimmed) sections)
+    ;; Join sections with blank-line separators
+    (mapconcat (lambda (sec) (string-join sec "\n"))
+               (nreverse sections) "\n\n")))
 
 
 (defun clime-invoke--display-key (key)
@@ -1207,35 +1231,8 @@ Unlike cycling, this prompts the user for an explicit value."
 (defun clime-invoke--run-handler (app node path)
   "Run NODE's handler using `clime-invoke--values', returning (EXIT-CODE . OUTPUT).
 APP is the root app.  PATH is the command path list.
-Runs the full parse finalization pipeline (defaults, env vars,
-conformers, required checks) before calling the handler."
-  (let* ((result (clime-parse-result--create
-                  :command node
-                  :node node
-                  :path path
-                  :display-path path
-                  :params (clime-values-plist clime-invoke--values)
-                  :values (copy-sequence clime-invoke--values)
-                  :tree app))
-         (exit-code nil)
-         (output (with-output-to-string
-                   (setq exit-code
-                         (condition-case err
-                             (progn
-                               (clime-parse-finalize result)
-                               (let ((ctx (clime--build-context app result)))
-                                 (clime-run--execute
-                                  (clime-node-handler node) ctx)))
-                           (clime-usage-error
-                            (princ (cadr err))
-                            2)
-                           (clime-help-requested
-                            (clime--print-help (cdr err))
-                            0)
-                           (error
-                            (princ (error-message-string err))
-                            1))))))
-    (cons (or exit-code 0) output)))
+Delegates to `clime-run-from-values' for the finalize → execute pipeline."
+  (clime-run-from-values app node path clime-invoke--values))
 
 ;;; ─── Output Display ─────────────────────────────────────────────────
 
@@ -1350,31 +1347,14 @@ Returns (LAST-OUTPUT QUIT-ALL) where LAST-OUTPUT is
             (if (null action)
                 (setq error-msg (format "Unknown key: %s" key))
               (pcase (car action)
-                (:option
-                 (let ((opt (cadr action)))
+                ((or :option :option-direct :arg)
+                 (let ((handler (pcase (car action)
+                                  (:option #'clime-invoke--handle-option)
+                                  (:option-direct #'clime-invoke--handle-option-direct)
+                                  (:arg #'clime-invoke--handle-arg))))
                    (condition-case err
                        (progn
-                         (clime-invoke--handle-option opt)
-                         (setq validation-result
-                               (clime-invoke--validate-all node)))
-                     (quit nil)
-                     (error
-                      (setq error-msg (error-message-string err))))))
-                (:option-direct
-                 (let ((opt (cadr action)))
-                   (condition-case err
-                       (progn
-                         (clime-invoke--handle-option-direct opt)
-                         (setq validation-result
-                               (clime-invoke--validate-all node)))
-                     (quit nil)
-                     (error
-                      (setq error-msg (error-message-string err))))))
-                (:arg
-                 (let ((arg (cadr action)))
-                   (condition-case err
-                       (progn
-                         (clime-invoke--handle-arg arg)
+                         (funcall handler (cadr action))
                          (setq validation-result
                                (clime-invoke--validate-all node)))
                      (quit nil)
@@ -1431,7 +1411,9 @@ means those specific params; nil (default) means no pre-prompting.
 IMMEDIATE when non-nil runs the handler directly after the ask
 phase if all required params are satisfied, without showing the
 menu.  Implies ASK t when ASK is not explicitly provided.  If no
-params needed prompting, confirms via `y-or-n-p'.
+params needed prompting, confirms via `y-or-n-p'.  The symbol
+`no-confirm' skips the `y-or-n-p' confirmation and runs the
+handler directly.
 
 Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
   :params  — final parameter values
@@ -1496,9 +1478,22 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
               (when (and (null (car valid)) (null (cdr valid))
                          (clime-invoke--all-required-satisfied-p node tree))
                 ;; All valid — run immediately (with y-or-n-p if nothing was asked)
+                ;; Show menu so user sees what they're confirming
+                (when (and (not (eq immediate 'no-confirm)) (not ask-buf))
+                  (setq ask-buf (get-buffer-create clime-invoke--buffer-name))
+                  (display-buffer ask-buf clime-invoke-display-buffer-action)
+                  (clime-invoke--render node
+                                        (clime-invoke--build-key-map node)
+                                        nil ask-buf t nil))
                 (if (or ask-params
-                        (y-or-n-p (format "Run %s? "
-                                          (clime-node-name node))))
+                        (eq immediate 'no-confirm)
+                        (y-or-n-p
+                         (format "Run %s? "
+                                 (string-join
+                                  (cons (clime-node-name tree)
+                                        (or nav-path
+                                            (list (clime-node-name node))))
+                                  " "))))
                     (let* ((run-result
                             (clime-invoke--run-handler
                              tree node (or nav-path '())))

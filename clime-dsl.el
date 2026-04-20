@@ -591,8 +591,8 @@ Child forms:
   (let* ((name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      body
-                     '(:version :env-prefix :help :doc :json-mode :epilog :examples :setup
-                                :options :args :children :output-formats)))
+                     '(:version :env-prefix :help :doc :json-mode :epilog :examples :setup :config
+                                :after-execute :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -601,7 +601,7 @@ Child forms:
        (setq ,name
              (clime-make-app
               :name ,name-str
-              ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup))
+              ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup :config :after-execute))
               ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler)))))))
 
 ;;; ─── DSL Form Macros ───────────────────────────────────────────────────
@@ -815,6 +815,26 @@ With a single function reference, passes it through:
                (memq (car-safe arglist-or-fn) '(function quote))))
       arglist-or-fn
     `(lambda ,arglist-or-fn ,@body)))
+
+(defmacro clime-nil-handler (arglist-or-fn &rest body)
+  "Define a command handler that always returns nil.
+Like `clime-handler', but appends nil to suppress the runner from
+encoding the return value as output.
+
+With a function reference, wraps it in a lambda that discards the
+return value:
+  (clime-nil-handler #\\='my-fn)      → (lambda (ctx) (my-fn ctx) nil)
+  (clime-nil-handler \\='my-fn)       → (lambda (ctx) (my-fn ctx) nil)
+
+With an arglist and body, appends nil:
+  (clime-nil-handler (ctx) BODY...)  → (lambda (ctx) BODY... nil)"
+  (declare (indent 1))
+  (if (and (null body)
+           (or (not (listp arglist-or-fn))
+               (memq (car-safe arglist-or-fn) '(function quote))))
+      (let ((ctx (make-symbol "ctx")))
+        `(lambda (,ctx) (funcall ,arglist-or-fn ,ctx) nil))
+    `(lambda ,arglist-or-fn ,@body nil)))
 
 (provide 'clime-dsl)
 ;;; clime-dsl.el ends here

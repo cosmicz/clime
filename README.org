@@ -4,7 +4,7 @@
 *clime* is a declarative command framework for Emacs Lisp.  Define your
 commands, options, and arguments once with a structured DSL — then
 surface them however you want: as a CLI script, interactively from
-Emacs via =clime-invoke=, or (soon) over a network via =clime-serve=.
+Emacs via =clime-invoke=, or over a network via =clime-serve=.
 
 clime handles the plumbing: two-pass argument parsing with type
 coercion, env var resolution, and validation, auto-generated help,
@@ -156,7 +156,7 @@ clime-app (root)
 * Surfaces
 
 A clime app is surface-agnostic --- the same definition drives CLI
-parsing, interactive menus, and (soon) network servers.  Each surface
+parsing, interactive menus, and network servers.  Each surface
 translates user input into the values map, validates it through the
 same pipeline, and calls the handler.
 
@@ -206,13 +206,149 @@ Use ~:key~ to override auto-assigned keys:
   (plist-get result :output)) ;; handler output string (nil if user quit)
 #+end_src
 
-*** Hot-reload (~clime-reload~)
+*** Programmatic invocation (~:ask~, ~:immediate~)
+
+~:ask~ prompts for parameters via minibuffer before showing the menu.
+~:immediate~ runs the handler directly once all required params are
+satisfied, without entering the menu loop:
+
+#+begin_src emacs-lisp
+;; Prompt for all required params, then run without menu
+(clime-invoke my-app '("deploy") nil :immediate t)
+
+;; Prompt only for specific params
+(clime-invoke my-app '("deploy") '(target "staging") :ask '(env))
+
+;; Skip y-or-n-p confirmation when all params are pre-filled
+(clime-invoke my-app '("deploy") '(target "prod" env "us-east")
+              :immediate 'no-confirm)
+#+end_src
+
+| ~:ask~ value     | Behavior                                      |
+|------------------+-----------------------------------------------|
+| ~nil~ (default)  | No pre-prompting, enters menu directly        |
+| ~t~              | Prompt for all required params                |
+| ~'(param ...)~   | Prompt for listed params only                 |
+
+| ~:immediate~ value | Behavior                                     |
+|--------------------+----------------------------------------------|
+| ~nil~ (default)    | Normal menu loop                             |
+| ~t~                | Run after ask if satisfied; ~y-or-n-p~ if nothing was asked |
+| ~'no-confirm~      | Like ~t~ but skip ~y-or-n-p~ confirmation    |
+
+** Server (~clime-serve~)
+
+Any ~clime-app~ can be exposed over HTTP via ~clime-serve~.  The app
+tree IS the router --- URL path segments resolve commands via the
+same dispatch used by the CLI.
+
+#+begin_src emacs-lisp
+(require 'clime-serve)
+(clime-serve my-app :port 8080 :host "127.0.0.1")
+#+end_src
+
+Returns a server process object.  Stop with ~clime-serve-stop~ (pass
+the process, or nil to stop all clime servers).
+
+Mirrors the ~clime-invoke~ dispatch shape: ~:setup~ and ~:config~
+hooks run once at startup (two-pass), the tree is deep-copied per
+request, and values from the request are seeded directly into the
+values map.  No per-request re-initialization.
+
+*** Routing
+
+URL path segments walk the command tree.  Segments matching a child
+name descend into that child.  Non-matching segments are consumed as
+positional args on the current node, enabling path params:
+
+#+begin_src emacs-lisp
+(clime-app my-app
+  (clime-group agent
+    (clime-arg id :help "Agent ID" :required t)
+    (clime-command start (clime-handler (ctx) ...))
+    (clime-command stop  (clime-handler (ctx) ...))))
+#+end_src
+
+| Request                  | Command          | Values               |
+|--------------------------+------------------+----------------------|
+| ~GET /agent/abc/start~   | ~agent/start~    | ~id=abc~             |
+| ~GET /agent/xyz/stop~    | ~agent/stop~     | ~id=xyz~             |
+
+*** Parameters
+
+Query string params (GET) and JSON body params (POST) seed option and
+arg values by name.  String values are coerced to the option's
+declared ~:type~ using the same pipeline as CLI argv.  Bare flags
+(e.g. ~?dry-run~) normalize to ~t~.
+
+#+begin_src
+GET /db/migrate?dry-run&limit=100
+POST /db/seed  { "file": "data.sql" }
+#+end_src
+
+*** Response mapping
+
+Handler output is captured (same as ~clime-invoke~) and returned as
+the response body.  Exit codes map to HTTP status:
+
+| Exit code | Status | Meaning                 |
+|-----------+--------+-------------------------|
+|         0 |    200 | Success                 |
+|         2 |    400 | Usage error (bad input) |
+|         1 |    500 | Handler error           |
+| unknown path |  404 | Route not found         |
+
+*** Path suffix format selection
+
+When the app declares output formats, URL paths ending with a format
+extension (e.g. ~.json~, ~.html~) activate that format for the
+request.  The suffix is stripped before routing:
+
+#+begin_src
+GET /db/migrate.json?dry-run    →  command: db/migrate, format: json
+GET /report/summary.html        →  command: report/summary, format: html
+#+end_src
+
+Apps without output formats are unaffected --- suffixes are treated as
+literal path segments.  ~_api~ endpoints auto-default to JSON when the
+app declares a JSON format.
+
+*** Introspection
+
+~GET /_routes~ returns a plain-text listing of available commands with
+their help strings.
+
+Structured API endpoints are injected as hidden commands at startup:
+
+| Endpoint                     | Returns                                    |
+|------------------------------+--------------------------------------------|
+| ~GET /_api/meta~             | App name, version, and help text           |
+| ~GET /_api/commands~         | All visible top-level commands              |
+| ~GET /_api/commands/PATH~    | Detail for a specific command (e.g. ~db/migrate~) |
+
+Output uses ~clime-out~, so the active output format drives encoding.
+
+*** Dependencies
+
+~clime-serve~ requires [[https://github.com/eschulte/emacs-web-server][web-server]] (Eric Schulte, GPLv3) for the
+network layer.  It is included as a git submodule under
+~lib/web-server/~.  After cloning, initialize it with:
+
+#+begin_src sh
+git submodule update --init
+#+end_src
+
+Or use ~make submodules~.  ~clime-serve~ auto-adds
+~lib/web-server/~ to the load-path at require time, so no manual
+configuration is needed beyond initializing the submodule.
+
+** Hot-reload (~clime-reload~)
 
 ~clime-reload~ force-reloads all clime modules in dependency order,
 including ~clime.el~ itself and optional modules (~clime-invoke~,
-~clime-make~) if already loaded.  Clears and reapplies face specs so
-~defface~ changes take effect.  Useful during development to pick up
-changes without restarting Emacs.
+~clime-make~, ~clime-serve~) if already loaded.  Clears and reapplies
+face specs so ~defface~ changes take effect.  Useful during
+development to pick up changes without restarting Emacs.
 
 * Features
 
@@ -879,6 +1015,64 @@ Static ~:choices~ (literal lists) are validated immediately in pass 1.
 Dynamic ~:choices~ (functions) are deferred to pass 2 after the setup
 hook has run.
 
+*** Config file providers
+
+The ~:config~ slot accepts a factory function ~(app result) → provider~
+called between pass-1 and pass-2 (after ~:setup~).  The returned
+provider is a lookup function ~(command-path param-name) → value~ that
+supplies defaults from external config files.  Config values sit between
+env vars and hard defaults in the precedence chain:
+~user > app > env > config > default > conform~.
+
+clime ships two built-in provider creators:
+
+- ~clime-config-json~ — reads a JSON file with hierarchical inheritance
+- ~clime-config-sexp~ — reads a plist file with the same semantics
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+  :env-prefix "MYAPP"
+  :config (lambda (_app result)
+            (clime-config-json
+             (clime-parse-result-param result 'config "~/.myapp.json")))
+
+  (clime-opt config ("--config" "-c")
+    :help "Path to config file")
+
+  (clime-command serve
+    :help "Start the server"
+    (clime-opt port ("--port" "-p") :type 'integer
+      :help "Listen port")
+    (clime-handler (ctx)
+      (clime-let ctx (port)
+        (message "Serving on %s" (or port 8080))))))
+#+end_src
+
+With =~/.myapp.json=:
+
+#+begin_src json
+{
+  "port": 3000,
+  "serve": {
+    "port": 8080
+  }
+}
+#+end_src
+
+The JSON provider walks from the most specific path to the root:
+~serve.port~ (8080) wins over root ~port~ (3000) for the ~serve~
+command.  A different command would inherit root ~port~ (3000) unless
+it defines its own override.
+
+Custom providers just need to return the right shape:
+
+#+begin_src emacs-lisp
+:config (lambda (_app _result)
+          (lambda (command-path param-name)
+            (my-lookup command-path param-name)))
+#+end_src
+
 *** Environment variables
 
 Options opt in to env var resolution with ~:env~ (or ~:env t~) for an
@@ -913,15 +1107,15 @@ options split on comma: ~MYAPP_TAGS=dev,ci~ becomes ~("dev" "ci")~.
 Every surface feeds parameter values into a shared *values map* --- an
 alist of ~(NAME . (:value V :source S))~ entries that tracks each
 parameter's resolved value and provenance (~user~, ~app~, ~env~,
-~default~, ~conform~).
+~config~, ~default~, ~conform~).
 
 For CLI, the pipeline runs in two passes with an optional ~:setup~
-hook between them.  Pass 1 extracts values from argv (type coercion,
-static ~:choices~, ~:coerce~) into the values map with source ~user~.
-Pass 2 merges env vars, runs ~:conform~ hooks (accumulating errors as
-~:error~ entries), applies defaults, and checks required params.  The
-~:setup~ hook runs between passes, letting apps load configuration
-that influences pass-2 behavior.
+hook and/or ~:config~ factory between them.  Pass 1 extracts values
+from argv (type coercion, static ~:choices~, ~:coerce~) into the
+values map with source ~user~.  Between passes, ~:setup~ runs first,
+then ~:config~ creates a provider.  Pass 2 merges env vars, applies
+config values, runs ~:conform~ hooks (accumulating errors as ~:error~
+entries), applies defaults, and checks required params.
 
 Invoke builds the values map interactively (key-by-key), then runs
 the same pass-2 finalization before calling the handler.
@@ -1190,6 +1384,51 @@ absent --- useful for negatable flags:
   (my-other-function (clime-params-plist ctx 'package 'force)))
 #+end_src
 
+*** Void handlers (~clime-nil-handler~)
+
+Handlers that perform side effects but don't produce output data must
+return ~nil~ to prevent the runner from encoding their return value.
+~clime-nil-handler~ eliminates the trailing ~nil~ boilerplate:
+
+#+begin_src emacs-lisp
+;; Before: explicit nil to suppress output
+(clime-handler (ctx)
+  (my-side-effectful-fn ctx)
+  nil)
+
+;; After: wraps a function reference
+(clime-nil-handler #'my-side-effectful-fn)
+
+;; Or with inline body
+(clime-nil-handler (ctx)
+  (do-stuff ctx)
+  (do-more ctx))
+#+end_src
+
+*** After-execute hooks
+
+The ~:after-execute~ slot on ~clime-app~ registers hooks that fire
+after every handler invocation — CLI, interactive, and HTTP surfaces
+all go through ~clime-run--execute~.
+
+Each hook receives three arguments: the context, the integer exit
+code, and the wall-clock duration in seconds:
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+  :after-execute (lambda (ctx exit-code duration)
+                   (message "Finished in %.2fs (exit %d)"
+                            duration exit-code))
+  ...)
+#+end_src
+
+Multiple hooks are supported (pass a list).  Errors in hooks are
+caught and reported via ~message~ — they never propagate or alter
+the exit code.  The ~clime-context~ struct includes a ~start-time~
+slot (set automatically before handler invocation) available to
+handlers for timeout or progress logic.
+
 ** Reusable Definitions
 
 *** Parameter templates
@@ -1296,7 +1535,7 @@ All parameter forms (~clime-opt~, ~clime-arg~) accept: ~:type~,
 
 | Macro                 | Alias              | Purpose                          | Distinctive arguments                                                 |
 |-----------------------+--------------------+----------------------------------+-----------------------------------------------------------------------|
-| ~clime-app~           |                    | Root application definition      | ~:version~, ~:env-prefix~, ~:setup~                                  |
+| ~clime-app~           |                    | Root application definition      | ~:version~, ~:env-prefix~, ~:setup~, ~:config~                      |
 | ~clime-command~       |                    | Leaf command (has handler)       | All shared command slots                                              |
 | ~clime-group~         |                    | Branch node (has children)       | ~:inline~                                                             |
 | ~clime-opt~           | ~clime-option~     | Named option (flag or value)     | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:optional~, ~:requires~, ~:env~, ~:category~ |
@@ -1310,6 +1549,7 @@ All parameter forms (~clime-opt~, ~clime-arg~) accept: ~:type~,
 | ~clime-alias-for~     |                    | Alias for a nested command       | Target path, ~:defaults~, ~:vals~                                    |
 | ~clime-output-format~ |                    | Output format declaration        | ~:finalize~, ~:streaming~, ~:encoder~, ~:error-handler~, plus all option slots |
 | ~clime-handler~       |                    | Command implementation           | ~(ctx)~ --- receives ~clime-context~                                  |
+| ~clime-nil-handler~   |                    | Handler that returns nil         | Same as ~clime-handler~; suppresses output encoding                   |
 | ~clime-let~           |                    | Destructure context params       | ~ctx (var1 var2 (alias param) ...)~                                   |
 
 ~:bool~ (or ~:bool t~) is shorthand for ~:nargs 0~ (boolean flag, DSL only).
@@ -1320,7 +1560,7 @@ and JSON mode.
 
 * Bundling & Distribution
 
-~clime-make.el~ provides four commands:
+~clime-make.el~ provides six commands:
 
 | Command        | Purpose                                          |
 |----------------+--------------------------------------------------|
@@ -1328,6 +1568,8 @@ and JSON mode.
 | ~scaffold~     | Insert ~;;; Entrypoint:~ boilerplate              |
 | ~quickstart~   | ~scaffold~ + ~init~ in one shot (auto env vars)  |
 | ~bundle~       | Combine multiple source files into one            |
+| ~strip~        | Remove a clime shebang from an Elisp file        |
+| ~serve~        | Start an HTTP server for a clime app file         |
 
 ** Making a script executable (~init~)
 
@@ -1425,8 +1667,9 @@ For multi-file projects, ~bundle~ concatenates source files into one:
     src/myapp-core.el src/myapp-commands.el src/myapp.el
 #+end_src
 
-The output provides the feature (~'myapp~) and can be used as a
-library via ~(require 'myapp)~.
+The output is a single file that provides one feature (~'myapp~).
+Use ~(require 'myapp)~ to load it --- individual module requires
+(e.g. ~(require 'myapp-core)~) do not work against the bundle.
 
 *** Adding an entrypoint (~--main~)
 
@@ -1511,6 +1754,37 @@ dist/myapp.el: $(SRCS) myapp-main.el
 	$(CLIME) bundle -o $@ --provide myapp --main myapp-main.el $(SRCS)
 	$(CLIME) init --standalone --self-dir --env CLIME_MAIN_APP=myapp $@
 #+end_src
+
+** Stripping a shebang (~strip~)
+
+~strip~ removes a clime shebang from an Elisp file and clears the
+executable bit:
+
+#+begin_src bash
+./clime-make.el strip myapp.el
+#+end_src
+
+Useful before committing tracked ~.el~ files that should not carry
+shebangs in version control.
+
+** Serving an app over HTTP (~serve~)
+
+~serve~ loads a clime app file and starts an HTTP server via
+~clime-serve~:
+
+#+begin_src bash
+./clime-make.el serve myapp.el --port 8080 --host 127.0.0.1
+#+end_src
+
+When the file has a clime shebang, load paths and ~CLIME_MAIN_APP~
+are parsed from it automatically.  Pass ~--no-auto-paths~ to disable
+this.  Use ~--app SYMBOL~ to override the auto-detected app symbol.
+Use ~-L DIR~ to add extra load paths.
+
+The server blocks until interrupted (Ctrl-C).  Requires
+[[https://github.com/eschulte/emacs-web-server][web-server]] at runtime --- see [[*Dependencies][Dependencies]] under the Server
+section.  In the dist bundle, ~clime-serve~ is included but
+~web-server~ must be on the ~load-path~ separately.
 
 ** How the shebang works
 

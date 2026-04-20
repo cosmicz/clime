@@ -47,12 +47,14 @@
   "Call HANDLER with CTX, flushing output and returning exit code.
 Uses `clime-out--active-format' for output routing.
 Re-signals `clime-usage-error' and `clime-help-requested' to caller.
-Returns integer exit code: 0 success, 1 runtime error."
+Returns integer exit code: 0 success, 1 runtime error.
+After execution, fires `:after-execute' hooks on the app (if any)."
   (let* ((fmt clime-out--active-format)
          (streaming (clime-output-format-streaming fmt))
          (clime-out--items nil)
          (clime-out--errors nil)
          (retval nil)
+         (_t0 (setf (clime-context-start-time ctx) (float-time)))
          (exit-code
           (condition-case err
               (progn (setq retval (funcall handler ctx)) 0)
@@ -74,7 +76,68 @@ Returns integer exit code: 0 success, 1 runtime error."
             (princ (funcall (clime-output-format-encoder fmt) retval))
             (terpri))
         (clime-out--flush (clime-output-format-finalize fmt) retval))
-      (if has-errors 1 0))))
+      (let ((final-code (if has-errors 1 0)))
+        (clime-run--fire-after-execute ctx final-code
+                                        (- (float-time)
+                                           (clime-context-start-time ctx)))
+        final-code))))
+
+(defun clime-run--fire-after-execute (ctx exit-code duration)
+  "Fire after-execute hooks from CTX's app with EXIT-CODE and DURATION.
+Each hook is called inside `condition-case'; errors are reported via
+`message' and do not propagate or alter the exit code."
+  (when-let ((app (clime-context-app ctx)))
+    (dolist (hook (clime-app-after-execute app))
+      (condition-case err
+          (funcall hook ctx exit-code duration)
+        (error
+         (message "clime: after-execute hook error: %s"
+                  (error-message-string err)))))))
+
+;;; ─── Values → Execute Pipeline ──────────────────────────────────────────
+
+(defun clime-run-from-values (app node path values)
+  "Run NODE's handler from a pre-built VALUES alist, returning (EXIT-CODE . OUTPUT).
+Creates a parse-result, finalizes it, builds a context, and executes
+the handler.  Output is captured via `with-output-to-string'.
+
+APP is the root app.  NODE is the terminal node (command or group with
+handler).  PATH is the command path list.  VALUES is an alist of
+\(NAME . (VALUE . SOURCE)) pairs.
+
+Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error."
+  ;; Coerce string values to declared types before building the parse-result.
+  ;; CLI pass-1 and invoke UI produce typed values; this handles serve/IPC
+  ;; where query params arrive as strings.
+  (let ((scope (cons node (clime-node-ancestors node))))
+    (setq values (clime--coerce-string-values scope values)))
+  (let* ((result (clime-parse-result--create
+                  :command (if (clime-command-p node) node nil)
+                  :node node
+                  :path path
+                  :display-path path
+                  :params (clime-values-plist values)
+                  :values (copy-sequence values)
+                  :tree app))
+         (exit-code nil)
+         (output (with-output-to-string
+                   (setq exit-code
+                         (condition-case err
+                             (progn
+                               (clime-parse-finalize result)
+                               (let ((ctx (clime--build-context app result)))
+                                 (clime-run--execute
+                                  (clime-node-handler node) ctx)))
+                           (clime-usage-error
+                            (princ (cadr err))
+                            2)
+                           (clime-help-requested
+                            (clime--print-help (cdr err))
+                            0)
+                           (error
+                            (princ (error-message-string err))
+                            1))))))
+    (cons (or exit-code 0) output)))
 
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
@@ -101,10 +164,17 @@ the format and drives all output behavior through the format struct."
          (clime-out--active-format (or active-fmt clime-out--active-format)))
     (condition-case err
         (let* ((setup (clime-app-setup app))
-               (result (clime-parse app argv (and setup t))))
-          ;; When setup hook exists: call it, then finalize (pass 2)
-          (when setup
-            (funcall setup app result)
+               (config-factory (clime-app-config app))
+               (two-pass (or setup config-factory))
+               (result (clime-parse app argv (and two-pass t))))
+          ;; When setup or config exists: run between passes, then finalize
+          (when two-pass
+            (when setup
+              (funcall setup app result))
+            (when config-factory
+              (let ((provider (funcall config-factory app result)))
+                (when provider
+                  (setf (clime-parse-result-config-provider result) provider))))
             (clime-parse-finalize result))
           (let* ((node (clime-parse-result-node result))
                  (handler (clime-node-handler node))

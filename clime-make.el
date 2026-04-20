@@ -10,10 +10,12 @@
 ;;; Commentary:
 
 ;; Command-line interface for clime itself.  Provides:
-;;   `init'      — add shebang to an Elisp file
-;;   `bundle'    — concatenate multiple source files into a single distributable
-;;   `scaffold'  — insert ;;; Entrypoint: boilerplate into an Elisp file
+;;   `init'       — add shebang to an Elisp file
+;;   `bundle'     — concatenate multiple source files into a single distributable
+;;   `scaffold'   — insert ;;; Entrypoint: boilerplate into an Elisp file
 ;;   `quickstart' — scaffold + init in one shot (auto CLIME_MAIN_APP)
+;;   `strip'      — remove the clime shebang from an Elisp file
+;;   `serve'      — expose a clime app over HTTP
 ;;
 ;; Usage:
 ;;   ./clime-make.el init myapp.el
@@ -21,11 +23,13 @@
 ;;   ./clime-make.el scaffold myapp.el
 ;;   ./clime-make.el quickstart myapp.el --self-dir
 ;;   ./clime-make.el bundle -o bundle.el --provide mylib src/*.el
+;;   ./clime-make.el serve myapp.el --port 8080
 ;;   ./clime-make.el --help
 
 ;;; Code:
 
 (require 'clime)
+(declare-function clime-serve "clime-serve" (app &rest args))
 
 ;;; ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -320,6 +324,57 @@ Returns FEATURE as a symbol, or nil if not found."
     (when (re-search-forward "^(provide '\\([^ \t\n)]+\\))" nil t)
       (intern (match-string 1)))))
 
+(defun clime-make--shebang-line2 (file)
+  "Return line 2 of FILE, or nil if FILE has fewer than two lines."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 4096)
+    (goto-char (point-min))
+    (when (zerop (forward-line 1))
+      (buffer-substring (point) (line-end-position)))))
+
+(defun clime-make--shebang-subst-path (path file)
+  "Expand shell variables in PATH string to absolute paths.
+FILE is the shebang-tagged source file whose location anchors
+`$D' (dirname), `$S' (self/realpath), and `$(dirname \"$0\")'.
+Returns an absolute path, or nil if PATH still contains an
+unresolved `$' after substitution (e.g. an env var)."
+  (let* ((dir (file-name-directory (file-truename file)))
+         (self (file-truename file))
+         (replaced path))
+    (setq replaced (replace-regexp-in-string
+                    "\\$(dirname \"\\$0\")" dir replaced t t))
+    (setq replaced (replace-regexp-in-string
+                    "\\$D\\b" (directory-file-name dir) replaced t t))
+    (setq replaced (replace-regexp-in-string
+                    "\\$S\\b" self replaced t t))
+    (unless (string-match-p "\\$" replaced)
+      (expand-file-name replaced))))
+
+(defun clime-make--parse-shebang-loadpaths (file)
+  "Extract absolute `-L' load paths from the clime shebang of FILE.
+Substitutes `$D', `$S', and `$(dirname \"$0\")' against FILE's
+location.  Skips any entry containing an unresolved `$' (likely
+an env var).  Returns nil for files without a clime shebang."
+  (when (clime-make--clime-shebang-p file)
+    (let ((line (or (clime-make--shebang-line2 file) ""))
+          (paths nil)
+          (start 0))
+      (while (string-match "-L[[:space:]]+\\(\"\\([^\"]+\\)\"\\|\\([^[:space:]]+\\)\\)"
+                           line start)
+        (let* ((raw (or (match-string 2 line) (match-string 3 line)))
+               (resolved (clime-make--shebang-subst-path raw file)))
+          (when resolved
+            (push resolved paths)))
+        (setq start (match-end 0)))
+      (nreverse paths))))
+
+(defun clime-make--parse-shebang-main-app (file)
+  "Return the `CLIME_MAIN_APP' symbol from the shebang of FILE, or nil."
+  (when (clime-make--clime-shebang-p file)
+    (let ((line (or (clime-make--shebang-line2 file) "")))
+      (when (string-match "CLIME_MAIN_APP=\\([A-Za-z0-9_-]+\\)" line)
+        (intern (match-string 1 line))))))
+
 ;;; ─── Handlers ──────────────────────────────────────────────────────────
 
 (defun clime-make--init-handler (ctx)
@@ -504,6 +559,48 @@ CTX is the clime context."
         (let ((init-result (clime-make--init-handler ctx)))
           (format "%s\n%s" scaffold-result init-result))))))
 
+(defun clime-make--serve-handler (ctx)
+  "Handle the `serve' command: expose a clime app over HTTP.
+CTX is the clime context."
+  (clime-let ctx (file port host app
+                       (extras extra-load-path) auto-paths)
+    (let* ((target (expand-file-name file))
+           (shebang-paths (when auto-paths
+                            (clime-make--parse-shebang-loadpaths target)))
+           (shebang-app (when auto-paths
+                          (clime-make--parse-shebang-main-app target)))
+           (all-paths (append shebang-paths
+                              (mapcar #'expand-file-name (or extras '())))))
+      ;; Extend load-path before loading the app file
+      (dolist (p all-paths)
+        (add-to-list 'load-path p))
+      ;; Load the app file to make its symbols available
+      (condition-case err
+          (load target nil t t)
+        (error
+         (signal 'clime-usage-error
+                 (list (format "failed to load %s: %s"
+                               (file-name-nondirectory file)
+                               (error-message-string err))))))
+      ;; Resolve the app symbol: explicit > shebang > detected
+      (let ((app-sym (or (and app (intern app))
+                         shebang-app
+                         (clime-make--detect-app target))))
+        (unless app-sym
+          (signal 'clime-usage-error
+                  (list (format "%s: no (clime-app SYMBOL ...) form found; pass --app"
+                                (file-name-nondirectory file)))))
+        (unless (boundp app-sym)
+          (signal 'clime-usage-error
+                  (list (format "%s: %s is not bound after load"
+                                (file-name-nondirectory file) app-sym))))
+        ;; Start the server
+        (require 'clime-serve)
+        (clime-serve (symbol-value app-sym) :port port :host host)
+        ;; Block until interrupted.  In batch mode SIGINT signals
+        ;; `quit', which propagates out cleanly.
+        (while t (sleep-for 3600))))))
+
 (defun clime-make--strip-handler (ctx)
   "Handle the `strip' command: remove a clime shebang from an Elisp file.
 CTX is the clime context."
@@ -635,7 +732,32 @@ CTX is the clime context."
     (clime-arg file :type '(file :must-exist t)
                :help "The .el file to strip")
 
-    (clime-handler (ctx) (clime-make--strip-handler ctx))))
+    (clime-handler (ctx) (clime-make--strip-handler ctx)))
+
+  ;; ── serve ────────────────────────────────────────────────────────
+  (clime-command serve
+    :help "Expose a clime app over HTTP"
+
+    (clime-arg file :type '(file :must-exist t)
+               :help "The .el file defining the clime-app")
+
+    (clime-opt port ("--port" "-p") :type 'integer :default 8080
+      :help "TCP port to listen on")
+
+    (clime-opt host ("--host" "-H") :default "127.0.0.1"
+      :help "Network interface to bind")
+
+    (clime-opt app ("--app" "-a")
+      :help "App symbol to serve (overrides shebang/auto-detect)")
+
+    (clime-opt extra-load-path ("--load-path" "-L")
+      :from make-load-path :type 'path
+      :help "Additional load paths for the app's dependencies")
+
+    (clime-opt auto-paths ("--auto-paths") :negatable :default t
+      :help "Detect load paths and app symbol from the file's shebang")
+
+    (clime-handler (ctx) (clime-make--serve-handler ctx))))
 
 (provide 'clime-make)
 ;;; clime-make.el ends here

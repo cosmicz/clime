@@ -263,10 +263,10 @@ Always returns a list."
 ;;   :source — provenance symbol: user, app, env, default, conform
 ;;   :error  — error string (optional, present when validation failed)
 ;;
-;; Source precedence (highest first): user > app > env > default > conform.
+;; Source precedence (highest first): user > app > env > config > default > conform.
 ;; `clime-values-merge' respects this ordering.
 
-(defconst clime--source-precedence '(user app env default conform)
+(defconst clime--source-precedence '(user app env config default conform)
   "Source precedence order, highest first.")
 
 (defun clime-values-get (values name)
@@ -760,7 +760,14 @@ ARGS is a plist of slot values."
   (json-mode nil :type boolean :documentation "Whether --json is a built-in root option.  Deprecated: use `clime-output-format'.")
   (output-formats nil :type list :documentation "List of `clime-output-format' structs.")
   (argv0 nil :type (or string null) :documentation "Program name for usage output (set from CLIME_ARGV0).")
-  (setup nil :type (or function null) :documentation "Hook called after pass-1 parse, before dynamic validation and handler."))
+  (setup nil :type (or function null) :documentation "Hook called after pass-1 parse, before dynamic validation and handler.")
+  (config nil :type (or function null) :documentation "Config factory: (app result) → provider or nil.
+Called between pass-1 and pass-2, after :setup.  The returned provider
+is a function (command-path param-name) → value, used during finalize.")
+  (after-execute nil :type (or function list null) :documentation "Hook(s) called after handler execution.
+Each function receives (ctx exit-code duration-secs).  A single function
+is normalized to a one-element list at creation time.  Errors in hooks
+are caught and reported via `message', never propagated."))
 
 (defun clime-make-app (&rest args)
   "Create a `clime-app' with validation.
@@ -807,6 +814,10 @@ ARGS is a plist of slot values."
                                 (clime-conform-append
                                  (plist-get args :conform)
                                  exclusive-fn)))))))
+  ;; Normalize :after-execute — bare function → one-element list
+  (let ((ae (plist-get args :after-execute)))
+    (when (and ae (functionp ae))
+      (setq args (plist-put args :after-execute (list ae)))))
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
     (clime--resolve-aliases app)
@@ -822,7 +833,8 @@ ARGS is a plist of slot values."
   (app nil :documentation "The root `clime-app'.")
   (command nil :documentation "The resolved `clime-command'.")
   (path nil :type list :documentation "List of node names from root to command.")
-  (params nil :type list :documentation "Plist of parsed param values."))
+  (params nil :type list :documentation "Plist of parsed param values.")
+  (start-time nil :type (or float null) :documentation "Time handler execution started (`float-time')."))
 
 (defun clime-ctx-get (ctx name)
   "Get the value of param NAME from context CTX."

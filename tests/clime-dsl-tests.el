@@ -1887,6 +1887,47 @@
                    (clime-run app '("test-cmd2" "hello")))))
     (should (equal output "hello\n"))))
 
+;;; ─── clime-nil-handler ─────────────────────────────────────────────────
+
+(defun clime-test--side-effect-fn (ctx)
+  "Test function that returns a non-nil value."
+  (ignore ctx)
+  "should-be-discarded")
+
+(ert-deftest clime-test-dsl/nil-handler-sharp-quote ()
+  "clime-nil-handler with #'fn wraps so return value is nil."
+  (let ((h (clime-nil-handler #'clime-test--side-effect-fn)))
+    (should (functionp h))
+    (should-not (funcall h 'fake-ctx))))
+
+(ert-deftest clime-test-dsl/nil-handler-quote ()
+  "clime-nil-handler with 'fn wraps so return value is nil."
+  (let ((h (clime-nil-handler 'clime-test--side-effect-fn)))
+    (should (functionp h))
+    (should-not (funcall h 'fake-ctx))))
+
+(ert-deftest clime-test-dsl/nil-handler-body ()
+  "clime-nil-handler with arglist+body appends nil."
+  (let ((h (clime-nil-handler (ctx) (ignore ctx) "non-nil")))
+    (should (functionp h))
+    (should-not (funcall h 'fake-ctx))))
+
+(ert-deftest clime-test-dsl/nil-handler-in-command ()
+  "clime-nil-handler in clime-command produces no output."
+  (let* ((cmd (clime-command test-nil
+                :help "Test"
+                (clime-nil-handler #'clime-test--side-effect-fn)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list cmd)))
+         (output (with-output-to-string
+                   (clime-run app '("test-nil")))))
+    (should (equal output ""))))
+
+(ert-deftest clime-test-dsl/nil-handler-does-not-affect-clime-handler ()
+  "Existing clime-handler forms still return their value."
+  (let ((h (clime-handler (ctx) (ignore ctx) "result")))
+    (should (equal (funcall h 'fake-ctx) "result"))))
+
 ;;; ─── :optional keyword ─────────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/optional-arg-bare ()

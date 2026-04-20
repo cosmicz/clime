@@ -37,6 +37,12 @@
 ;;  22.  Mutual exclusion        --format-table/--format-csv via clime-mutex
 ;;  23.  Deprecated option       --output with migration hint
 ;;  24.  clime-param accessor    ternary access for negatable flags
+;;  25.  Config file provider    :config with clime-config-json
+;;  26.  Env prefix + auto-env  :env-prefix "PKM" with :env t on --registry
+;;  27.  Separator option       --tag with :separator "," (CSV input)
+;;  28.  Epilog text            :epilog on app for footer in help
+;;  29.  :optional keyword      search [query] uses :optional instead of :required nil
+;;  30.  Arg template + :from   clime-defarg for shared <name> arg
 ;;
 ;; Run it (this file is directly executable via the shebang header):
 ;;   chmod +x examples/pkm.el
@@ -46,6 +52,7 @@
 ;;   ./examples/pkm.el config
 ;;   ./examples/pkm.el repo add myrepo https://example.com
 ;;   ./examples/pkm.el add-repo myrepo https://example.com
+;;   ./examples/pkm.el --config my.json install foo
 ;;
 ;; Or without the shebang:
 ;;   emacs --batch -Q -L /path/to/clime -l examples/pkm.el -- --help
@@ -65,17 +72,38 @@
   :bool
   :help "Force the operation (skip safety checks)")
 
+;; [30] Arg template — shared across repo add, repo remove, project
+(clime-defarg name-arg
+  :help "Name identifier")
+
 ;; ─── App Definition ──────────────────────────────────────────────────────
 
 (clime-app pkm
   :version "0.5.0"
   :help "A package manager for Emacs Lisp projects."
+  ;; [26] Env prefix — enables :env t on options for auto-derived var names
+  :env-prefix "PKM"
+  ;; [28] Epilog — free-form text appended after auto-generated help
+  :epilog "Config file: ~/.pkm.json (override with --config).
+Environment: PKM_REGISTRY, PKM_RUNNER (see individual options)."
   :examples '(("pkm install foo --tag dev" . "Install with tags")
               ("pkm -vv search" . "Verbose search")
               ("pkm repo add myrepo https://example.com" . "Add a repo")
               "pkm add-repo myrepo https://example.com")
 
+  ;; [25] Config file provider — loads defaults from ~/.pkm.json
+  ;; Uses the --config option if given, otherwise the default path.
+  ;; JSON example: {"registry": "melpa", "install": {"timeout": "60"}}
+  :config (lambda (_app result)
+            (clime-config-json
+             (clime-parse-result-param result 'config-file "~/.pkm.json")))
+
   ;; ── Root Options ─────────────────────────────────────────────────────
+  ;; [25] Config file option — parsed in pass 1, used by :config factory
+  (clime-opt config-file ("--config" "-C")
+             :type 'file
+             :help "Path to config file (default: ~/.pkm.json)")
+
   ;; [1] Count flag — stackable verbosity (-v, -vv, -vvv)
   (clime-opt verbose ("-v" "--verbose") :count
              :help "Increase output verbosity")
@@ -111,10 +139,12 @@
     (clime-opt dry-run ("--dry-run" "-n") :bool
                :help "Show what would be installed without doing it")
 
-    (clime-opt tag ("--tag" "-t") :multiple
+    ;; [27] Separator — accept CSV: --tag dev,ci or repeated: --tag dev --tag ci
+    (clime-opt tag ("--tag" "-t") :multiple :separator ","
                :help "Add tag to installed package")
 
-    (clime-opt registry ("--registry" "-r")
+    ;; [26] :env t auto-derives PKM_REGISTRY from :env-prefix
+    (clime-opt registry ("--registry" "-r") :env t
       :help "Registry to install from"
       :default "default")
 
@@ -146,7 +176,8 @@
     :aliases (s)
     :category "Discovery"
 
-    (clime-arg query :required nil
+    ;; [29] :optional — inverse of :required, same effect as :required nil
+    (clime-arg query :optional
                :help "Search query (omit to list all)")
 
     ;; [25] Parameterized integer — bounded limit
@@ -254,7 +285,8 @@
 
     (clime-command add
       :help "Add a repository"
-      (clime-arg name :help "Repository name")
+      ;; [30] :from arg template — reuses name-arg definition
+      (clime-arg name :from name-arg :help "Repository name")
       (clime-arg url :help "Repository URL")
 
       ;; [29] Zip group — paired options must have equal cardinality
@@ -285,7 +317,7 @@
     (clime-command remove
       :help "Remove a repository"
       :aliases (rm)
-      (clime-arg name :help "Repository name")
+      (clime-arg name :from name-arg :help "Repository name")
       (clime-opt force ("--force" "-f") :from force-flag  ; [19] reused
                  :help "Remove even if packages depend on it")
       (clime-handler (ctx)

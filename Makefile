@@ -1,11 +1,17 @@
 EMACS ?= emacs
 
-BATCH = $(EMACS) --batch -Q -L . -L ./tests
+BATCH = $(EMACS) --batch -Q -L . -L ./lib/web-server -L ./tests
 CLIME_MAKE = $(BATCH) -l clime-make-main.el --
 
-.PHONY: all compile lint test test-all tests dist bins readme clean clean-elc help
+.PHONY: all compile lint test test-all tests dist bins readme clean clean-elc help submodules
 
 all: compile
+
+# ── Submodules ────────────────────────────────────────────────────
+submodules: lib/web-server/web-server.el
+
+lib/web-server/web-server.el:
+	@git submodule update --init --recursive
 
 SRCS := $(filter-out clime-make-main.el,$(wildcard *.el))
 
@@ -39,7 +45,7 @@ SELECTOR ?= $(SELECT)
 VERBOSE ?=
 
 tests: test
-test: clean-elc
+test: clean-elc submodules
 	@CLIME_TEST_VERBOSE=$(VERBOSE) $(BATCH) -l ./tests/clime-tests-runner.el \
 		--eval '(clime-run-tests-batch "$(SELECTOR)")' \
 		< /dev/null
@@ -48,8 +54,8 @@ test-all: bin/clime-make bin/greeter bin/pkm test
 
 DIST_DIR ?= dist
 DIST_SRCS = clime-settings.el clime-core.el clime-param-type.el clime-parse.el \
-	clime-dsl.el clime-help.el clime-output.el clime-run.el clime.el \
-	clime-make.el
+	clime-config.el clime-dsl.el clime-help.el clime-output.el clime-run.el \
+	clime-invoke.el clime-serve.el clime.el clime-make.el
 
 dist:
 	@$(CLIME_MAKE) bundle -o $(DIST_DIR)/clime.el \
@@ -91,13 +97,6 @@ bin/pkm: examples/pkm.el bin/clime-make | $(BIN_DIR)
 
 bins: bin/clime bin/clime-make bin/cloq bin/greeter bin/pkm
 
-readme:
-	@echo "Exporting README.org → README.md..."
-	@$(EMACS) --batch -Q README.org \
-		--eval '(require (quote ox-md))' \
-		--eval '(org-md-export-to-markdown)'
-	@echo "Done."
-
 clean-elc:
 	@rm -f *.elc tests/*.elc
 
@@ -122,7 +121,7 @@ help:
 	@echo "  bin/greeter    - Build greeter example (emacsclient wrapper)"
 	@echo "  bin/cloq       - Build cloq example"
 	@echo "  bin/pkm        - Build pkm example"
-	@echo "  readme    - Export README.org to README.md"
+	@echo "  submodules - Initialize git submodules (lib/web-server)"
 	@echo "  clean     - Remove .elc files and build artifacts"
 	@echo "  clean-elc - Remove only .elc files"
 	@echo "  help      - Show this help message"

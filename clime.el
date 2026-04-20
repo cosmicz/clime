@@ -6,7 +6,7 @@
 ;; URL: https://github.com/cosmicz/clime
 ;; Keywords: tools, processes
 ;; Package-Requires: ((emacs "29.1"))
-;; Version: 0.6.1
+;; Version: 0.7.0
 
 ;; This file is not part of GNU Emacs.
 
@@ -33,21 +33,22 @@
 (require 'clime-core)
 (require 'clime-param-type)
 (require 'clime-parse)
+(require 'clime-config)
 (require 'clime-dsl)
 (require 'clime-help)
 (require 'clime-output)
 (require 'clime-run)
 
-(defconst clime-version "0.6.1"
+(defconst clime-version "0.7.0"
   "The clime package version string.")
 
 (defconst clime--modules
-  '(clime-settings clime-core clime-param-type clime-parse clime-dsl
-                   clime-help clime-output clime-run)
+  '(clime-settings clime-core clime-param-type clime-parse clime-config
+                   clime-dsl clime-help clime-output clime-run)
   "Clime modules in dependency order.")
 
 (defconst clime--optional-modules
-  '(clime-invoke clime-make)
+  '(clime-invoke clime-make clime-serve)
   "Optional clime modules, reloaded only if already loaded.")
 
 ;;;###autoload

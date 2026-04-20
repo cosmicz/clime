@@ -1690,5 +1690,39 @@
          (values (clime-values-set '() 'path "/tmp" 'user)))
     (should (stringp (clime--validate-param-value opt values)))))
 
+;;; ─── clime-parse-result-param ───────────────────────────────────────────
+
+(ert-deftest clime-test-parse/result-param-present ()
+  "clime-parse-result-param returns value when param is present."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port") :type 'integer))
+         (cmd (clime-make-command :name "serve" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "serve" cmd))))
+         (result (clime-parse app '("serve" "--port" "9090"))))
+    (should (= (clime-parse-result-param result 'port 3000) 9090))))
+
+(ert-deftest clime-test-parse/result-param-absent-returns-default ()
+  "clime-parse-result-param returns default when param is absent."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port") :type 'integer))
+         (cmd (clime-make-command :name "serve" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "serve" cmd))))
+         (result (clime-parse app '("serve"))))
+    (should (= (clime-parse-result-param result 'port 3000) 3000))))
+
+(ert-deftest clime-test-parse/result-param-absent-no-default ()
+  "clime-parse-result-param returns nil when absent and no default given."
+  (let* ((opt (clime-make-option :name 'port :flags '("--port") :type 'integer))
+         (cmd (clime-make-command :name "serve" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1"
+                               :children (list (cons "serve" cmd))))
+         (result (clime-parse app '("serve"))))
+    (should-not (clime-parse-result-param result 'nonexistent))
+    (should (eq (clime-parse-result-param result 'nonexistent 'fallback)
+                'fallback))))
+
 (provide 'clime-parse-tests)
 ;;; clime-parse-tests.el ends here

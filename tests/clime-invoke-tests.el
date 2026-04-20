@@ -2940,6 +2940,72 @@
         (should-not (funcall handler-called-p))
         (should-not (plist-get result :exit))))))
 
+;; AC 4c: :immediate with all pre-filled renders menu before y-or-n-p
+(ert-deftest clime-test-invoke/immediate-renders-menu-before-confirmation ()
+  "`:immediate t' with all params pre-filled renders menu buffer before y-or-n-p."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (let ((menu-visible nil))
+      (cl-letf (((symbol-function 'y-or-n-p)
+                 (lambda (_prompt)
+                   ;; At the moment y-or-n-p is called, the menu buffer
+                   ;; should exist and have content
+                   (let ((buf (get-buffer " *clime-menu*")))
+                     (setq menu-visible
+                           (and buf
+                                (buffer-live-p buf)
+                                (> (buffer-size buf) 0))))
+                   t))
+                ((symbol-function 'display-buffer)
+                 #'ignore)
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore)
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (&rest _) (list nil nil))))
+        (clime-invoke app '("run")
+                      '(output "/tmp/out" name "foo")
+                      :immediate t)
+        (should menu-visible)))))
+
+;; AC 4d: :immediate menu buffer cleaned up after y-or-n-p declined
+(ert-deftest clime-test-invoke/immediate-menu-cleaned-up-on-decline ()
+  "`:immediate t' cleans up menu buffer after y-or-n-p is declined."
+  (cl-destructuring-bind (app _) (clime-test--invoke-immediate-app)
+    (cl-letf (((symbol-function 'y-or-n-p)
+               (lambda (_prompt) nil))
+              ((symbol-function 'display-buffer)
+               #'ignore)
+              ((symbol-function 'clime-invoke--display-output)
+               #'ignore)
+              ((symbol-function 'clime-invoke--loop)
+               (lambda (&rest _) (list nil nil))))
+      (clime-invoke app '("run")
+                    '(output "/tmp/out" name "foo")
+                    :immediate t)
+      ;; Menu buffer should be killed after immediate-mode cleanup
+      (should-not (get-buffer " *clime-menu*")))))
+
+;; AC 4e: :immediate 'no-confirm skips y-or-n-p and menu render
+(ert-deftest clime-test-invoke/immediate-no-confirm-skips-confirmation ()
+  "`:immediate 'no-confirm' runs handler without y-or-n-p or menu."
+  (cl-destructuring-bind (app handler-called-p) (clime-test--invoke-immediate-app)
+    (let ((yn-called nil)
+          (menu-created nil))
+      (cl-letf (((symbol-function 'y-or-n-p)
+                 (lambda (_prompt) (setq yn-called t) t))
+                ((symbol-function 'display-buffer)
+                 (lambda (&rest _) (setq menu-created t) nil))
+                ((symbol-function 'clime-invoke--display-output)
+                 #'ignore)
+                ((symbol-function 'clime-invoke--loop)
+                 (lambda (&rest _) (list nil nil))))
+        (let ((result (clime-invoke app '("run")
+                                    '(output "/tmp/out" name "foo")
+                                    :immediate 'no-confirm)))
+          (should-not yn-called)
+          (should-not menu-created)
+          (should (funcall handler-called-p))
+          (should (= 0 (plist-get result :exit))))))))
+
 ;; AC 5: :immediate falls into menu when required params remain unfilled
 (ert-deftest clime-test-invoke/immediate-falls-to-menu-on-missing ()
   "`:immediate t' enters menu loop when required params still missing after ask."

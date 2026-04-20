@@ -1,6 +1,106 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-04-20
+
+### Added
+
+- **`clime-serve` module**: HTTP surface for clime apps.  The app tree IS
+  the router — URL path segments resolve commands via
+  `clime-group-find-child`, and non-matching segments are consumed as
+  positional args (supporting path params like `/agent/:id/start`).
+  Mirrors `clime-invoke`'s dispatch shape: setup/config runs once at
+  startup (two-pass), the tree is deep-copied per request, values are
+  seeded from query string (GET) or JSON body (POST) directly into the
+  values map.  Exit code → HTTP status mapping (0→200, 2→400, 1→500).
+  A `/_routes` endpoint introspects the command tree.  `web-server` is
+  vendored under `lib/`; no ELPA dependency.
+
+- **`clime-make serve`**: new subcommand that loads a clime app file
+  and exposes it over HTTP via `clime-serve`.  Accepts `--port` /
+  `--host` / `--app` / `-L`.  When the file has a clime shebang, load
+  paths (`-L $D`, `-L $D/rel`, absolute) and `CLIME_MAIN_APP` are
+  parsed from the shebang automatically; `--no-auto-paths` disables this.
+
+- **Path suffix format selection**: URL paths ending with `.json`,
+  `.html`, etc. activate the matching `clime-output-format` when
+  registered on the app.  The suffix is stripped before tree walking,
+  and `clime-out--active-format` is bound for the handler.  Dispatch
+  returns `:content-type` derived from the active format.  `_api`
+  endpoints auto-default to JSON when the app declares a JSON format.
+  Apps without output formats are unaffected — suffixes are literal.
+
+- **Introspection API endpoints**: `/_api/meta`, `/_api/commands`, and
+  `/_api/commands/PATH` provide structured introspection of the app tree.
+  Endpoints are injected as hidden commands at serve startup — no
+  special-case dispatch.  Output uses `clime-out` so the active output
+  format drives encoding.  `/_routes` plain-text listing preserved.
+  Rest-arg support in `clime-serve--walk-path` enables variable-depth
+  paths like `/_api/commands/db/migrate`.
+
+- **After-execute hooks**: new `:after-execute` slot on `clime-app`
+  accepts a function or list of functions called after every handler
+  execution with `(ctx exit-code duration-secs)`.  Fires across all
+  surfaces (CLI, HTTP, interactive) via `clime-run--execute`.  Errors
+  in hooks are caught and reported via `message`, never propagated.
+  `clime-context` now includes a `start-time` slot (float-time) set
+  before handler invocation, available to handlers for timeout/progress
+  logic.
+
+- **Config file providers**: new `:config` slot on `clime-app` accepts a
+  factory function `(app result) → provider` called between pass-1 and
+  pass-2 (after `:setup`).  The returned provider is a lookup function
+  `(command-path param-name) → value` used to supply defaults from
+  external config files.  Source precedence:
+  `user > app > env > config > default > conform`.
+
+- **Built-in providers**: `clime-config-json` and `clime-config-sexp`
+  create providers from JSON and plist files respectively.  Both support
+  hierarchical inheritance — a param defined at the root level is
+  inherited by all commands, and commands can override it with
+  command-specific values.
+
+- **`clime-config.el` module**: new module providing the built-in
+  provider creators and shared utilities.
+
+- **`clime-nil-handler`**: new macro that wraps a handler so its return
+  value is discarded (returns nil), preventing the runner from encoding
+  it as output.  Accepts function references or inline bodies, like
+  `clime-handler`.
+
+- **`clime-parse-result-param`**: accessor for extracting a param from a
+  parse result with an optional default.  Mirrors `clime-param` (for
+  contexts), distinguishing nil-valued from absent.
+
+- **`:immediate 'no-confirm`**: `clime-invoke` accepts `'no-confirm` as
+  the `:immediate` value to skip `y-or-n-p` confirmation and run the
+  handler directly when all params are pre-filled.
+
+### Fixed
+
+- **`clime-invoke` immediate confirmation**: `:immediate t` with all
+  params pre-filled now renders the menu buffer before `y-or-n-p`, so
+  the user sees the command state they're confirming.  The prompt also
+  shows the full command path (e.g. "Run myapp install?").
+
+### Internal
+
+- **`clime-run-from-values`**: shared entry point for running a command
+  handler from a pre-built values alist.  Consolidates the
+  finalize → context → execute pipeline used by CLI, invoke, and serve
+  surfaces.  Returns `(exit-code . output)`.
+
+- **`clime--coerce-string-values`**: type coercion for string values
+  from external sources (HTTP query params, JSON bodies).  Called in
+  `clime-run-from-values` before finalize.  Uses type-only coercion
+  (`clime--coerce-value`) to avoid double-applying `:coerce` transforms.
+
+- **`clime-invoke` section renderers**: `clime-invoke--render-to-string`
+  split into four focused renderers (`--render-options`, `--render-args`,
+  `--render-children`, `--render-actions`) plus a compact orchestrator.
+
+- **`clime-config.el` added to dist bundle**: the module was missing
+  from `DIST_SRCS`, causing `dist/clime.el` to fail on `(require
+  'clime-config)`.
 
 ## 0.6.1 — 2026-04-07
 

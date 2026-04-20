@@ -1,0 +1,15 @@
+{
+  "registry": "melpa",
+  "color": true,
+  "install": {
+    "registry": "local",
+    "timeout": "60"
+  },
+  "search": {
+    "limit": "50",
+    "scope": "global"
+  },
+  "run": {
+    "concurrency": "cpus"
+  }
+}

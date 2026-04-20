@@ -465,6 +465,122 @@ could signal with non-standard data.  The guard must handle this."
       (setq code (clime-run--execute (lambda (_) (error "boom")) ctx)))
     (should (= 1 code))))
 
+;;; ─── after-execute hook ─────────────────────────────────────────────────
+
+(ert-deftest clime-test-run/after-execute-called ()
+  "After-execute hook is called with ctx, exit-code, duration."
+  (let ((log nil))
+    (let ((hook (lambda (ctx exit-code duration)
+                  (push (list ctx exit-code duration) log))))
+      (eval `(clime-app clime-test--after-exec-app
+               :version "1"
+               :after-execute ,hook
+               (clime-command go
+                 :help "Go"
+                 (clime-handler (ctx) (princ "done") nil)))
+            t))
+    (with-output-to-string (clime-run clime-test--after-exec-app '("go")))
+    (should (= 1 (length log)))
+    (let ((entry (car log)))
+      ;; ctx
+      (should (clime-context-p (nth 0 entry)))
+      (should (equal (clime-context-path (nth 0 entry)) '("clime-test--after-exec-app" "go")))
+      ;; start-time set on ctx
+      (should (floatp (clime-context-start-time (nth 0 entry))))
+      ;; exit-code
+      (should (= 0 (nth 1 entry)))
+      ;; duration is a positive float
+      (should (floatp (nth 2 entry)))
+      (should (>= (nth 2 entry) 0.0)))))
+
+(ert-deftest clime-test-run/after-execute-receives-error-exit-code ()
+  "After-execute hook receives exit code 1 on handler error."
+  (let ((log nil))
+    (let ((hook (lambda (ctx exit-code duration)
+                  (push (list exit-code duration) log))))
+      (eval `(clime-app clime-test--after-exec-err-app
+               :version "1"
+               :after-execute ,hook
+               (clime-command boom
+                 :help "Boom"
+                 (clime-handler (ctx) (error "kaboom"))))
+            t))
+    (let ((debug-on-error nil))
+      (with-output-to-string
+        (clime-run clime-test--after-exec-err-app '("boom"))))
+    (should (= 1 (length log)))
+    (should (= 1 (car (car log))))))
+
+(ert-deftest clime-test-run/after-execute-multiple-hooks ()
+  "Multiple after-execute hooks all fire."
+  (let ((log1 nil) (log2 nil))
+    (eval '(clime-app clime-test--after-exec-multi-app
+             :version "1"
+             (clime-command go
+               :help "Go"
+               (clime-handler (ctx) nil)))
+          t)
+    (setf (clime-app-after-execute clime-test--after-exec-multi-app)
+          (list (lambda (ctx exit-code duration)
+                  (push 'hook1 log1))
+                (lambda (ctx exit-code duration)
+                  (push 'hook2 log2))))
+    (with-output-to-string
+      (clime-run clime-test--after-exec-multi-app '("go")))
+    (should (equal log1 '(hook1)))
+    (should (equal log2 '(hook2)))))
+
+(ert-deftest clime-test-run/after-execute-error-does-not-propagate ()
+  "A broken after-execute hook does not crash the app or alter exit code."
+  (let ((log nil))
+    (eval '(clime-app clime-test--after-exec-broken-app
+             :version "1"
+             (clime-command go
+               :help "Go"
+               (clime-handler (ctx) (princ "ok") nil)))
+          t)
+    (setf (clime-app-after-execute clime-test--after-exec-broken-app)
+          (list (lambda (ctx exit-code duration)
+                  (error "logger broke"))
+                (lambda (ctx exit-code duration)
+                  (push 'second-ran log))))
+    (let ((code nil))
+      (with-output-to-string
+        (setq code (clime-run clime-test--after-exec-broken-app '("go"))))
+      ;; Exit code unchanged despite broken hook
+      (should (= 0 code))
+      ;; Second hook still ran
+      (should (equal log '(second-ran))))))
+
+(ert-deftest clime-test-run/after-execute-not-called-for-help ()
+  "After-execute hook does NOT fire for --help (no handler execution)."
+  (let ((log nil))
+    (let ((hook (lambda (ctx exit-code duration)
+                  (push t log))))
+      (eval `(clime-app clime-test--after-exec-help-app
+               :version "1"
+               :after-execute ,hook
+               (clime-command go
+                 :help "Go"
+                 (clime-handler (ctx) nil)))
+            t))
+    (with-output-to-string
+      (clime-run clime-test--after-exec-help-app '("--help")))
+    (should (null log))))
+
+(ert-deftest clime-test-run/after-execute-nil-is-noop ()
+  "App with no :after-execute works normally."
+  (let ((code nil))
+    (eval '(clime-app clime-test--after-exec-nil-app
+             :version "1"
+             (clime-command go
+               :help "Go"
+               (clime-handler (ctx) (princ "fine") nil)))
+          t)
+    (with-output-to-string
+      (setq code (clime-run clime-test--after-exec-nil-app '("go"))))
+    (should (= 0 code))))
+
 ;;; ─── clime-run-client ───────────────────────────────────────────────────
 
 (defvar clime-test--client-app nil
@@ -659,6 +775,58 @@ could signal with non-standard data.  The guard must handle this."
      (with-temp-buffer
        (insert-file-contents target)
        (should (string-prefix-p "#!/usr/bin/env bash" (buffer-string)))))))
+
+;;; ─── clime-run-from-values ──────────────────────────────────────────────
+
+(ert-deftest clime-test-run/from-values-success ()
+  "Handler returning 0 produces (0 . output)."
+  (let* ((app (clime-app myapp
+               (clime-command greet
+                 :handler (lambda (ctx)
+                            (princ (format "hi %s" (clime-ctx-get ctx :name))))
+                 (clime-option name ("-n") :help "Name"))))
+         (cmd (cdr (assoc "greet" (clime-group-children app))))
+         (values (list (list :name :value "world" :source :explicit))))
+    (let ((result (clime-run-from-values app cmd '("myapp" "greet") values)))
+      (should (equal (car result) 0))
+      (should (string-match-p "hi world" (cdr result))))))
+
+(ert-deftest clime-test-run/from-values-usage-error ()
+  "Usage error (missing required) returns exit code 2."
+  (let* ((app (clime-app myapp
+               (clime-command greet
+                 :handler (lambda (_ctx) (princ "ok"))
+                 (clime-option name ("-n") :help "Name" :required t))))
+         (cmd (cdr (assoc "greet" (clime-group-children app)))))
+    (let ((result (clime-run-from-values app cmd '("myapp" "greet") nil)))
+      (should (equal (car result) 2)))))
+
+(ert-deftest clime-test-run/from-values-handler-error ()
+  "Runtime error in handler returns exit code 1."
+  (let* ((app (clime-app myapp
+               (clime-command boom
+                 :handler (lambda (_ctx) (error "kaboom")))))
+         (cmd (cdr (assoc "boom" (clime-group-children app)))))
+    (let ((result (clime-run-from-values app cmd '("myapp" "boom") nil)))
+      (should (equal (car result) 1)))))
+
+(ert-deftest clime-test-run/from-values-command-slot ()
+  "The :command slot is set for commands, nil for groups."
+  (let* ((ctx-command nil)
+         (app (clime-app myapp
+               (clime-command greet
+                 :handler (lambda (ctx)
+                            (setq ctx-command (clime-context-command ctx))))))
+         (cmd (cdr (assoc "greet" (clime-group-children app)))))
+    (clime-run-from-values app cmd '("myapp" "greet") nil)
+    (should (clime-command-p ctx-command))
+    ;; Now test with a group that has a handler
+    (setq ctx-command 'not-set)
+    (let* ((app2 (clime-app myapp2
+                  :handler (lambda (ctx)
+                             (setq ctx-command (clime-context-command ctx))))))
+      (clime-run-from-values app2 app2 '("myapp2") nil)
+      (should (null ctx-command)))))
 
 (provide 'clime-run-tests)
 ;;; clime-run-tests.el ends here
