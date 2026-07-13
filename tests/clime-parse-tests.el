@@ -243,6 +243,237 @@
     (should (equal (plist-get (clime-parse-result-params result) 'tag)
                    '("a" "b")))))
 
+;;; ─── Space-Separated Greedy Lists ───────────────────────────────────────
+
+(defun clime-test--greedy-app ()
+  "Leaf `create' command: :multiple --tag, boolean --force, no positional args."
+  (let* ((tag-opt (clime-make-option :name 'tag :flags '("--tag" "-t")
+                                     :multiple t))
+         (force-opt (clime-make-option :name 'force :flags '("--force")
+                                       :nargs 0))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list tag-opt force-opt))))
+    (clime-make-app :name "myapp" :version "1"
+                    :children (list (cons "create" cmd)))))
+
+(defun clime-test--greedy-root-app ()
+  "Single-command app: root handler, :multiple --file, no subcommands, no args."
+  (let ((file-opt (clime-make-option :name 'file :flags '("--file" "-f")
+                                     :multiple t)))
+    (clime-make-app :name "myapp" :version "1"
+                    :handler #'ignore
+                    :options (list file-opt))))
+
+(defun clime-test--greedy-with-arg-app ()
+  "Leaf `create' with :multiple --tag AND a required positional <id>."
+  (let* ((tag-opt (clime-make-option :name 'tag :flags '("--tag")
+                                     :multiple t))
+         (arg (clime-make-arg :name 'id))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list tag-opt) :args (list arg))))
+    (clime-make-app :name "myapp" :version "1"
+                    :children (list (cons "create" cmd)))))
+
+(defun clime-test--greedy-with-rest-app ()
+  "Leaf `create' with :multiple --tag AND a :rest positional <ids>."
+  (let* ((tag-opt (clime-make-option :name 'tag :flags '("--tag")
+                                     :multiple t))
+         (rest (clime-make-arg :name 'ids :nargs :rest :required nil))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list tag-opt) :args (list rest))))
+    (clime-make-app :name "myapp" :version "1"
+                    :children (list (cons "create" cmd)))))
+
+(defun clime-test--greedy-group-app ()
+  "Group with a :multiple --tag option and a `list' subcommand."
+  (let* ((tag-opt (clime-make-option :name 'tag :flags '("--tag")
+                                     :multiple t))
+         (sub (clime-make-command :name "list" :handler #'ignore))
+         (grp (clime-make-group :name "config"
+                                :options (list tag-opt)
+                                :children (list (cons "list" sub)))))
+    (clime-make-app :name "myapp" :version "1"
+                    :children (list (cons "config" grp)))))
+
+;; Positive: greedy fires where unambiguous
+
+(ert-deftest clime-test-parse/greedy-basic ()
+  "Leaf cmd with no args: --tag consumes consecutive space-separated values."
+  (let* ((app (clime-test--greedy-app))
+         (result (clime-parse app '("create" "--tag" "a" "b" "c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+(ert-deftest clime-test-parse/greedy-short-flag ()
+  "Greedy consumption works with the short flag form."
+  (let* ((app (clime-test--greedy-app))
+         (result (clime-parse app '("create" "-t" "a" "b" "c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+(ert-deftest clime-test-parse/greedy-root-command ()
+  "Single-command app (no subcommands, no args) consumes a space-separated list."
+  (let* ((app (clime-test--greedy-root-app))
+         (result (clime-parse app '("--file" "x" "y" "z"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'file)
+                   '("x" "y" "z")))))
+
+(ert-deftest clime-test-parse/greedy-stops-at-option ()
+  "Greedy consumption stops at the next option-like token."
+  (let* ((app (clime-test--greedy-app))
+         (result (clime-parse app '("create" "--tag" "a" "b" "--force"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b")))
+    (should (eq (plist-get (clime-parse-result-params result) 'force) t))))
+
+(ert-deftest clime-test-parse/greedy-stops-at-double-dash ()
+  "Greedy consumption stops at -- and option parsing is disabled afterward."
+  (let* ((app (clime-test--greedy-app))
+         (result (clime-parse app '("create" "--tag" "a" "b" "--"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b")))))
+
+(ert-deftest clime-test-parse/greedy-with-separator ()
+  "Greedy consumption splits each consumed token on :separator."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :separator "," :multiple t))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "a,b" "c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+(ert-deftest clime-test-parse/greedy-with-coerce ()
+  "Greedy consumption applies :coerce to each consumed element."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :multiple t :coerce #'upcase))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd))))
+         (result (clime-parse app '("create" "--tag" "dev" "ci"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("DEV" "CI")))))
+
+(ert-deftest clime-test-parse/greedy-with-choices-rejects-invalid ()
+  "Greedy consumption validates each element against :choices."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                 :multiple t :choices '("a" "b")))
+         (cmd (clime-make-command :name "create" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "create" cmd)))))
+    (should-error (clime-parse app '("create" "--tag" "a" "bogus"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/greedy-mixed-with-repeated-flag ()
+  "Greedy values combine with later repeated flags into one list."
+  (let* ((app (clime-test--greedy-app))
+         (result (clime-parse app '("create" "--tag" "a" "b" "--tag" "c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+;; Negative: greedy suppressed where ambiguous (current behavior preserved)
+
+(ert-deftest clime-test-parse/greedy-suppressed-by-positional ()
+  "A positional arg makes consumption ambiguous: only one value is taken."
+  (let* ((app (clime-test--greedy-with-arg-app))
+         (result (clime-parse app '("create" "--tag" "a" "b"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag) '("a")))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "b"))))
+
+(ert-deftest clime-test-parse/greedy-suppressed-by-rest-arg ()
+  "A :rest arg makes consumption ambiguous: option takes one, rest takes the rest."
+  (let* ((app (clime-test--greedy-with-rest-app))
+         (result (clime-parse app '("create" "--tag" "a" "b" "c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag) '("a")))
+    (should (equal (plist-get (clime-parse-result-params result) 'ids)
+                   '("b" "c")))))
+
+(ert-deftest clime-test-parse/greedy-suppressed-by-subcommands ()
+  "A group with subcommands suppresses greedy: trailing token descends as subcommand."
+  (let* ((app (clime-test--greedy-group-app))
+         (result (clime-parse app '("config" "--tag" "a" "list"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag) '("a")))
+    (should (clime-parse-result-command result))
+    (should (equal (clime-node-name (clime-parse-result-command result)) "list"))))
+
+(ert-deftest clime-test-parse/greedy-not-for-non-multiple ()
+  "A non-:multiple value option consumes exactly one token (no greedy)."
+  (let* ((app (clime-test--simple-app))
+         (result (clime-parse app '("show" "--format" "a" "b"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'format) "a"))
+    (should (equal (plist-get (clime-parse-result-params result) 'id) "b"))))
+
+(ert-deftest clime-test-parse/greedy-not-for-equals-form ()
+  "The --flag=value form yields a single value and does not greedy-consume.
+The trailing bare token is NOT absorbed, so it is an unexpected positional
+on this no-arg command."
+  (let* ((app (clime-test--greedy-app)))
+    (should-error (clime-parse app '("create" "--tag=a" "b"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/greedy-requires-at-least-one-value ()
+  "A greedy-eligible option with no following value still errors."
+  (let* ((app (clime-test--greedy-app)))
+    (should-error (clime-parse app '("create" "--tag"))
+                  :type 'clime-usage-error)))
+
+;; Edge cases: scope, typed elements, dash-prefixed boundaries
+
+(defun clime-test--greedy-global-opt-app ()
+  "App with a root-level :multiple --tag and a no-arg `create' subcommand."
+  (let* ((tag-opt (clime-make-option :name 'tag :flags '("--tag")
+                                     :multiple t))
+         (cmd (clime-make-command :name "create" :handler #'ignore)))
+    (clime-make-app :name "myapp" :version "1"
+                    :options (list tag-opt)
+                    :children (list (cons "create" cmd)))))
+
+(ert-deftest clime-test-parse/greedy-global-option-at-leaf ()
+  "A root-level :multiple option consumed at a no-arg leaf is greedy.
+The unambiguity gate keys off the resolving node (the leaf), not where
+the option is declared."
+  (let* ((app (clime-test--greedy-global-opt-app))
+         (result (clime-parse app '("create" "--tag" "a" "b" "c"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'tag)
+                   '("a" "b" "c")))))
+
+(ert-deftest clime-test-parse/greedy-suppressed-at-branch-level ()
+  "The same global option is NOT greedy while the branch still expects a
+subcommand: only one value is taken, and a second bare token is
+unexpected (would otherwise have to be a subcommand)."
+  (let* ((app (clime-test--greedy-global-opt-app)))
+    (should-error (clime-parse app '("--tag" "a" "b" "create"))
+                  :type 'clime-usage-error)))
+
+(ert-deftest clime-test-parse/greedy-integer-type ()
+  "Greedy consumption coerces each element to the declared :type."
+  (let* ((opt (clime-make-option :name 'nums :flags '("--nums")
+                                 :type 'integer :multiple t))
+         (cmd (clime-make-command :name "calc" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "calc" cmd))))
+         (result (clime-parse app '("calc" "--nums" "1" "2" "3"))))
+    (should (equal (plist-get (clime-parse-result-params result) 'nums)
+                   '(1 2 3)))))
+
+(ert-deftest clime-test-parse/greedy-stops-at-dash-prefixed-token ()
+  "Greedy treats a leading-dash token (e.g. -2) as an option boundary.
+Like all space-separated parsers, negative-number-like values past the
+first are read as options, not list values; here -2 is unknown."
+  (let* ((opt (clime-make-option :name 'nums :flags '("--nums")
+                                 :type 'integer :multiple t))
+         (cmd (clime-make-command :name "calc" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :children (list (cons "calc" cmd)))))
+    (should-error (clime-parse app '("calc" "--nums" "1" "-2"))
+                  :type 'clime-usage-error)))
+
 ;;; ─── Positional Args ────────────────────────────────────────────────────
 
 (ert-deftest clime-test-parse/positional-arg ()

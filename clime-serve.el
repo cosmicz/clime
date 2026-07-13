@@ -147,6 +147,13 @@ Values are set with source `user'.  Returns updated VALUES."
 
 ;;; ─── Format Helpers ─────────────────────────────────────────────────────
 
+(defvar clime-serve--default-json-format
+  (clime-make-output-format :name 'json :flags '("--json")
+                            :help "Output as JSON")
+  "Fallback JSON `clime-output-format' for `_api' introspection endpoints.
+Used when the app registers no json format, so API responses always
+default to JSON.  Also installed on the injected `_api' group.")
+
 (defun clime-serve--content-type-for-format (fmt)
   "Return MIME content-type string for output format FMT.
 FMT is a `clime-output-format' struct or nil (defaults to text/plain)."
@@ -187,11 +194,15 @@ Returns plist (:status N :body STRING :content-type STRING)."
   (let* ((suffix-result (clime-serve--extract-suffix segments app))
          (segments (car suffix-result))
          (suffix-fmt (cdr suffix-result))
+         ;; _api introspection always defaults to JSON.  Prefer an
+         ;; app-registered json format, else the auto-declared default.
          (api-fmt (when (and (null default-format)
                              (equal (car segments) "_api"))
-                    (cl-find 'json (clime-app-output-formats app)
-                             :key #'clime-output-format-name)))
-         (active-fmt (or suffix-fmt default-format api-fmt)))
+                    (or (cl-find 'json (clime-app-output-formats app)
+                                 :key #'clime-output-format-name)
+                        clime-serve--default-json-format)))
+         (active-fmt (or suffix-fmt default-format api-fmt))
+         (start-time (float-time)))
     (condition-case err
         (let* ((tree (clime--prepare-tree app))
                (walk (clime-serve--walk-path tree segments))
@@ -209,12 +220,18 @@ Returns plist (:status N :body STRING :content-type STRING)."
           (let* ((result
                   (catch 'clime-serve--not-found
                     (let ((clime-out--active-format
-                           (or active-fmt clime-out--active-format)))
+                           (or active-fmt clime-out--active-format))
+                          (clime--invocation-surface 'serve))
                       (clime-run-from-values app node path values)))))
             ;; catch returns the thrown string (not-found) or the (exit-code . output) cons
             (if (stringp result)
-                (list :status 404 :body result
-                      :content-type "text/plain; charset=utf-8")
+                ;; A handler threw `clime-serve--not-found' (e.g. introspection
+                ;; detail walk): the throw escapes `clime-run-from-values' before
+                ;; it can fire, so fire the unified not-found event here.
+                (progn
+                  (clime-serve--fire-not-found app segments active-fmt start-time result)
+                  (list :status 404 :body result
+                        :content-type "text/plain; charset=utf-8"))
               (let ((exit-code (car result))
                     (output (cdr result)))
                 (list :status (pcase (or exit-code 0)
@@ -224,8 +241,28 @@ Returns plist (:status N :body STRING :content-type STRING)."
                       :body output
                       :content-type (clime-serve--content-type-for-format active-fmt))))))
       (clime-serve-not-found
+       ;; Route resolution failed (unknown segment or handlerless node) before
+       ;; `clime-run-from-values' ran — fire one unified not-found event so
+       ;; every HTTP request is observable, then return 404.
+       (clime-serve--fire-not-found app segments active-fmt start-time (cadr err))
        (list :status 404 :body (cadr err)
              :content-type "text/plain; charset=utf-8")))))
+
+(defun clime-serve--fire-not-found (app segments fmt start-time message)
+  "Fire APP's serve `not-found' :on-invocation event for a 404 dispatch.
+SEGMENTS are the requested URL path segments, FMT the active output
+format, START-TIME the dispatch start (`float-time'), and MESSAGE the
+404 reason.  No handler ran, so the event carries a nil exit code."
+  (clime-run--fire-invocation
+   app
+   (clime-invocation-event--create
+    :app app :surface 'serve :phase 'not-found
+    :path segments
+    :format fmt
+    :error-type 'clime-serve-not-found
+    :error-message message
+    :start-time start-time
+    :duration (- (float-time) start-time))))
 
 ;;; ─── JSON Serialization ─────────────────────────────────────────────────
 
@@ -323,7 +360,7 @@ Recurses into children for groups.  Omits hidden nodes and options."
 ;;; ─── API Handlers ──────────────────────────────────────────────────────
 
 (defun clime-serve--routes-handler (ctx)
-  "Handler for /_routes — plain text route listing."
+  "Handle CTX for /_routes as a plain text route listing."
   (let* ((app (clime-context-app ctx))
          (tree (clime--prepare-tree app))
          (items (clime-node-collect
@@ -358,14 +395,14 @@ Recurses into children for groups.  Omits hidden nodes and options."
     nil))
 
 (defun clime-serve--api-meta-handler (ctx)
-  "Handler for /_api/meta — app metadata."
+  "Handle CTX for /_api/meta as app metadata."
   (let ((app (clime-context-app ctx)))
     (clime-out `(("name" . ,(clime-node-name app))
                  ("version" . ,(or (clime-app-version app) :json-false))
                  ("help" . ,(or (clime-node-help app) :json-false))))))
 
 (defun clime-serve--api-commands-handler (ctx)
-  "Handler for /_api/commands — full tree or single command detail."
+  "Handle CTX for /_api/commands as full tree or single command detail."
   (let* ((app (clime-context-app ctx))
          (path-segs (clime-ctx-get ctx 'path))
          (tree (clime--prepare-tree app)))
@@ -421,6 +458,9 @@ Idempotent — does nothing if `_api' is already a child."
            :name "_api"
            :help "API endpoints"
            :hidden t
+           ;; Auto-declare json so introspection endpoints default to JSON
+           ;; even when the app registers no output formats.
+           :output-formats (list clime-serve--default-json-format)
            :children (list (cons "meta" meta-cmd)
                            (cons "commands" commands-cmd)))))
     ;; Set parent refs
@@ -436,35 +476,111 @@ Idempotent — does nothing if `_api' is already a child."
 
 ;;; ─── Server Lifecycle ───────────────────────────────────────────────────
 
+(defun clime-serve--resolve-format (app format)
+  "Resolve FORMAT to a `clime-output-format' registered on APP, or nil.
+FORMAT is nil (no default — bare routes use the app's text output), a
+`clime-output-format' struct (returned as-is), or a format-name symbol
+\(resolved against APP's registered output formats).  A symbol naming no
+registered format signals an error."
+  (cond
+   ((null format) nil)
+   ((clime-output-format-p format) format)
+   ((symbolp format)
+    (or (cl-find format (clime-app-output-formats app)
+                 :key #'clime-output-format-name)
+        (error "clime-serve: no output format `%s' registered on app `%s'"
+               format (clime-node-name app))))
+   (t (error "clime-serve: invalid :default-format %S" format))))
+
+(defun clime-serve--unauthorized (&optional fmt)
+  "Return the 401 Unauthorized response plist, rendered in output format FMT.
+FMT is a `clime-output-format' struct or nil.  When FMT is the `json'
+format the body is a JSON object equivalent to the error envelope
+\((error . \"unauthorized\")) with Content-Type application/json; otherwise
+the body is plain text.  This lets a caller obtain a structured 401 purely
+through the public `:default-format' argument of `clime-serve'."
+  (if (and fmt (eq (clime-output-format-name fmt) 'json))
+      (list :status 401
+            :body (clime-json-encode '((error . "unauthorized")))
+            :content-type (clime-serve--content-type-for-format fmt))
+    (list :status 401
+          :body "Unauthorized\n"
+          :content-type "text/plain; charset=utf-8")))
+
+(defun clime-serve--auth-gate (auth request-info &optional fmt)
+  "Return a 401 response plist when AUTH rejects REQUEST-INFO, else nil.
+AUTH is nil (no auth required) or a predicate of one argument, the
+REQUEST-INFO plist (:method :path :headers :body).  When AUTH is non-nil
+and the predicate returns nil the request is rejected with a 401 rendered
+in output format FMT (see `clime-serve--unauthorized'); callers MUST skip
+dispatch whenever this returns non-nil."
+  (when (and auth (not (funcall auth request-info)))
+    (clime-serve--unauthorized fmt)))
+
+(defun clime-serve--send-response (process result)
+  "Send RESULT to PROCESS as an HTTP response.
+RESULT is a plist (:status N :body STRING :content-type STRING)."
+  (let ((status (plist-get result :status))
+        (ct (or (plist-get result :content-type)
+                "text/plain; charset=utf-8"))
+        (response-body (or (plist-get result :body) "")))
+    (ws-response-header process status
+                        (cons "Content-Type" ct)
+                        (cons "Content-Length"
+                              (number-to-string (string-bytes response-body))))
+    (process-send-string process response-body)))
+
 (cl-defun clime-serve (app &key (port clime-serve-default-port)
-                                (host "127.0.0.1"))
+                                (host "127.0.0.1")
+                                default-format
+                                auth)
   "Start an HTTP server for APP on PORT (default 8080) bound to HOST.
 HOST defaults to 127.0.0.1 (localhost only).
+
+DEFAULT-FORMAT, when non-nil, selects the output format for bare routes
+that carry no `.<ext>' suffix.  It is a registered output-format name (a
+symbol, e.g. `json') or a `clime-output-format' struct, resolved against
+APP's formats via `clime-serve--resolve-format'.  Without it, bare routes
+use the app's default (text) output; a `.<ext>' suffix still overrides.
+
+AUTH, when non-nil, is a predicate called once per request BEFORE
+dispatch with a request-info plist (:method :path :headers :body).
+Returning nil rejects the request with 401 Unauthorized — rendered in
+DEFAULT-FORMAT, so a json default yields an application/json error
+envelope — and the handler is never run; a non-nil return lets the
+request proceed.
+
 Returns the server process object."
   (clime-serve--ensure-web-server)
   ;; Inject API commands (idempotent — skips if already present)
   (clime-serve--inject-api-commands app)
-  ;; Run setup/config once at startup (mirror clime-run two-pass)
-  (let* ((setup (clime-app-setup app))
-         (config-factory (clime-app-config app)))
-    (when (or setup config-factory)
-      (let ((result (clime-parse app '() t)))
-        (when setup (funcall setup app result))
-        (when config-factory
-          (let ((provider (funcall config-factory app result)))
-            (when provider
-              (setf (clime-parse-result-config-provider result) provider))))
-        (clime-parse-finalize result))))
-  ;; Build root handler and start server
-  (let* ((handler (clime-serve--make-handler app))
-         (server (ws-start handler port nil :host host)))
-    (push (cons port server) clime-serve--servers)
-    (message "clime-serve: %s listening on %s:%d"
-             (clime-node-name app) host port)
-    server))
+  ;; Resolve the default output format up front (errors early on a bad name).
+  (let ((fmt (clime-serve--resolve-format app default-format)))
+    ;; Run setup/config once at startup (mirror clime-run two-pass)
+    (let* ((setup (clime-app-setup app))
+           (config-factory (clime-app-config app)))
+      (when (or setup config-factory)
+        (let ((result (clime-parse app '() t)))
+          (when setup (funcall setup app result))
+          (when config-factory
+            (let ((provider (funcall config-factory app result)))
+              (when provider
+                (setf (clime-parse-result-config-provider result) provider))))
+          (clime-parse-finalize result))))
+    ;; Build root handler and start server
+    (let* ((handler (clime-serve--make-handler app fmt auth))
+           (server (ws-start handler port nil :host host)))
+      (push (cons port server) clime-serve--servers)
+      (message "clime-serve: %s listening on %s:%d"
+               (clime-node-name app) host port)
+      server)))
 
-(defun clime-serve--make-handler (app)
-  "Build the root ws-start handler function for APP."
+(defun clime-serve--make-handler (app &optional default-format auth)
+  "Build the root ws-start handler function for APP.
+DEFAULT-FORMAT, when non-nil, is a `clime-output-format' used for bare
+routes (no `.<ext>' suffix) and for rendering an AUTH rejection.  AUTH,
+when non-nil, is a request-info predicate enforced before dispatch (see
+`clime-serve'); a nil return yields a 401 and the handler is never run."
   (lambda (request)
     (let* ((process (with-no-warnings (slot-value request 'process)))
            (headers (with-no-warnings (slot-value request 'headers)))
@@ -472,26 +588,29 @@ Returns the server process object."
            (url (or (cdr (assoc :GET headers))
                     (cdr (assoc :POST headers))
                     "/"))
-           (segments (mapcar #'url-unhex-string
-                            (cl-remove-if #'string-empty-p
-                                          (split-string url "/" t))))
-           ;; web-server parses query params into headers as
-           ;; string-keyed entries; keyword keys are HTTP headers
-           (query-params (cl-remove-if-not
-                          (lambda (e) (stringp (car e)))
-                          headers))
-           (params (or query-params
-                       (and body (clime-serve--parse-json-body body))))
-           (result (clime-serve--dispatch app segments params))
-           (status (plist-get result :status))
-           (ct (or (plist-get result :content-type)
-                   "text/plain; charset=utf-8"))
-           (response-body (or (plist-get result :body) "")))
-      (ws-response-header process status
-                          (cons "Content-Type" ct)
-                          (cons "Content-Length"
-                                (number-to-string (string-bytes response-body))))
-      (process-send-string process response-body))))
+           (method (cond ((assoc :GET headers) 'GET)
+                         ((assoc :POST headers) 'POST)
+                         (t nil)))
+           ;; Web-server-agnostic view handed to the auth predicate.
+           (request-info (list :method method :path url
+                               :headers headers :body body))
+           (reject (clime-serve--auth-gate auth request-info default-format)))
+      (if reject
+          ;; Auth failed: respond (format-aware) 401 and never dispatch.
+          (clime-serve--send-response process reject)
+        (let* ((segments (mapcar #'url-unhex-string
+                                 (cl-remove-if #'string-empty-p
+                                               (split-string url "/" t))))
+               ;; web-server parses query params into headers as
+               ;; string-keyed entries; keyword keys are HTTP headers
+               (query-params (cl-remove-if-not
+                              (lambda (e) (stringp (car e)))
+                              headers))
+               (params (or query-params
+                           (and body (clime-serve--parse-json-body body))))
+               (result (clime-serve--dispatch app segments params
+                                              default-format)))
+          (clime-serve--send-response process result))))))
 
 (defun clime-serve-stop (&optional server)
   "Stop SERVER, or all clime servers if SERVER is nil."

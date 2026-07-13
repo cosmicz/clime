@@ -42,7 +42,7 @@
   (nargs nil :type (or integer null) :documentation "Arg count: nil=1, 0=boolean, N=fixed.")
   (env nil :type (or string boolean null) :documentation "Env var name: string suffix (prefixed by app :env-prefix), t for auto-derive, or nil.")
   (count nil :type boolean :documentation "If non-nil, flag is a counter (-vvv = 3).")
-  (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.")
+  (multiple nil :type boolean :documentation "If non-nil, repeated flags collect into a list.  Also accepts space-separated values (--opt a b c) where unambiguous: at a node with no positional args and no subcommands.")
   (choices nil :documentation "Allowed values, or a function returning them (resolved at parse time).")
   (coerce nil :type list :documentation "List of transform functions applied after type coercion (in order).  Errors are wrapped as `clime-usage-error'.")
   (conform nil :type list :documentation "List of pass-2 conformer functions; each receives value (and optionally param), returns conformed value or signals error.")
@@ -269,6 +269,13 @@ Always returns a list."
 (defconst clime--source-precedence '(user app env config default conform)
   "Source precedence order, highest first.")
 
+(defconst clime--config-false (make-symbol "clime-config-false")
+  "Provider sentinel: config key present with an explicit false/nil value.
+Config providers return this (instead of bare nil, which is
+indistinguishable from an absent key) so `clime--apply-config-node'
+can disable a negatable boolean while leaving unmentioned keys to
+their defaults.")
+
 (defun clime-values-get (values name)
   "Return the plist for NAME in VALUES, or nil."
   (cdr (assq name values)))
@@ -304,7 +311,7 @@ Returns the updated alist."
             values))))
 
 (defun clime-values-errors (values)
-  "Return alist of (NAME . ERROR-STRING) for entries with :error."
+  "Return error entries from VALUES as (NAME . ERROR-STRING)."
   (cl-loop for (name . plist) in values
            when (plist-get plist :error)
            collect (cons name (plist-get plist :error))))
@@ -487,7 +494,15 @@ each alias is replaced with a copy of its target command (or group)."
                            (:constructor clime-group--create)
                            (:copier nil))
   "A branch node (subcommand group) in the CLI tree."
-  (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups."))
+  (children nil :type list :documentation "Alist of (name . node) for subcommands/subgroups.")
+  (output-formats nil :type list :documentation "List of `clime-output-format' structs declared on this group.
+Apps and commands inherit this slot; the app's formats are the root set,
+while a group's formats scope to its subtree."))
+
+;; The slot lives on `clime-group' so any branch (app, group, command) may
+;; declare output formats.  `cl-defstruct' auto-generates child-prefixed
+;; accessors for inherited slots, so `clime-app-output-formats' (and
+;; `clime-command-output-formats') keep working without an explicit alias.
 
 ;;; ─── Command ────────────────────────────────────────────────────────────
 
@@ -558,6 +573,144 @@ Shared immutable data (handlers, help strings, functions) is not copied."
 Also runs ancestor collision checks after parent refs are established."
   (clime--set-parent-refs-1 node)
   (clime-check-ancestor-collisions node))
+
+;;; ─── Dispatch Port Records ──────────────────────────────────────────────
+
+(defconst clime-dispatch-surfaces '(cli invoke serve)
+  "Known invocation surfaces accepted by `clime-make-dispatch-request'.")
+
+(defconst clime-dispatch-adapters '(http pipe spool mcp)
+  "Known concrete adapters accepted by `clime-make-dispatch-request'.")
+
+(defconst clime-dispatch-outcomes
+  '(completed not-found usage-error runtime-error rejected)
+  "Known domain outcomes accepted by `clime-make-dispatch-response'.")
+
+(defconst clime-dispatch--forbidden-metadata-keys
+  '(:raw-request :raw-body :raw-socket :raw-process :socket :process)
+  "Metadata keys that must not cross the dispatch port.")
+
+(defun clime-dispatch--check-no-callables (value field)
+  "Signal if VALUE under FIELD contains a callable object."
+  (cond
+   ((functionp value)
+    (error "clime-dispatch: %s must not contain callable values" field))
+   ((consp value)
+    (clime-dispatch--check-no-callables (car value) field)
+    (clime-dispatch--check-no-callables (cdr value) field))
+   ((vectorp value)
+    (dotimes (i (length value))
+      (clime-dispatch--check-no-callables (aref value i) field))))
+  value)
+
+(defun clime-dispatch--check-plist (value field)
+  "Signal unless VALUE is nil or a plist for FIELD."
+  (unless (or (null value)
+              (and (listp value)
+                   (cl-evenp (length value))
+                   (cl-loop for (key _val) on value by #'cddr
+                            always (keywordp key))))
+    (error "clime-dispatch: %s must be a plist" field))
+  value)
+
+(defun clime-dispatch--check-metadata (metadata field)
+  "Validate sanitized request/response METADATA for FIELD."
+  (clime-dispatch--check-plist metadata field)
+  (let ((tail metadata))
+    (while tail
+      (when (memq (car tail) clime-dispatch--forbidden-metadata-keys)
+        (error "clime-dispatch: %s contains forbidden key %S"
+               field (car tail)))
+      (setq tail (cddr tail))))
+  (clime-dispatch--check-no-callables metadata field))
+
+(cl-defstruct (clime-dispatch-input (:constructor clime-dispatch-input--create)
+                                    (:copier nil))
+  "One unmerged named adapter input with source provenance."
+  (name nil :type symbol :documentation "Canonical input name.")
+  (value nil :documentation "Input value, not yet merged into params.")
+  (source nil :type symbol :documentation "Input provenance, e.g. query or json-body.")
+  (metadata nil :type list :documentation "Sanitized adapter-owned input metadata."))
+
+(defun clime-make-dispatch-input (&rest args)
+  "Create a validated `clime-dispatch-input' from ARGS."
+  (let ((name (plist-get args :name))
+        (source (plist-get args :source))
+        (value (plist-get args :value))
+        (metadata (plist-get args :metadata)))
+    (unless (symbolp name)
+      (error "clime-make-dispatch-input: :name must be a symbol"))
+    (unless (symbolp source)
+      (error "clime-make-dispatch-input: :source must be a symbol"))
+    (clime-dispatch--check-no-callables value ":value")
+    (when metadata
+      (clime-dispatch--check-metadata metadata ":metadata"))
+    (apply #'clime-dispatch-input--create args)))
+
+(cl-defstruct (clime-dispatch-request (:constructor clime-dispatch-request--create)
+                                      (:copier nil))
+  "Transport-neutral request envelope produced by concrete adapters."
+  (surface nil :type symbol :documentation "Invocation surface, e.g. serve.")
+  (adapter nil :type symbol :documentation "Concrete adapter, e.g. http.")
+  (path nil :type list :documentation "Normalized command path segments.")
+  (format nil :documentation "Requested/default output format, when known.")
+  (inputs nil :type list :documentation "Ordered `clime-dispatch-input' records.")
+  (metadata nil :type list :documentation "Sanitized request metadata.")
+  (auth-context nil :documentation "Optional sanitized authentication context.")
+  (correlation-id nil :documentation "Optional adapter/request correlation id.")
+  (start-time nil :type (or float null) :documentation "Optional request start time."))
+
+(defun clime-make-dispatch-request (&rest args)
+  "Create a validated `clime-dispatch-request' from ARGS."
+  (let ((surface (plist-get args :surface))
+        (adapter (plist-get args :adapter))
+        (path (plist-get args :path))
+        (inputs (plist-get args :inputs))
+        (metadata (plist-get args :metadata))
+        (auth-context (plist-get args :auth-context)))
+    (unless (memq surface clime-dispatch-surfaces)
+      (error "clime-make-dispatch-request: unknown :surface %S" surface))
+    (unless (memq adapter clime-dispatch-adapters)
+      (error "clime-make-dispatch-request: unknown :adapter %S" adapter))
+    (unless (and (listp path)
+                 (cl-every #'stringp path))
+      (error "clime-make-dispatch-request: :path must be a list of strings"))
+    (unless (or (null inputs)
+                (and (listp inputs)
+                     (cl-every #'clime-dispatch-input-p inputs)))
+      (error "clime-make-dispatch-request: :inputs must be dispatch inputs"))
+    (when metadata
+      (clime-dispatch--check-metadata metadata ":metadata"))
+    (when auth-context
+      (clime-dispatch--check-metadata auth-context ":auth-context"))
+    (apply #'clime-dispatch-request--create args)))
+
+(cl-defstruct (clime-dispatch-response (:constructor clime-dispatch-response--create)
+                                       (:copier nil))
+  "Transport-neutral dispatch response before adapter wire mapping."
+  (outcome nil :type symbol :documentation "Domain dispatch outcome.")
+  (exit-code nil :type (or integer null) :documentation "Handler exit code, when applicable.")
+  (body nil :documentation "Rendered body or structured output.")
+  (format nil :documentation "Active output format, when known.")
+  (content-type nil :type (or string null) :documentation "Rendered content type, when known.")
+  (error-type nil :documentation "Structured error type.")
+  (error-message nil :type (or string null) :documentation "Structured error message.")
+  (metadata nil :type list :documentation "Sanitized response metadata.")
+  (adapter-data nil :type list :documentation "Adapter-owned wire response data."))
+
+(defun clime-make-dispatch-response (&rest args)
+  "Create a validated `clime-dispatch-response' from ARGS."
+  (let ((outcome (plist-get args :outcome))
+        (metadata (plist-get args :metadata))
+        (adapter-data (plist-get args :adapter-data)))
+    (unless (memq outcome clime-dispatch-outcomes)
+      (error "clime-make-dispatch-response: unknown :outcome %S" outcome))
+    (when metadata
+      (clime-dispatch--check-metadata metadata ":metadata"))
+    (when adapter-data
+      (clime-dispatch--check-plist adapter-data ":adapter-data")
+      (clime-dispatch--check-no-callables adapter-data ":adapter-data"))
+    (apply #'clime-dispatch-response--create args)))
 
 ;;; ─── Alias Resolution ───────────────────────────────────────────────────
 
@@ -701,12 +854,42 @@ interacting with siblings that would always violate group constraints."
         (when (clime-group-p child)
           (clime--propagate-group-locks child))))))
 
+(defun clime--register-output-formats (args)
+  "Register ARGS' :output-formats as options and exclusivity conform.
+ARGS is a constructor plist; returns it updated.  Output formats ARE
+options, so each is appended to :options (deduped by flags).  When two or
+more formats are present, a mutual-exclusivity conform is appended.
+Shared by `clime-make-app' and `clime-make-group'."
+  (let ((output-formats (plist-get args :output-formats)))
+    (when output-formats
+      (let* ((existing-options (plist-get args :options))
+             (new-opts (cl-remove-if
+                        (lambda (fmt)
+                          (cl-some (lambda (opt)
+                                     (equal (clime-option-flags opt)
+                                            (clime-option-flags fmt)))
+                                   existing-options))
+                        output-formats)))
+        (setq args (plist-put args :options
+                              (append existing-options new-opts))))
+      ;; Auto-exclusivity: 2+ output formats get clime-check-exclusive
+      (when (>= (length output-formats) 2)
+        (let* ((member-names (mapcar #'clime-option-name output-formats))
+               (exclusive-fn (clime-check-exclusive 'clime--output-format member-names)))
+          (setq args (plist-put args :conform
+                                (clime-conform-append
+                                 (plist-get args :conform)
+                                 exclusive-fn))))))
+    args))
+
 (defun clime-make-group (&rest args)
   "Create a `clime-group' with validation.
 Required keyword arg: :name (string).
-ARGS is a plist of slot values."
+ARGS is a plist of slot values.  Any :output-formats are registered as
+options on the group (see `clime--register-output-formats')."
   (unless (plist-get args :name)
     (error "clime-make-group: :name is required"))
+  (setq args (clime--register-output-formats args))
   (let ((group (apply #'clime-group--create args)))
     (clime--set-direct-parents group)
     group))
@@ -758,7 +941,6 @@ ARGS is a plist of slot values."
   (version nil :type (or string null) :documentation "Application version string.")
   (env-prefix nil :type (or string null) :documentation "Prefix for auto-derived env var names.")
   (json-mode nil :type boolean :documentation "Whether --json is a built-in root option.  Deprecated: use `clime-output-format'.")
-  (output-formats nil :type list :documentation "List of `clime-output-format' structs.")
   (argv0 nil :type (or string null) :documentation "Program name for usage output (set from CLIME_ARGV0).")
   (setup nil :type (or function null) :documentation "Hook called after pass-1 parse, before dynamic validation and handler.")
   (config nil :type (or function null) :documentation "Config factory: (app result) → provider or nil.
@@ -767,7 +949,18 @@ is a function (command-path param-name) → value, used during finalize.")
   (after-execute nil :type (or function list null) :documentation "Hook(s) called after handler execution.
 Each function receives (ctx exit-code duration-secs).  A single function
 is normalized to a one-element list at creation time.  Errors in hooks
-are caught and reported via `message', never propagated."))
+are caught and reported via `message', never propagated.")
+  (on-invocation nil :type (or function list null) :documentation "Unified invocation hook(s).
+Fired once per invocation across ALL exit paths — including parse/usage
+failures, help, and version requests that occur before a context exists.
+Each function receives a single `clime-invocation-event' struct.  A bare
+function is normalized to a one-element list at creation time.  Errors in
+hooks are caught and reported via `message', never propagated.  Unlike
+`after-execute' (handler-scoped), this also fires for help/version.")
+  (dotenv nil :documentation "Dotenv spec: nil, t (load `.env' from CWD),
+path string, or list of path strings.  Loaded values populate
+`process-environment' during parse/execute so existing :env / :env-prefix
+machinery picks them up.  See `clime-dotenv-with-app-env'."))
 
 (defun clime-make-app (&rest args)
   "Create a `clime-app' with validation.
@@ -794,30 +987,16 @@ ARGS is a plist of slot values."
                                        :help "Output as JSON")
             output-formats)
       (setq args (plist-put args :output-formats output-formats)))
-    ;; Add output-formats to :options (they ARE options)
-    (when output-formats
-      (let* ((existing-options (plist-get args :options))
-             (new-opts (cl-remove-if
-                        (lambda (fmt)
-                          (cl-some (lambda (opt)
-                                     (equal (clime-option-flags opt)
-                                            (clime-option-flags fmt)))
-                                   existing-options))
-                        output-formats)))
-        (setq args (plist-put args :options
-                              (append existing-options new-opts))))
-      ;; Auto-exclusivity: 2+ output formats get clime-check-exclusive
-      (when (>= (length output-formats) 2)
-        (let* ((member-names (mapcar #'clime-option-name output-formats))
-               (exclusive-fn (clime-check-exclusive 'clime--output-format member-names)))
-          (setq args (plist-put args :conform
-                                (clime-conform-append
-                                 (plist-get args :conform)
-                                 exclusive-fn)))))))
+    ;; Register output-formats as options + auto-exclusivity (shared with groups)
+    (setq args (clime--register-output-formats args)))
   ;; Normalize :after-execute — bare function → one-element list
   (let ((ae (plist-get args :after-execute)))
     (when (and ae (functionp ae))
       (setq args (plist-put args :after-execute (list ae)))))
+  ;; Normalize :on-invocation — bare function → one-element list
+  (let ((oi (plist-get args :on-invocation)))
+    (when (and oi (functionp oi))
+      (setq args (plist-put args :on-invocation (list oi)))))
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
     (clime--resolve-aliases app)
@@ -835,6 +1014,31 @@ ARGS is a plist of slot values."
   (path nil :type list :documentation "List of node names from root to command.")
   (params nil :type list :documentation "Plist of parsed param values.")
   (start-time nil :type (or float null) :documentation "Time handler execution started (`float-time')."))
+
+;;; ─── Invocation Event ───────────────────────────────────────────────────
+
+(cl-defstruct (clime-invocation-event (:constructor clime-invocation-event--create)
+                                      (:copier nil))
+  "A unified invocation lifecycle event.
+Passed as the single argument to each `:on-invocation' hook.  Fired once
+per invocation across every exit path, so fields that depend on a built
+context (`context', `params', `command', `path') are nil for failures
+that occur before a context exists (e.g. parse/usage errors)."
+  (app nil :documentation "The root `clime-app'.")
+  (surface nil :documentation "Entry surface: `cli', `serve', `invoke', or `run-from-values'.")
+  (phase nil :documentation "Outcome: `completed', `no-handler', `help', `version', `usage-error', `runtime-error', or `not-found' (serve route resolution failure / 404).")
+  (argv nil :type list :documentation "Raw argv list (cli surface; nil elsewhere).")
+  (path nil :type list :documentation "Node-name path from root to command, when known.  For serve `not-found' events, the requested URL segments.")
+  (display-path nil :type list :documentation "User-facing path excluding inline groups, when known.")
+  (params nil :type list :documentation "Resolved params plist, when a context was built.")
+  (command nil :documentation "Resolved `clime-command' node, when known.")
+  (context nil :documentation "The `clime-context', when one was built (nil for pre-context failures).")
+  (exit-code nil :type (or integer null) :documentation "Exit code: 0 success, 1 runtime error, 2 usage error.")
+  (error-type nil :documentation "Error signal symbol, when the invocation failed.")
+  (error-message nil :type (or string null) :documentation "Error message string, when the invocation failed.")
+  (start-time nil :type (or float null) :documentation "Invocation start time (`float-time').")
+  (duration nil :type (or float null) :documentation "Whole-invocation duration in seconds (parse → done).")
+  (format nil :documentation "Active `clime-output-format', or nil for text mode."))
 
 (defun clime-ctx-get (ctx name)
   "Get the value of param NAME from context CTX."
@@ -970,7 +1174,8 @@ Keyword ARGS:
 
 (defun clime-node-collect--1 (node recurse-p match-p max-depth depth)
   "Internal recursive collector for `clime-node-collect'.
-NODE is the current group, DEPTH tracks recursion level."
+NODE is the current group, RECURSE-P decides descent, MATCH-P filters
+items, MAX-DEPTH limits recursion, and DEPTH tracks recursion level."
   (let ((items '())
         (at-depth-limit (and max-depth (>= depth max-depth))))
     ;; Collect options from this node (with owning node ref)
@@ -1108,7 +1313,7 @@ Sibling collisions are allowed."
 ;;; ─── Env var derivation ─────────────────────────────────────────────
 
 (defun clime--env-var-for-option (opt app)
-  "Return the env var name for OPT, or nil if none applies.
+  "Return the env var name for OPT, or nil if none is configured.
 :env STRING is a suffix (APP's :env-prefix prepended when present).
 :env t opts in to auto-derivation from option name.
 When :env is nil, no env var is derived."

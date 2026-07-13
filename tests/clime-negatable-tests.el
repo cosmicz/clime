@@ -16,6 +16,7 @@
 (require 'clime-parse)
 (require 'clime-help)
 (require 'clime-run)
+(require 'clime-config)
 (require 'clime-test-helpers)
 
 ;;; ─── Struct Slots ───────────────────────────────────────────────────
@@ -245,6 +246,193 @@
          (opt (clime-node-find-option app "--color")))
     (should (eq (clime-option-negatable opt) t))
     (should (clime-option-boolean-p opt))))
+
+;;; ─── Env: negatable bool can be disabled (clime-kqee) ──────────────
+
+;; Sentinel default to distinguish "explicitly nil" from "absent".
+(defconst clime-test-neg--absent (make-symbol "absent"))
+
+(defun clime-test-neg--negatable-app (&optional default)
+  "Build an app exposing negatable bool `color' via env prefix TEST_NEGENV.
+DEFAULT, when given, becomes the option's :default."
+  (let* ((opt (apply #'clime-make-option
+                     :name 'color :flags '("--color")
+                     :negatable t :env t
+                     (when default (list :default default))))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt))))
+    (clime-make-app :name "t" :version "1" :env-prefix "TEST_NEGENV"
+                    :children (list (cons "run" cmd)))))
+
+(ert-deftest clime-test-negatable/env-disables-default-t ()
+  "Negatable bool :default t + env=0 → param explicitly nil."
+  (let* ((app (clime-test-neg--negatable-app t)))
+    (let ((process-environment (append '("TEST_NEGENV_COLOR=0")
+                                       process-environment)))
+      (let ((result (clime-parse app '("run"))))
+        (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                    nil))))))
+
+(ert-deftest clime-test-negatable/env-false-word-disables ()
+  "Negatable bool :default t + env=false/no → param nil."
+  (dolist (falsy '("false" "no" "FALSE"))
+    (let* ((app (clime-test-neg--negatable-app t)))
+      (let ((process-environment (append (list (concat "TEST_NEGENV_COLOR=" falsy))
+                                         process-environment)))
+        (let ((result (clime-parse app '("run"))))
+          (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                      nil)))))))
+
+(ert-deftest clime-test-negatable/env-enables ()
+  "Negatable bool :default t + env=1 → param t."
+  (let* ((app (clime-test-neg--negatable-app t)))
+    (let ((process-environment (append '("TEST_NEGENV_COLOR=1")
+                                       process-environment)))
+      (let ((result (clime-parse app '("run"))))
+        (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                    t))))))
+
+(ert-deftest clime-test-negatable/env-absent-uses-default ()
+  "Negatable bool :default t + no env → param falls back to default t."
+  (let* ((app (clime-test-neg--negatable-app t)))
+    ;; Ensure the var is genuinely unset in this binding.
+    (let ((process-environment (cons "TEST_NEGENV_COLOR" process-environment)))
+      (let ((result (clime-parse app '("run"))))
+        (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                    t))))))
+
+(ert-deftest clime-test-negatable/env-nonneg-falsy-skipped ()
+  "Non-negatable bool :default nil + env=0 → value skipped (param absent)."
+  (let* ((opt (clime-make-option :name 'color :flags '("--color")
+                                 :nargs 0 :env t)) ; plain bool, default nil
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "t" :version "1" :env-prefix "TEST_NEGENV"
+                              :children (list (cons "run" cmd)))))
+    (let ((process-environment (append '("TEST_NEGENV_COLOR=0")
+                                       process-environment)))
+      (let ((result (clime-parse app '("run"))))
+        ;; Unchanged behaviour: falsy env on a plain bool is dropped,
+        ;; leaving the param unset (the nil default never materialises).
+        (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                    clime-test-neg--absent))))))
+
+(ert-deftest clime-test-negatable/env-disabled-source-is-env ()
+  "Env-disabled negatable bool records provenance `env'."
+  (let* ((app (clime-test-neg--negatable-app t)))
+    (let ((process-environment (append '("TEST_NEGENV_COLOR=0")
+                                       process-environment)))
+      (let* ((result (clime-parse app '("run")))
+             (values (clime-parse-result-values result)))
+        (should (eq (clime-values-source values 'color) 'env))))))
+
+(ert-deftest clime-test-negatable/cli-overrides-disabling-env ()
+  "CLI --color overrides an env=0 on a negatable bool (CLI > env)."
+  (let* ((app (clime-test-neg--negatable-app t)))
+    (let ((process-environment (append '("TEST_NEGENV_COLOR=0")
+                                       process-environment)))
+      (let ((result (clime-parse app '("run" "--color"))))
+        (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                    t))))))
+
+;;; ─── Config: negatable bool can be disabled (clime-kqee) ───────────
+
+(defmacro clime-test-neg--with-config-file (suffix content &rest body)
+  "Write CONTENT to a temp file with SUFFIX, bind `cfg-file', run BODY."
+  (declare (indent 2))
+  `(let ((cfg-file (make-temp-file "clime-test-neg-cfg-" nil ,suffix)))
+     (unwind-protect
+         (progn (with-temp-file cfg-file (insert ,content))
+                ,@body)
+       (delete-file cfg-file))))
+
+(defun clime-test-neg--config-app (provider-fn &optional default)
+  "Build an app whose negatable bool `color' is fed by PROVIDER-FN.
+PROVIDER-FN is a one-arg function of the config file path."
+  (let* ((opt (apply #'clime-make-option
+                     :name 'color :flags '("--color") :negatable t
+                     (when default (list :default default))))
+         (cmd (clime-make-command :name "run" :handler #'ignore
+                                  :options (list opt))))
+    (clime-make-app :name "t" :version "1"
+                    :config (lambda (_app _result) (funcall provider-fn))
+                    :children (list (cons "run" cmd)))))
+
+(ert-deftest clime-test-negatable/config-json-false-disables ()
+  "Negatable bool :default t + JSON \"color\": false → param nil."
+  (clime-test-neg--with-config-file ".json" "{\"color\": false}"
+    (let* ((file cfg-file)
+           (app (clime-test-neg--config-app
+                 (lambda () (clime-config-json file)) t))
+           (result (clime-parse app '("run"))))
+      (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                  nil)))))
+
+(ert-deftest clime-test-negatable/config-sexp-nil-disables ()
+  "Negatable bool :default t + sexp (:color nil) → param nil."
+  (clime-test-neg--with-config-file ".eld" "(:color nil)"
+    (let* ((file cfg-file)
+           (app (clime-test-neg--config-app
+                 (lambda () (clime-config-sexp file)) t))
+           (result (clime-parse app '("run"))))
+      (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                  nil)))))
+
+(ert-deftest clime-test-negatable/config-json-true-enables ()
+  "Negatable bool :default t + JSON \"color\": true → param t."
+  (clime-test-neg--with-config-file ".json" "{\"color\": true}"
+    (let* ((file cfg-file)
+           (app (clime-test-neg--config-app
+                 (lambda () (clime-config-json file)) t))
+           (result (clime-parse app '("run"))))
+      (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                  t)))))
+
+(ert-deftest clime-test-negatable/config-absent-uses-default ()
+  "Negatable bool :default t + config WITHOUT the key → default t.
+Guards against false-positive shadowing of the default."
+  (clime-test-neg--with-config-file ".json" "{\"other\": 1}"
+    (let* ((file cfg-file)
+           (app (clime-test-neg--config-app
+                 (lambda () (clime-config-json file)) t))
+           (result (clime-parse app '("run"))))
+      (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                  t)))))
+
+(ert-deftest clime-test-negatable/config-nonneg-false-dropped ()
+  "Non-negatable bool + JSON false → value dropped (param absent)."
+  (clime-test-neg--with-config-file ".json" "{\"color\": false}"
+    (let* ((file cfg-file)
+           (opt (clime-make-option :name 'color :flags '("--color")
+                                   :nargs 0)) ; plain bool
+           (cmd (clime-make-command :name "run" :handler #'ignore
+                                    :options (list opt)))
+           (app (clime-make-app :name "t" :version "1"
+                                :config (lambda (_a _r) (clime-config-json file))
+                                :children (list (cons "run" cmd))))
+           (result (clime-parse app '("run"))))
+      (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                  clime-test-neg--absent)))))
+
+(ert-deftest clime-test-negatable/config-disabled-source-is-config ()
+  "Config-disabled negatable bool records provenance `config'."
+  (clime-test-neg--with-config-file ".json" "{\"color\": false}"
+    (let* ((file cfg-file)
+           (app (clime-test-neg--config-app
+                 (lambda () (clime-config-json file)) t))
+           (result (clime-parse app '("run")))
+           (values (clime-parse-result-values result)))
+      (should (eq (clime-values-source values 'color) 'config)))))
+
+(ert-deftest clime-test-negatable/cli-overrides-disabling-config ()
+  "CLI --color overrides JSON \"color\": false (CLI > config)."
+  (clime-test-neg--with-config-file ".json" "{\"color\": false}"
+    (let* ((file cfg-file)
+           (app (clime-test-neg--config-app
+                 (lambda () (clime-config-json file)) t))
+           (result (clime-parse app '("run" "--color"))))
+      (should (eq (clime-parse-result-param result 'color clime-test-neg--absent)
+                  t)))))
 
 (provide 'clime-negatable-tests)
 ;;; clime-negatable-tests.el ends here

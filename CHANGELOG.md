@@ -2,6 +2,90 @@
 
 ## Unreleased
 
+## 0.7.1 — 2026-06-04
+
+### Added
+
+- **`:on-invocation` lifecycle hook**: a new app-level hook that fires
+  exactly once per invocation across every exit path — successful
+  dispatch, runtime handler errors, parse/usage failures, help/version,
+  and serve 404s — on all surfaces (`clime-run`, `clime-run-from-values`,
+  HTTP serve dispatch, and interactive invoke). The handler receives one
+  `clime-invocation-event` (surface, phase, argv, path, params, command,
+  context, exit code, error type/message, timing, and active format),
+  giving a single first-class sink for audit / JSONL logging without
+  per-surface wrappers. `:after-execute` is unchanged.
+
+- **Group-level output formats and JSON-by-default API introspection**:
+  `clime-output-format` can now be declared on any `clime-group`, so
+  individual subtrees carry their own output formats (app-level formats
+  keep precedence). The injected `_api` introspection group
+  auto-declares and defaults to JSON, so `/_api/*` endpoints return
+  `application/json` even when the app registers no JSON format.
+
+- **Space-separated list values for `:multiple` options**: a `:multiple`
+  value option now accepts space-separated values (`--tag a b c`) in
+  addition to repeated flags and `:separator` splitting. Greedy
+  consumption fires only where unambiguous — at a leaf command (or a
+  single-command app/group) with no positional args and no subcommands —
+  and stops at the next option-like token, `--`, or end of arguments.
+  The `--flag=value` form and non-`:multiple` options are unaffected.
+
+- **`clime-make` pre-load `--eval` injection and built-in `--no-jit`
+  flag**: generated polyglot shebang launchers can inject `--eval` forms
+  immediately after `-Q`, before the app file loads, via `clime-make
+  init` / `update`. A built-in `--no-jit` flag disables native-comp JIT
+  compilation for the ephemeral batch process. `--eval` forms must be
+  single-line: a form containing a newline or carriage return is
+  rejected before the shebang is written, since a multi-line form would
+  split the two-line launcher and orphan its version tag.
+
+- **`:children` keyword on `clime-command`**: commands now accept a
+  `:children` keyword for inline-group composition, matching `clime-app`
+  and `clime-group`. A reusable inline group defined with
+  `clime-defgroup` can be shared verbatim across multiple commands (and
+  groups) via `:children (list <group>)`, instead of macro indirection.
+  Keyword-supplied children merge with body-form children (no
+  replacement). The runtime already supported child structs on commands
+  (`clime-command` includes `clime-group`); this fills the surface-DSL
+  gap so the shared group's options participate fully in parsing, help,
+  and `:requires` checking for the hosting command.
+
+- **`:dotenv` app option**: declarative `.env` file loading. Accepts
+  `t` (loads `.env` from `default-directory`), a path string, or a list
+  of path strings (earlier file wins per key). Values populate
+  `process-environment` for the duration of one run so the existing
+  `:env` / `:env-prefix` machinery picks them up across every surface
+  (CLI, `clime-run-from-values`, `clime-serve` dispatch, and
+  `clime-invoke` menu seeding). Real env always wins over `.env`.
+  Grammar: bare, double-quoted (`\n`/`\r`/`\t` escapes), single-quoted
+  literal, leading `export ` tolerated, `#` comments. Missing files
+  silently skipped; malformed files signal `clime-usage-error` with
+  file + line. New module: `clime-dotenv.el`.
+
+### Fixed
+
+- **Negatable booleans can be disabled via env and config**: a
+  `:negatable` flag with `:default t` can now be set back to `nil`
+  through an environment variable (`0`/`false`/`no`) or a config file
+  (JSON `false`, sexp explicit `nil`), matching the bidirectional
+  contract `:default t` implies. Previously both `clime--apply-env` and
+  `clime--apply-config` dropped falsy boolean values, so the only
+  disable path was the `--no-X` CLI flag. Plain (non-negatable)
+  booleans are unchanged — a falsy env/config value still leaves them
+  at their default. Config providers now distinguish "key present and
+  false" from "key absent" via an internal sentinel, so unmentioned
+  negatable flags keep their defaults. Precedence is unchanged:
+  CLI > env > config > default.
+
+- **`:requires` constraints visible across nested inline groups**:
+  `clime--find-unsatisfied-requires` now uses `clime-node-all-options`
+  instead of the flat `clime-node-options`, so a `:requires` constraint
+  declared on an option inside a nested `clime-group :inline t` is
+  actually checked at parse time.  Previously, those constraints were
+  silently never enforced, allowing CLI inputs that should have been
+  rejected to slip through.
+
 ## 0.7.0 — 2026-04-20
 
 ### Added

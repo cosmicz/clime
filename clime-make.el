@@ -56,9 +56,11 @@ Bumped when the polyglot launcher structure changes.")
 Matches both the legacy `# clime:X.Y.Z' and current `# clime-sh!:vN'.")
 
 (defun clime-make--clime-shebang-p (file)
-  "Return non-nil if FILE starts with a clime-tagged shebang."
+  "Return non-nil for a clime-tagged shebang in FILE.
+Read the full file rather than a fixed prefix: injected `--eval'
+forms can push the tag (at the end of line 2) past any byte cap."
   (with-temp-buffer
-    (insert-file-contents file nil 0 512)
+    (insert-file-contents file)
     (goto-char (point-min))
     (and (looking-at "#!")
          (forward-line 1)
@@ -68,9 +70,11 @@ Matches both the legacy `# clime:X.Y.Z' and current `# clime-sh!:vN'.")
 (defun clime-make--shebang-file-version (file)
   "Return the shebang format version from FILE, or nil.
 Returns an integer for `clime-sh!:vN' tags, 0 for legacy `clime:X.Y.Z' tags,
-or nil if FILE has no clime shebang."
+or nil if FILE has no clime shebang.
+Reads the full file: injected `--eval' forms can push the tag past a
+fixed prefix."
   (with-temp-buffer
-    (insert-file-contents file nil 0 512)
+    (insert-file-contents file)
     (goto-char (point-min))
     (when (looking-at "#!")
       (forward-line 1)
@@ -81,10 +85,56 @@ or nil if FILE has no clime shebang."
          ((string-match-p "# clime:[0-9]+\\.[0-9]+\\.[0-9]+" line2)
           0))))))
 
-(defun clime-make--make-shebang (env-vars load-paths resolve)
+(defconst clime-make--no-jit-eval "(setq native-comp-jit-compilation nil)"
+  "Pre-load eval form that disables native-comp JIT for the run.
+Must execute before the app's own source is loaded/compiled, so the
+shebang launcher is its only valid home.  Enabled by the `--no-jit' flag.")
+
+(defun clime-make--shell-dquote (form)
+  "Escape elisp FORM string for a shell double-quoted `--eval' slot.
+Backslash, double-quote, dollar, and backtick each get a leading
+backslash (in that order) so the shell passes FORM verbatim to Emacs.
+The built-in `clime-make--no-jit-eval' contains none of these and so
+passes through unchanged; this protects arbitrary user-supplied forms."
+  (let ((s form))
+    (setq s (replace-regexp-in-string "\\\\" "\\\\" s t t))
+    (setq s (replace-regexp-in-string "\"" "\\\"" s t t))
+    (setq s (replace-regexp-in-string "\\$" "\\$" s t t))
+    (setq s (replace-regexp-in-string "`" "\\`" s t t))
+    s))
+
+(defun clime-make--collect-pre-evals (eval-forms no-jit)
+  "Assemble the ordered pre-load eval list from EVAL-FORMS and NO-JIT.
+EVAL-FORMS is a list of raw elisp form strings from `--eval'.  Each is
+validated and a `clime-usage-error' is signaled on the first form that
+is unreadable or that contains a newline/carriage return.  The latter is
+rejected because the launcher is a two-physical-line construct: an
+embedded newline would split line 2 and orphan the `clime-sh!:vN' tag,
+breaking tag detection, `update', and `strip'.  Write multi-form logic on
+a single line (e.g. `(progn ...)') instead.  When NO-JIT is non-nil,
+`clime-make--no-jit-eval' is prepended so it runs first.  Returns the
+combined list (may be nil)."
+  (dolist (form eval-forms)
+    (when (string-match-p "[\n\r]" form)
+      (signal 'clime-usage-error
+              (list (format "--eval form must be a single line (no newlines): %s"
+                            form))))
+    (condition-case _
+        (read form)
+      (error
+       (signal 'clime-usage-error
+               (list (format "invalid --eval form: %s" form))))))
+  (append (when no-jit (list clime-make--no-jit-eval))
+          eval-forms))
+
+(defun clime-make--make-shebang (env-vars load-paths resolve &optional pre-evals)
   "Build a two-line polyglot shebang string.
 ENV-VARS is a list of \"NAME=VALUE\" strings.
 LOAD-PATHS is a string of formatted -L flags (may be empty).
+PRE-EVALS is a list of raw elisp form strings injected as `--eval'
+tokens immediately after `-Q' and before the load paths / lexical-load
+loop, so they run before the app's first source load.  When nil, the
+emitted shebang is byte-identical to the no-injection form.
 When RESOLVE is non-nil, prepend symlink resolution via `realpath'
 so relative load paths work through symlink chains.  In this mode,
 load paths should use \"$D\" (resolved dirname) instead of
@@ -116,13 +166,20 @@ the lexical flag."
                      "(while t(eval(read(current-buffer))t))"
                      "(end-of-file nil)"
                      "(error(princ(format \\\"clime-sh!: load error: %S\\\\n\\\" err)"
-                     " #'external-debugging-output)(kill-emacs 1))))\"")))
-    (format "#!/bin/sh\n\":\"; %s%sexec emacs --batch -Q%s %s -- \"$@\" # clime-sh!:v%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
-            resolve-prefix env-prefix load-paths eval-form clime-make--shebang-version)))
+                     " #'external-debugging-output)(kill-emacs 1))))\""))
+         (pre-eval-form
+          (if pre-evals
+              (mapconcat (lambda (form)
+                           (format " --eval \"%s\"" (clime-make--shell-dquote form)))
+                         pre-evals "")
+            "")))
+    (format "#!/bin/sh\n\":\"; %s%sexec emacs --batch -Q%s%s %s -- \"$@\" # clime-sh!:v%s -*- mode: emacs-lisp; lexical-binding: t; -*-\n"
+            resolve-prefix env-prefix pre-eval-form load-paths eval-form clime-make--shebang-version)))
 
-(defun clime-make--write-shebang (target env-vars load-paths force &optional resolve)
+(defun clime-make--write-shebang (target env-vars load-paths force &optional resolve pre-evals)
   "Write a shebang to TARGET file, handling existing headers.
-ENV-VARS, LOAD-PATHS, and RESOLVE are passed to `clime-make--make-shebang'.
+ENV-VARS, LOAD-PATHS, RESOLVE, and PRE-EVALS are passed to
+`clime-make--make-shebang'.
 If TARGET has a clime-tagged shebang with a newer format version,
 signal an error (use FORCE to override).
 If TARGET has a clime-tagged shebang at same or older version,
@@ -130,7 +187,7 @@ replace it (return \"updated\").
 If TARGET has a non-clime shebang and FORCE is non-nil, replace it.
 If TARGET has a non-clime shebang and FORCE is nil, signal an error.
 If TARGET has no shebang, prepend one (return \"done\")."
-  (let ((shebang (clime-make--make-shebang env-vars load-paths resolve))
+  (let ((shebang (clime-make--make-shebang env-vars load-paths resolve pre-evals))
         (action nil))
     (with-temp-buffer
       (insert-file-contents target)
@@ -325,9 +382,11 @@ Returns FEATURE as a symbol, or nil if not found."
       (intern (match-string 1)))))
 
 (defun clime-make--shebang-line2 (file)
-  "Return line 2 of FILE, or nil if FILE has fewer than two lines."
+  "Return line 2 of FILE, or nil if FILE has fewer than two lines.
+Reads the full file: injected `--eval' forms can make line 2 exceed
+any fixed prefix."
   (with-temp-buffer
-    (insert-file-contents file nil 0 4096)
+    (insert-file-contents file)
     (goto-char (point-min))
     (when (zerop (forward-line 1))
       (buffer-substring (point) (line-end-position)))))
@@ -377,16 +436,77 @@ an env var).  Returns nil for files without a clime shebang."
 
 ;;; ─── Handlers ──────────────────────────────────────────────────────────
 
+(defun clime-make--clime-loadable-dir-p (dir)
+  "Return non-nil when DIR has a `require'-able Clime library.
+That is, a `clime.el' or `clime.elc' that `(require \\='clime)' would find
+once DIR is on `load-path'.  A directory holding only an extensionless
+bundle executable named `clime' does not qualify."
+  (or (file-exists-p (expand-file-name "clime.elc" dir))
+      (file-exists-p (expand-file-name "clime.el" dir))))
+
+(defun clime-make--resolve-clime-source (standalone)
+  "Resolve how to make the Clime library available to a generated app.
+Return nil when STANDALONE is non-nil — no Clime load path is needed, so
+`load-path' is left untouched.  Otherwise return a cons cell describing
+the injection the generated launcher needs:
+
+  (dir . DIRECTORY)  Emit `-L DIRECTORY'; the app's `(require \\='clime)'
+                     resolves `clime.el' there.  Used for source trees and
+                     for `dist/clime.el', whose directory holds a
+                     require-able `clime.el'.
+
+  (load . FILE)      Emit a pre-load `(load \"FILE\" nil t t)'; used when
+                     Clime is only available as a bundled executable whose
+                     basename is not `clime.el' (e.g. `bin/clime'), so
+                     `require' cannot find it on `load-path' but `load' can
+                     read it by absolute path (extension-agnostic).
+
+Resolution order: prefer `locate-library' (Clime already on `load-path');
+otherwise fall back to the executing file (`load-file-name') for a Clime
+loaded from a bundled/standalone executable.  In the fallback, use `-L'
+when the file's directory is require-able, else load the executable itself
+by absolute path.  Signal a `clime-usage-error' when neither can be
+determined."
+  (unless standalone
+    (let ((lib (locate-library "clime")))
+      (cond
+       (lib (cons 'dir (file-name-directory lib)))
+       (load-file-name
+        (let* ((self (file-truename (expand-file-name load-file-name)))
+               (dir (file-name-directory self)))
+          (if (clime-make--clime-loadable-dir-p dir)
+              (cons 'dir dir)
+            (cons 'load self))))
+       (t (signal 'clime-usage-error
+                  (list (concat "cannot determine Clime library; "
+                                "pass --standalone for a bundled executable "
+                                "or put Clime source on `load-path'"))))))))
+
 (defun clime-make--init-handler (ctx)
   "Handle the `init' command: add a polyglot shebang to an Elisp file.
 When --client is set, generate an emacsclient wrapper instead.
 CTX is the clime context."
   (clime-let ctx (file output (extras extra-load-path)
                        (rels rel-load-path) self-dir standalone force env
-                       client)
-    (let* ((clime-dir (file-name-directory (locate-library "clime")))
+                       client (eval-forms eval) no-jit)
+    (let* ((clime-src (clime-make--resolve-clime-source standalone))
+           ;; Directory form for the emacsclient wrapper (unchanged behavior):
+           ;; a `load' bundle has no require-able dir, so pass its containing
+           ;; directory as before.
+           (clime-dir (pcase clime-src
+                        (`(dir . ,d) d)
+                        (`(load . ,f) (file-name-directory f))))
            (source file)
-           (target (or output source)))
+           (target (or output source))
+           (pre-evals
+            (let ((base (clime-make--collect-pre-evals eval-forms no-jit)))
+              ;; Bundled Clime not require-able on `load-path': make it
+              ;; available by loading the executable itself by absolute path
+              ;; before the app body runs, so its `(require 'clime)' is a
+              ;; no-op.  `-L' would point at a directory without `clime.el'.
+              (if (eq (car clime-src) 'load)
+                  (cons (format "(load %S nil t t)" (cdr clime-src)) base)
+                base))))
       (let ((result
              (if client
                  ;; ── emacsclient wrapper ──
@@ -405,14 +525,17 @@ CTX is the clime context."
                            (mapconcat (lambda (p) (format " -L %S" (expand-file-name p)))
                                       extras "")
                          ""))
-                      (clime-flag (if standalone "" (format " -L %S" clime-dir)))
+                      (clime-flag (if (eq (car clime-src) 'dir)
+                                      (format " -L %S" (cdr clime-src))
+                                    ""))
                       (load-paths (concat self-dir-flag rel-flags clime-flag extra-flags)))
                  (when output
                    (let ((dir (file-name-directory target)))
                      (when (and dir (not (file-directory-p dir)))
                        (make-directory dir t)))
                    (copy-file source target t))
-                 (let ((action (clime-make--write-shebang target env load-paths force resolve)))
+                 (let ((action (clime-make--write-shebang target env load-paths force
+                                                          resolve pre-evals)))
                    (format "%s: %s is now executable" action target))))))
         (when (and output (not (string= source target)))
           (setq result (format "%s\n  output: %s" result target)))
@@ -646,6 +769,13 @@ CTX is the clime context."
   :type 'file
   :help "Write to OUTPUT instead of modifying the source file")
 
+(clime-defopt make-eval
+  :multiple
+  :help "Inject a pre-load --eval form (after -Q, before app load); repeatable")
+
+(clime-defopt make-no-jit
+  :bool :help "Disable native-comp JIT in the launcher (native-comp-jit-compilation nil)")
+
 ;;; ─── App Definition ─────────────────────────────────────────────────────
 
 (clime-app clime-make
@@ -668,6 +798,8 @@ CTX is the clime context."
     (clime-opt force ("--force" "-f") :from make-force)
     (clime-opt env ("--env" "-e") :from make-env)
     (clime-opt output ("--output" "-o") :from make-output)
+    (clime-opt eval ("--eval") :from make-eval)
+    (clime-opt no-jit ("--no-jit") :from make-no-jit)
 
     (clime-opt client ("--client")
       :bool :requires '(output)
@@ -722,6 +854,8 @@ CTX is the clime context."
     (clime-opt force ("--force" "-f") :from make-force)
     (clime-opt env ("--env" "-e") :from make-env)
     (clime-opt output ("--output" "-o") :from make-output)
+    (clime-opt eval ("--eval") :from make-eval)
+    (clime-opt no-jit ("--no-jit") :from make-no-jit)
 
     (clime-handler (ctx) (clime-make--quickstart-handler ctx)))
 

@@ -581,6 +581,224 @@ could signal with non-standard data.  The guard must handle this."
       (setq code (clime-run clime-test--after-exec-nil-app '("go"))))
     (should (= 0 code))))
 
+;;; ─── on-invocation (unified lifecycle hook) ─────────────────────────────
+
+(defvar clime-test--oi-hits 0
+  "Number of times `clime-test--oi-counter' has fired.")
+
+(defun clime-test--oi-counter (_ev)
+  "Increment `clime-test--oi-hits' for on-invocation tests."
+  (setq clime-test--oi-hits (1+ clime-test--oi-hits)))
+
+(defmacro clime-test--with-oi-app (sym events &rest body)
+  "Define a fresh app SYM with an :on-invocation hook collecting into EVENTS.
+The app exposes:
+  go      — success handler (prints \"done\")
+  boom    — runtime error handler
+  grp     — group WITHOUT a handler (no-handler path)
+BODY runs with the app defined and the hook installed."
+  (declare (indent 2))
+  `(let ((,events nil))
+     (eval '(clime-app ,sym
+              :version "9.9"
+              (clime-command go
+                :help "Go"
+                (clime-arg name :optional :default "world" :help "Name")
+                (clime-handler (ctx) (princ "done") nil))
+              (clime-command boom
+                :help "Boom"
+                (clime-handler (ctx) (error "kaboom")))
+              (clime-group grp
+                :help "Group, no handler"
+                (clime-command leaf
+                  :help "Leaf"
+                  (clime-handler (ctx) nil))))
+           t)
+     (setf (clime-app-on-invocation ,sym)
+           (list (lambda (ev) (push ev ,events))))
+     ,@body))
+
+(ert-deftest clime-test-run/on-invocation-success ()
+  "Unified hook fires once on success with a fully-populated event."
+  (clime-test--with-oi-app clime-test--oi-ok evs
+    (with-output-to-string (clime-run clime-test--oi-ok '("go" "Ada")))
+    (should (= 1 (length evs)))
+    (let ((ev (car evs)))
+      (should (clime-invocation-event-p ev))
+      (should (eq 'cli (clime-invocation-event-surface ev)))
+      (should (eq 'completed (clime-invocation-event-phase ev)))
+      (should (= 0 (clime-invocation-event-exit-code ev)))
+      (should (equal '("go" "Ada") (clime-invocation-event-argv ev)))
+      (should (equal '("clime-test--oi-ok" "go") (clime-invocation-event-path ev)))
+      (should (clime-context-p (clime-invocation-event-context ev)))
+      (should (equal "Ada" (plist-get (clime-invocation-event-params ev) 'name)))
+      (should (floatp (clime-invocation-event-start-time ev)))
+      (should (floatp (clime-invocation-event-duration ev)))
+      (should (>= (clime-invocation-event-duration ev) 0.0))
+      (should (null (clime-invocation-event-error-type ev)))
+      (should (null (clime-invocation-event-error-message ev))))))
+
+(ert-deftest clime-test-run/on-invocation-runtime-error ()
+  "Unified hook fires with phase runtime-error, exit 1, and the message."
+  (clime-test--with-oi-app clime-test--oi-rt evs
+    (let ((debug-on-error nil) (code nil))
+      (with-output-to-string
+        (setq code (clime-run clime-test--oi-rt '("boom"))))
+      (should (= 1 code))
+      (should (= 1 (length evs)))
+      (let ((ev (car evs)))
+        (should (eq 'runtime-error (clime-invocation-event-phase ev)))
+        (should (= 1 (clime-invocation-event-exit-code ev)))
+        (should (string-match-p "kaboom" (clime-invocation-event-error-message ev)))
+        (should (clime-invocation-event-error-type ev))
+        ;; context exists because the failure was inside the handler
+        (should (clime-context-p (clime-invocation-event-context ev)))))))
+
+(ert-deftest clime-test-run/on-invocation-usage-error ()
+  "Parse/usage failure fires the hook with phase usage-error, exit 2, no context."
+  (clime-test--with-oi-app clime-test--oi-use evs
+    (let ((code nil))
+      (with-output-to-string
+        (setq code (clime-run clime-test--oi-use '("nope-not-a-command"))))
+      (should (= 2 code))
+      (should (= 1 (length evs)))
+      (let ((ev (car evs)))
+        (should (eq 'usage-error (clime-invocation-event-phase ev)))
+        (should (= 2 (clime-invocation-event-exit-code ev)))
+        (should (clime-invocation-event-error-message ev))
+        ;; no context was built before the parse failed
+        (should (null (clime-invocation-event-context ev)))))))
+
+(ert-deftest clime-test-run/on-invocation-help ()
+  "--help fires the hook with phase help and exit 0."
+  (clime-test--with-oi-app clime-test--oi-help evs
+    (with-output-to-string (clime-run clime-test--oi-help '("--help")))
+    (should (= 1 (length evs)))
+    (let ((ev (car evs)))
+      (should (eq 'help (clime-invocation-event-phase ev)))
+      (should (= 0 (clime-invocation-event-exit-code ev))))))
+
+(ert-deftest clime-test-run/on-invocation-version ()
+  "--version fires the hook with phase version and exit 0."
+  (clime-test--with-oi-app clime-test--oi-ver evs
+    (with-output-to-string (clime-run clime-test--oi-ver '("--version")))
+    (should (= 1 (length evs)))
+    (should (eq 'version (clime-invocation-event-phase (car evs))))))
+
+(ert-deftest clime-test-run/on-invocation-handlerless-group-auto-help ()
+  "Invoking a handler-less group auto-shows help, fired as a help event.
+The parser pre-empts the defensive no-handler branch with auto-help, so
+the observable phase is `help' (exit 0), just like an explicit --help."
+  (clime-test--with-oi-app clime-test--oi-nh evs
+    (with-output-to-string (clime-run clime-test--oi-nh '("grp")))
+    (should (= 1 (length evs)))
+    (should (eq 'help (clime-invocation-event-phase (car evs))))
+    (should (= 0 (clime-invocation-event-exit-code (car evs))))))
+
+(ert-deftest clime-test-run/on-invocation-hook-error-isolated ()
+  "A broken hook does not crash the app, alter exit code, or block other hooks."
+  (clime-test--with-oi-app clime-test--oi-iso evs
+    (let ((second nil) (code nil))
+      (setf (clime-app-on-invocation clime-test--oi-iso)
+            (list (lambda (_ev) (error "logger broke"))
+                  (lambda (_ev) (setq second t))))
+      (with-output-to-string
+        (setq code (clime-run clime-test--oi-iso '("go"))))
+      (should (= 0 code))
+      (should second))))
+
+(ert-deftest clime-test-run/on-invocation-bare-function-normalized ()
+  "A bare :on-invocation function in the DSL is normalized to a hook list."
+  (setq clime-test--oi-hits 0)
+  (eval '(clime-app clime-test--oi-bare
+           :version "1"
+           :on-invocation #'clime-test--oi-counter
+           (clime-command go :help "Go" (clime-handler (ctx) nil)))
+        t)
+  (let ((hooks (clime-app-on-invocation clime-test--oi-bare)))
+    (should (listp hooks))
+    (should (= 1 (length hooks)))
+    (should (eq #'clime-test--oi-counter (car hooks))))
+  (with-output-to-string (clime-run clime-test--oi-bare '("go")))
+  (should (= 1 clime-test--oi-hits)))
+
+(ert-deftest clime-test-run/on-invocation-coexists-with-after-execute ()
+  "On success both hooks fire; on --help only on-invocation fires (documented)."
+  (let ((ae nil) (oi nil))
+    (eval '(clime-app clime-test--oi-coexist
+             :version "1"
+             (clime-command go :help "Go" (clime-handler (ctx) nil)))
+          t)
+    (setf (clime-app-after-execute clime-test--oi-coexist)
+          (list (lambda (_ctx _code _dur) (push 'ae ae))))
+    (setf (clime-app-on-invocation clime-test--oi-coexist)
+          (list (lambda (_ev) (push 'oi oi))))
+    ;; success: both fire
+    (with-output-to-string (clime-run clime-test--oi-coexist '("go")))
+    (should (equal '(ae) ae))
+    (should (equal '(oi) oi))
+    ;; help: after-execute does NOT fire, on-invocation DOES
+    (setq ae nil oi nil)
+    (with-output-to-string (clime-run clime-test--oi-coexist '("--help")))
+    (should (null ae))
+    (should (equal '(oi) oi))))
+
+(ert-deftest clime-test-run/on-invocation-run-from-values-surface ()
+  "clime-run-from-values produces consistent events; surface honors the dynvar."
+  (let ((evs nil))
+    (eval '(clime-app clime-test--oi-rfv
+             :version "1"
+             (clime-command go
+               :help "Go"
+               (clime-arg name :optional :default "x" :help "Name")
+               (clime-handler (ctx) (princ "ok") nil)))
+          t)
+    (setf (clime-app-on-invocation clime-test--oi-rfv)
+          (list (lambda (ev) (push ev evs))))
+    (let* ((node (cdr (assoc "go" (clime-group-children clime-test--oi-rfv))))
+           (vals (clime-values-set nil 'name "Bea" 'arg)))
+      ;; default surface
+      (clime-run-from-values clime-test--oi-rfv node '("clime-test--oi-rfv" "go") vals)
+      (should (eq 'run-from-values (clime-invocation-event-surface (car evs))))
+      (should (eq 'completed (clime-invocation-event-phase (car evs))))
+      ;; invoke surface via dynvar
+      (let ((clime--invocation-surface 'invoke))
+        (clime-run-from-values clime-test--oi-rfv node '("clime-test--oi-rfv" "go") vals))
+      (should (eq 'invoke (clime-invocation-event-surface (car evs)))))))
+
+(ert-deftest clime-test-run/on-invocation-documented-accessors-exist ()
+  "Every event accessor used by the README JSONL recipe is a real function.
+Doc-validation guard (child clime-jqv2.4kwn AC): if a struct field is
+renamed or dropped, the documented recipe breaks and this test fails."
+  (dolist (acc '(clime-invocation-event-app
+                 clime-invocation-event-surface
+                 clime-invocation-event-phase
+                 clime-invocation-event-argv
+                 clime-invocation-event-path
+                 clime-invocation-event-display-path
+                 clime-invocation-event-params
+                 clime-invocation-event-command
+                 clime-invocation-event-context
+                 clime-invocation-event-exit-code
+                 clime-invocation-event-error-type
+                 clime-invocation-event-error-message
+                 clime-invocation-event-start-time
+                 clime-invocation-event-duration
+                 clime-invocation-event-format))
+    (should (fboundp acc)))
+  ;; The recipe's redaction shape works on a real params plist.
+  (let* ((ev (clime-invocation-event--create
+              :params '(password "hunter2" user "alice")))
+         (re "\\(pass\\|secret\\|token\\|key\\|auth\\|cred\\)")
+         (plist (clime-invocation-event-params ev))
+         out)
+    (while plist
+      (let ((k (pop plist)) (v (pop plist)))
+        (push (cons k (if (string-match-p re (symbol-name k)) "<redacted>" v))
+              out)))
+    (should (equal "<redacted>" (cdr (assq 'password out))))
+    (should (equal "alice" (cdr (assq 'user out))))))
+
 ;;; ─── clime-run-client ───────────────────────────────────────────────────
 
 (defvar clime-test--client-app nil
@@ -827,6 +1045,42 @@ could signal with non-standard data.  The guard must handle this."
                              (setq ctx-command (clime-context-command ctx))))))
       (clime-run-from-values app2 app2 '("myapp2") nil)
       (should (null ctx-command)))))
+
+;;; ─── Group-Level Output Formats ─────────────────────────────────────────
+
+(ert-deftest clime-test-run/detect-group-output-format ()
+  "`clime--detect-output-format' finds a format declared on a group."
+  (let ((app (clime-app gfmt
+               (clime-group reports
+                 (clime-output-format json ("--json") :help "JSON")
+                 (clime-command summary
+                   :handler (lambda (_ctx) "ok"))))))
+    ;; flag present anywhere in argv → group format is detected
+    (let ((fmt (clime--detect-output-format app '("reports" "summary" "--json"))))
+      (should (clime-output-format-p fmt))
+      (should (eq (clime-output-format-name fmt) 'json)))
+    ;; absent → nil (text mode)
+    (should (null (clime--detect-output-format app '("reports" "summary"))))))
+
+(ert-deftest clime-test-run/group-format-drives-output ()
+  "A group-declared format flag activates that format's encoder for a
+descendant command at runtime."
+  (let ((app (clime-app gfmt2
+               (clime-group reports
+                 (clime-output-format wrap ("--wrap")
+                   :streaming t
+                   :encoder (lambda (data) (format "WRAP[%s]" data)))
+                 (clime-command summary
+                   :handler (lambda (_ctx) "hi"))))))
+    (clime-test-with-run-output
+      (let ((code (clime-run app '("reports" "summary" "--wrap"))))
+        (should (= code 0))
+        (should (string-match-p "WRAP\\[hi\\]" clime-test--run-output))))
+    ;; Without the flag → plain text, no wrapping
+    (clime-test-with-run-output
+      (clime-run app '("reports" "summary"))
+      (should (string-match-p "hi" clime-test--run-output))
+      (should-not (string-match-p "WRAP" clime-test--run-output)))))
 
 (provide 'clime-run-tests)
 ;;; clime-run-tests.el ends here

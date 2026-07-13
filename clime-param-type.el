@@ -83,7 +83,7 @@ or a list (HEAD . ARGS) where HEAD is a registered type name."
   "Define and register a type constructor NAME.
 ARGLIST receives the cdr of the type spec (e.g., for `(integer 1 100)',
 ARGLIST gets `(1 100)').  BODY must return a type plist
-\(:parse FN :describe STR [:choices LIST]).
+\(:parse FN :describe STR [:choices LIST]).  DOCSTRING documents the type.
 
 Example:
   (clime-deftype port ()

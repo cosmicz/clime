@@ -264,7 +264,7 @@ Cycles: nil → last, first → nil."
          (t (nth (1- pos) choices)))))))
 
 (defun clime-invoke--cycle-ternary (current pos-flag neg-flag)
-  "Cycle ternary state: nil → POS-FLAG → NEG-FLAG → nil."
+  "Cycle CURRENT ternary state: nil → POS-FLAG → NEG-FLAG → nil."
   (cond
    ((null current) pos-flag)
    ((equal current pos-flag) neg-flag)
@@ -878,7 +878,7 @@ AT-ROOT non-nil means q exits entirely.  DIMMED dims all keys."
   "Render the menu for NODE with KEY-MAP and ERROR-MSG.
 When KEY-MAP is nil, builds one automatically from NODE.
 AT-ROOT non-nil means this is the entry-point node (q exits entirely).
-VALIDATION-RESULT is (PARAM-ERRORS . GENERAL-ERRORS) from `clime-invoke--validate-all'.
+VALIDATION-RESULT is the result from `clime-invoke--validate-all'.
 PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active.
 Uses 3-column layout: Key | Value | Desc."
   (unless key-map
@@ -933,7 +933,8 @@ Uses 3-column layout: Key | Value | Desc."
 
 
 (defun clime-invoke--display-key (key)
-  "Format KEY for display.  Converts \"- v\" to \"-v\"."
+  "Format KEY for display.
+Convert \"- v\" to \"-v\"."
   (if (string-match "\\`- \\(.\\)\\'" key)
       (concat "-" (match-string 1 key))
     key))
@@ -961,6 +962,7 @@ Extracts the letter from \"- v\" and prepends PREFIX (e.g. \"=v\")."
                                   &optional at-root validation-result
                                   prefix-state)
   "Render menu for NODE into BUFFER.
+KEY-MAP is the active key map.  ERROR-MSG is shown inline.
 VALIDATION-RESULT is (PARAM-ERRORS . GENERAL-ERRORS) or nil.
 PREFIX-STATE is nil, \"-\", or \"=\" when a prefix key is active."
   (with-current-buffer buffer
@@ -1001,9 +1003,11 @@ Sets `clime-invoke--values'."
     ;; Merge user-provided params on top
     (cl-loop for (k v) on params by #'cddr
              do (setq values (clime-values-set values k v 'user)))
-    ;; Apply env vars and defaults (same as parser)
+    ;; Apply env vars and defaults (same as parser).  Wrap in
+    ;; `clime-dotenv-with-app-env' so :dotenv values feed the env layer.
     (when app
-      (setq values (clime--apply-env all-nodes values app)))
+      (clime-dotenv-with-app-env app
+        (setq values (clime--apply-env all-nodes values app))))
     (setq values (clime--apply-defaults all-nodes values))
     (setq clime-invoke--values values)))
 
@@ -1011,15 +1015,17 @@ Sets `clime-invoke--values'."
   "Return non-nil if PARAM already has a value from user or environment.
 Checks `clime-invoke--values' for a user-sourced value, then falls
 back to checking the environment variable (if PARAM is an option
-with :env configured under APP)."
+with :env configured under APP).  The env check honors APP's :dotenv."
   (or (eq 'user (clime-values-source clime-invoke--values
                                      (clime-param-name param)))
       (and (clime-option-p param)
            (when-let ((env-name (clime--env-var-for-option param app)))
-             (getenv env-name)))))
+             (clime-dotenv-with-app-env app
+               (getenv env-name))))))
 
 (defun clime-invoke--collect-ask-params (node ask &optional app)
   "Return list of param structs to prompt for based on ASK.
+NODE provides the available params.
 ASK is t (all required), a list of symbols (specific params), or nil.
 APP is the root app (for env var resolution).
 Skips params already satisfied by user-provided values or
@@ -1060,7 +1066,7 @@ environment variables."
   "Prompt user for each param in PARAMS via minibuffer.
 When NODE and BUF are provided, re-renders the menu after each
 prompt so the user sees values update live.
-Returns t if all prompts completed, nil if user quit (C-g)."
+Returns t if all prompts completed, nil if user quit."
   (condition-case nil
       (progn
         (dolist (p params)
@@ -1232,7 +1238,8 @@ Unlike cycling, this prompts the user for an explicit value."
   "Run NODE's handler using `clime-invoke--values', returning (EXIT-CODE . OUTPUT).
 APP is the root app.  PATH is the command path list.
 Delegates to `clime-run-from-values' for the finalize → execute pipeline."
-  (clime-run-from-values app node path clime-invoke--values))
+  (let ((clime--invocation-surface 'invoke))
+    (clime-run-from-values app node path clime-invoke--values)))
 
 ;;; ─── Output Display ─────────────────────────────────────────────────
 
@@ -1274,7 +1281,7 @@ DISPLAY controls how the output is shown:
 
 (defun clime-invoke--read-prefixed-key (prefix)
   "Read one more key after PREFIX with timeout.
-Returns the full key string (e.g. \"- v\") or nil on timeout/C-g."
+Returns the full key string (e.g. \"- v\") or nil on timeout or quit."
   (let ((ch (read-event (format "%s " prefix) nil clime-invoke-prefix-timeout)))
     (message nil)
     (cond

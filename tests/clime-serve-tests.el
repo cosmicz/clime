@@ -21,6 +21,12 @@
     (require 'clime-serve)
   (error nil))
 
+(defun clime-test-serve--require-web-server ()
+  "Require `web-server' for real HTTP integration tests."
+  (unless (require 'web-server nil t)
+    (ert-fail
+     "clime serve integration tests require web-server; run `make submodules' or add lib/web-server to `load-path'.")))
+
 ;;; ─── Test Fixtures ──────────────────────────────────────────────────────
 
 (eval '(clime-app clime-test--serve-app
@@ -101,6 +107,10 @@
            :help "List items"
            (clime-handler (ctx)
              (clime-out '(("items" . [1 2 3])))))
+         (clime-command badreq
+           :help "Signals a usage (client) error"
+           (clime-handler (ctx)
+             (signal 'clime-usage-error (list "bad input"))))
          (clime-group db
            :help "Database"
            (clime-command status
@@ -306,6 +316,97 @@ Regression test for URL-decode fix (clime-azs1)."
                                        '("boom") nil)))
     (should (equal (plist-get result :status) 500))))
 
+(ert-deftest clime-test-serve/dispatch-usage-error-400-json ()
+  "A handler `clime-usage-error' returns 400 with the format error envelope.
+With a json default-format the body is the json error object, not raw
+text (regression for the serve usage-error rendering fix)."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((json-fmt (cl-find 'json (clime-app-output-formats
+                                   clime-test--serve-fmt-app)
+                            :key #'clime-output-format-name))
+         (result (clime-serve--dispatch clime-test--serve-fmt-app
+                                        '("badreq") nil json-fmt)))
+    (should (equal (plist-get result :status) 400))
+    (should (equal (plist-get result :content-type) "application/json"))
+    (let ((obj (json-read-from-string (plist-get result :body))))
+      (should (equal (cdr (assq 'error obj)) "bad input")))))
+
+;;; ─── on-invocation events through serve ─────────────────────────────────
+
+(ert-deftest clime-test-serve/on-invocation-surface-serve ()
+  "Serve dispatch fires the unified hook with surface `serve' on success."
+  (skip-unless (featurep 'clime-serve))
+  (let ((evs nil))
+    (unwind-protect
+        (progn
+          (setf (clime-app-on-invocation clime-test--serve-app)
+                (list (lambda (ev) (push ev evs))))
+          (let ((result (clime-serve--dispatch clime-test--serve-app '("health") nil)))
+            (should (equal (plist-get result :status) 200))
+            (should (= 1 (length evs)))
+            (let ((ev (car evs)))
+              (should (eq 'serve (clime-invocation-event-surface ev)))
+              (should (eq 'completed (clime-invocation-event-phase ev)))
+              (should (= 0 (clime-invocation-event-exit-code ev))))))
+      (setf (clime-app-on-invocation clime-test--serve-app) nil))))
+
+(ert-deftest clime-test-serve/on-invocation-serve-runtime-error ()
+  "Serve dispatch of a failing handler fires a runtime-error event (exit 1)."
+  (skip-unless (featurep 'clime-serve))
+  (let ((evs nil))
+    (unwind-protect
+        (progn
+          (setf (clime-app-on-invocation clime-test--serve-err-app)
+                (list (lambda (ev) (push ev evs))))
+          (let ((result (clime-serve--dispatch clime-test--serve-err-app '("boom") nil)))
+            (should (equal (plist-get result :status) 500))
+            (should (= 1 (length evs)))
+            (let ((ev (car evs)))
+              (should (eq 'serve (clime-invocation-event-surface ev)))
+              (should (eq 'runtime-error (clime-invocation-event-phase ev)))
+              (should (= 1 (clime-invocation-event-exit-code ev)))
+              (should (string-match-p "Kaboom" (clime-invocation-event-error-message ev))))))
+      (setf (clime-app-on-invocation clime-test--serve-err-app) nil))))
+
+(ert-deftest clime-test-serve/on-invocation-unknown-route-404 ()
+  "An unknown route fires a not-found event even though no handler runs."
+  (skip-unless (featurep 'clime-serve))
+  (let ((evs nil))
+    (unwind-protect
+        (progn
+          (setf (clime-app-on-invocation clime-test--serve-app)
+                (list (lambda (ev) (push ev evs))))
+          (let ((result (clime-serve--dispatch clime-test--serve-app '("nonexistent") nil)))
+            (should (equal (plist-get result :status) 404))
+            (should (= 1 (length evs)))
+            (let ((ev (car evs)))
+              (should (eq 'serve (clime-invocation-event-surface ev)))
+              (should (eq 'not-found (clime-invocation-event-phase ev)))
+              (should (equal '("nonexistent") (clime-invocation-event-path ev)))
+              (should (clime-invocation-event-error-message ev))
+              ;; no handler executed → nil exit code, no context
+              (should (null (clime-invocation-event-exit-code ev)))
+              (should (null (clime-invocation-event-context ev)))
+              (should (floatp (clime-invocation-event-duration ev))))))
+      (setf (clime-app-on-invocation clime-test--serve-app) nil))))
+
+(ert-deftest clime-test-serve/on-invocation-handlerless-group-404 ()
+  "Dispatching to a handlerless group fires a not-found event (404)."
+  (skip-unless (featurep 'clime-serve))
+  (let ((evs nil))
+    (unwind-protect
+        (progn
+          (setf (clime-app-on-invocation clime-test--serve-app)
+                (list (lambda (ev) (push ev evs))))
+          (let ((result (clime-serve--dispatch clime-test--serve-app '("db") nil)))
+            (should (equal (plist-get result :status) 404))
+            (should (= 1 (length evs)))
+            (let ((ev (car evs)))
+              (should (eq 'serve (clime-invocation-event-surface ev)))
+              (should (eq 'not-found (clime-invocation-event-phase ev)))
+              (should (equal '("db") (clime-invocation-event-path ev))))))
+      (setf (clime-app-on-invocation clime-test--serve-app) nil))))
+
 ;;; ─── Introspection ──────────────────────────────────────────────────────
 
 (ert-deftest clime-test-serve/routes-introspection ()
@@ -321,7 +422,7 @@ Regression test for URL-decode fix (clime-azs1)."
 (ert-deftest clime-test-serve/start-and-stop ()
   "clime-serve starts a server and clime-serve-stop stops it."
   (skip-unless (featurep 'clime-serve))
-  (skip-unless (featurep 'web-server))
+  (clime-test-serve--require-web-server)
   (let ((port 9876)
         (server nil))
     (unwind-protect
@@ -338,7 +439,7 @@ Regression test for URL-decode fix (clime-azs1)."
 (ert-deftest clime-test-serve/integration-http-get ()
   "Integration: start server, GET /health, verify response."
   (skip-unless (featurep 'clime-serve))
-  (skip-unless (featurep 'web-server))
+  (clime-test-serve--require-web-server)
   (let ((port 9877)
         (server nil))
     (unwind-protect
@@ -360,7 +461,7 @@ Regression test for URL-decode fix (clime-azs1)."
 (ert-deftest clime-test-serve/integration-nested-with-option ()
   "Integration: GET /db/migrate?dry-run returns dry."
   (skip-unless (featurep 'clime-serve))
-  (skip-unless (featurep 'web-server))
+  (clime-test-serve--require-web-server)
   (let ((port 9878)
         (server nil))
     (unwind-protect
@@ -380,7 +481,7 @@ Regression test for URL-decode fix (clime-azs1)."
 (ert-deftest clime-test-serve/integration-path-params ()
   "Integration: GET /agent/abc123/start returns started:abc123."
   (skip-unless (featurep 'clime-serve))
-  (skip-unless (featurep 'web-server))
+  (clime-test-serve--require-web-server)
   (let ((port 9879)
         (server nil))
     (unwind-protect
@@ -402,7 +503,7 @@ Regression test for URL-decode fix (clime-azs1)."
   "Integration: percent-encoded path segment is decoded before dispatch.
 Regression test for URL-decode fix (clime-azs1)."
   (skip-unless (featurep 'clime-serve))
-  (skip-unless (featurep 'web-server))
+  (clime-test-serve--require-web-server)
   (let ((port 9882)
         (server nil))
     (unwind-protect
@@ -423,7 +524,7 @@ Regression test for URL-decode fix (clime-azs1)."
 (ert-deftest clime-test-serve/integration-404 ()
   "Integration: GET /nonexistent returns 404."
   (skip-unless (featurep 'clime-serve))
-  (skip-unless (featurep 'web-server))
+  (clime-test-serve--require-web-server)
   (let ((port 9880)
         (server nil))
     (unwind-protect
@@ -442,7 +543,7 @@ Regression test for URL-decode fix (clime-azs1)."
 (ert-deftest clime-test-serve/integration-introspection ()
   "Integration: GET /_routes returns command listing."
   (skip-unless (featurep 'clime-serve))
-  (skip-unless (featurep 'web-server))
+  (clime-test-serve--require-web-server)
   (let ((port 9881)
         (server nil))
     (unwind-protect
@@ -767,7 +868,7 @@ Regression test for URL-decode fix (clime-azs1)."
 (ert-deftest clime-test-serve/integration-api-meta ()
   "Integration: GET /_api/meta returns app data over HTTP."
   (skip-unless (featurep 'clime-serve))
-  (skip-unless (featurep 'web-server))
+  (clime-test-serve--require-web-server)
   (let ((port 9883)
         (server nil))
     (unwind-protect
@@ -941,15 +1042,53 @@ Regression test for URL-decode fix (clime-azs1)."
                                          '("agent" "42" "start.json") nil)))
     (should (equal (plist-get result :status) 404))))
 
-(ert-deftest clime-test-serve/api-no-json-format-stays-text ()
-  "/_api/meta on app without JSON format returns text."
+(ert-deftest clime-test-serve/api-defaults-to-json-without-app-format ()
+  "/_api/meta on app WITHOUT a JSON format still returns JSON.
+The _api group auto-declares json, so introspection endpoints default to
+application/json even when the app registers no output formats."
   (skip-unless (featurep 'clime-serve))
-  ;; clime-test--serve-app has no output-formats → _api default doesn't activate
+  ;; clime-test--serve-app has no output-formats → _api still defaults to json
   (let* ((result (clime-serve--dispatch clime-test--serve-app
                                          '("_api" "meta") nil))
-         (ct (plist-get result :content-type)))
+         (ct (plist-get result :content-type))
+         (body (plist-get result :body)))
     (should (equal (plist-get result :status) 200))
-    (should (equal ct "text/plain; charset=utf-8"))))
+    (should (equal ct "application/json"))
+    ;; Body must be valid JSON with the expected app metadata
+    (let ((parsed (json-read-from-string body)))
+      (should (equal (cdr (assq 'name parsed)) "clime-test--serve-app")))))
+
+(ert-deftest clime-test-serve/api-commands-defaults-to-json-without-app-format ()
+  "/_api/commands on app WITHOUT a JSON format returns parseable JSON."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((result (clime-serve--dispatch clime-test--serve-app
+                                         '("_api" "commands") nil))
+         (ct (plist-get result :content-type))
+         (body (plist-get result :body)))
+    (should (equal (plist-get result :status) 200))
+    (should (equal ct "application/json"))
+    (let ((parsed (json-read-from-string body)))
+      (should (assq 'commands parsed)))))
+
+(ert-deftest clime-test-serve/api-honors-app-json-format ()
+  "/_api/meta on app WITH a registered json format still returns JSON."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((result (clime-serve--dispatch clime-test--serve-fmt-app
+                                         '("_api" "meta") nil))
+         (ct (plist-get result :content-type))
+         (body (plist-get result :body)))
+    (should (equal (plist-get result :status) 200))
+    (should (equal ct "application/json"))
+    (should (json-read-from-string body))))
+
+(ert-deftest clime-test-serve/api-group-auto-declares-json ()
+  "The injected _api group carries a json output-format in its slot."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((api (cdr (assoc "_api" (clime-group-children clime-test--serve-app))))
+         (fmt (and api (cl-find 'json (clime-group-output-formats api)
+                                :key #'clime-output-format-name))))
+    (should api)
+    (should (clime-output-format-p fmt))))
 
 (ert-deftest clime-test-serve/suffix-404-has-content-type ()
   "404 responses include content-type text/plain."
@@ -1017,6 +1156,215 @@ Regression test for URL-decode fix (clime-azs1)."
     (let ((count-before (length (clime-group-children app))))
       (clime-serve--inject-api-commands app)
       (should (equal count-before (length (clime-group-children app)))))))
+
+;;; ─── Default-format resolution (clime-serve--resolve-format) ──────────
+
+(defun clime-test--serve-json-fmt ()
+  "Return the json `clime-output-format' registered on the fmt test app."
+  (cl-find 'json (clime-app-output-formats clime-test--serve-fmt-app)
+           :key #'clime-output-format-name))
+
+(ert-deftest clime-test-serve/resolve-format-nil ()
+  "Nil default-format resolves to nil (text behavior)."
+  (skip-unless (featurep 'clime-serve))
+  (should (null (clime-serve--resolve-format clime-test--serve-fmt-app nil))))
+
+(ert-deftest clime-test-serve/resolve-format-symbol ()
+  "A registered format-name symbol resolves to its format struct."
+  (skip-unless (featurep 'clime-serve))
+  (let ((fmt (clime-serve--resolve-format clime-test--serve-fmt-app 'json)))
+    (should (clime-output-format-p fmt))
+    (should (eq (clime-output-format-name fmt) 'json))))
+
+(ert-deftest clime-test-serve/resolve-format-struct-passthrough ()
+  "A format struct is returned as-is."
+  (skip-unless (featurep 'clime-serve))
+  (let ((fmt (clime-test--serve-json-fmt)))
+    (should (eq (clime-serve--resolve-format clime-test--serve-fmt-app fmt)
+                fmt))))
+
+(ert-deftest clime-test-serve/resolve-format-unknown-errors ()
+  "An unregistered format name signals an error."
+  (skip-unless (featurep 'clime-serve))
+  (should-error (clime-serve--resolve-format clime-test--serve-fmt-app 'xml)))
+
+;;; ─── Default-format bare-route dispatch ────────────────────────────────
+
+(ert-deftest clime-test-serve/default-format-bare-route-json ()
+  "A bare route (no .ext suffix) honors the default-format → JSON."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((fmt (clime-test--serve-json-fmt))
+         (result (clime-serve--dispatch clime-test--serve-fmt-app
+                                        '("list") nil fmt)))
+    (should (equal (plist-get result :status) 200))
+    (should (equal (plist-get result :content-type) "application/json"))
+    (should (let ((parsed (json-read-from-string (plist-get result :body))))
+              (equal (cdr (assq 'items parsed)) [1 2 3])))))
+
+;;; ─── Auth gate (clime-serve--auth-gate / --unauthorized) ───────────────
+
+(ert-deftest clime-test-serve/auth-gate-nil-ungated ()
+  "Nil auth never gates (returns nil → request proceeds)."
+  (skip-unless (featurep 'clime-serve))
+  (should (null (clime-serve--auth-gate nil '(:path "/x") nil))))
+
+(ert-deftest clime-test-serve/auth-gate-allow ()
+  "An allowing predicate (non-nil return) does not gate."
+  (skip-unless (featurep 'clime-serve))
+  (should (null (clime-serve--auth-gate (lambda (_req) t) '(:path "/x") nil))))
+
+(ert-deftest clime-test-serve/auth-gate-reject-text ()
+  "A rejecting predicate with no format → 401 text/plain."
+  (skip-unless (featurep 'clime-serve))
+  (let ((r (clime-serve--auth-gate (lambda (_req) nil) '(:path "/x") nil)))
+    (should (equal (plist-get r :status) 401))
+    (should (equal (plist-get r :content-type) "text/plain; charset=utf-8"))
+    (should (string-match-p "Unauthorized" (plist-get r :body)))))
+
+(ert-deftest clime-test-serve/auth-gate-reject-json-envelope ()
+  "A rejecting predicate with the json format → 401, application/json, and a
+JSON body equivalent to ((error . \"unauthorized\"))."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((fmt (clime-test--serve-json-fmt))
+         (r (clime-serve--auth-gate (lambda (_req) nil) '(:path "/x") fmt)))
+    (should (equal (plist-get r :status) 401))
+    (should (equal (plist-get r :content-type) "application/json"))
+    (let ((parsed (json-read-from-string (plist-get r :body))))
+      (should (equal (cdr (assq 'error parsed)) "unauthorized")))))
+
+(ert-deftest clime-test-serve/auth-predicate-sees-headers ()
+  "The auth predicate receives request-info with :headers reachable, so a
+later bearer-token predicate can read an Authorization entry."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((seen nil)
+         (pred (lambda (req)
+                 (setq seen (plist-get req :headers))
+                 (equal "Bearer sekret"
+                        (cdr (assoc :AUTHORIZATION (plist-get req :headers))))))
+         (req-info (list :method 'GET :path "/x"
+                         :headers '((:AUTHORIZATION . "Bearer sekret"))
+                         :body nil)))
+    ;; Allowed because the predicate finds the Authorization header.
+    (should (null (clime-serve--auth-gate pred req-info nil)))
+    (should (equal seen '((:AUTHORIZATION . "Bearer sekret"))))))
+
+;;; ─── Integration: default-format + auth (real server) ──────────────────
+
+(defun clime-test--serve-raw-get (port path)
+  "Do a bare HTTP/1.0 GET of PATH on 127.0.0.1:PORT; return the raw
+response string (status line + headers + CRLFCRLF + body).  Avoids
+`url.el' so a 401 response is read verbatim without auth prompts or
+authinfo lookups in batch."
+  (let ((proc (open-network-stream "clime-test-raw" nil "127.0.0.1" port))
+        (out ""))
+    (set-process-coding-system proc 'binary 'binary)
+    (set-process-filter proc (lambda (_p s) (setq out (concat out s))))
+    (process-send-string
+     proc (format "GET %s HTTP/1.0\r\nHost: 127.0.0.1:%d\r\n\r\n" path port))
+    (while (accept-process-output proc 5))
+    (ignore-errors (delete-process proc))
+    out))
+
+(ert-deftest clime-test-serve/integration-default-format-json ()
+  "clime-serve :default-format 'json → bare /list returns application/json."
+  (skip-unless (featurep 'clime-serve))
+  (clime-test-serve--require-web-server)
+  (let ((port 9890) (server nil) (auth-sources nil))
+    (unwind-protect
+        (progn
+          (setq server (clime-serve clime-test--serve-fmt-app
+                                    :port port :default-format 'json))
+          (let* ((url-request-method "GET")
+                 (buf (url-retrieve-synchronously
+                       (format "http://127.0.0.1:%d/list" port) t nil 5)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (goto-char (point-min))
+                  (should (search-forward "200" nil t))
+                  (goto-char (point-min))
+                  (should (re-search-forward
+                           "Content-Type: application/json" nil t))
+                  (goto-char (point-min))
+                  (search-forward "\n\n" nil t)
+                  (let ((parsed (json-read-from-string
+                                 (buffer-substring (point) (point-max)))))
+                    (should (equal (cdr (assq 'items parsed)) [1 2 3]))))
+              (kill-buffer buf))))
+      (when server (clime-serve-stop server)))))
+
+(ert-deftest clime-test-serve/integration-auth-reject-json ()
+  "clime-serve :auth reject with :default-format 'json → 401, application/json,
+JSON error envelope, and the handler is never invoked."
+  (skip-unless (featurep 'clime-serve))
+  (clime-test-serve--require-web-server)
+  (let ((port 9891) (server nil)
+        (auth (lambda (req)
+                (equal "sekret"
+                       (cdr (assoc "token" (plist-get req :headers)))))))
+    (unwind-protect
+        (progn
+          (setq server (clime-serve clime-test--serve-fmt-app
+                                    :port port :default-format 'json :auth auth))
+          ;; No token → rejected before dispatch (raw GET: a 401 must not
+          ;; drag url.el into interactive auth / authinfo in batch).
+          (let* ((resp (clime-test--serve-raw-get port "/list"))
+                 (sep (string-match "\r\n\r\n" resp))
+                 (head (substring resp 0 sep))
+                 (body (substring resp (+ sep 4)))
+                 (parsed (json-read-from-string body)))
+            (should (string-match-p "\\`HTTP/[0-9.]+ 401" head))
+            (should (string-match-p "Content-Type: application/json" head))
+            (should (equal (cdr (assq 'error parsed)) "unauthorized"))
+            ;; handler never ran → no items leaked into the body
+            (should-not (string-match-p "items" body))))
+      (when server (clime-serve-stop server)))))
+
+(ert-deftest clime-test-serve/integration-auth-allow ()
+  "clime-serve :auth allow (token present) → 200 and handler output."
+  (skip-unless (featurep 'clime-serve))
+  (clime-test-serve--require-web-server)
+  (let ((port 9892) (server nil) (auth-sources nil)
+        (auth (lambda (req)
+                (equal "sekret"
+                       (cdr (assoc "token" (plist-get req :headers)))))))
+    (unwind-protect
+        (progn
+          (setq server (clime-serve clime-test--serve-fmt-app
+                                    :port port :default-format 'json :auth auth))
+          (let* ((url-request-method "GET")
+                 (buf (url-retrieve-synchronously
+                       (format "http://127.0.0.1:%d/list?token=sekret" port)
+                       t nil 5)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (goto-char (point-min))
+                  (should (search-forward "200" nil t))
+                  (goto-char (point-min))
+                  (search-forward "\n\n" nil t)
+                  (let ((parsed (json-read-from-string
+                                 (buffer-substring (point) (point-max)))))
+                    (should (equal (cdr (assq 'items parsed)) [1 2 3]))))
+              (kill-buffer buf))))
+      (when server (clime-serve-stop server)))))
+
+(ert-deftest clime-test-serve/integration-nil-auth-ungated ()
+  "clime-serve with no :auth serves without gating (200)."
+  (skip-unless (featurep 'clime-serve))
+  (clime-test-serve--require-web-server)
+  (let ((port 9893) (server nil) (auth-sources nil))
+    (unwind-protect
+        (progn
+          (setq server (clime-serve clime-test--serve-fmt-app
+                                    :port port :default-format 'json))
+          (let* ((url-request-method "GET")
+                 (buf (url-retrieve-synchronously
+                       (format "http://127.0.0.1:%d/list" port) t nil 5)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (goto-char (point-min))
+                  (should (search-forward "200" nil t)))
+              (kill-buffer buf))))
+      (when server (clime-serve-stop server)))))
 
 (provide 'clime-serve-tests)
 ;;; clime-serve-tests.el ends here

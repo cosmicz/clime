@@ -23,19 +23,7 @@ lint:
 	@echo "Running lint checks..."
 	@$(BATCH) --eval '(require (quote bytecomp))' --eval '(setq byte-compile-error-on-warn t byte-compile-warnings (quote (not docstrings-wide)) byte-compile-docstring-max-column 10000)' -f batch-byte-compile $(SRCS)
 	@echo "Byte-compile clean."
-	@$(BATCH) --eval '\
-	  (let ((files (directory-files "." t "^clime.*\\.el$$")) \
-	        (ok t)) \
-	    (dolist (f files) \
-	      (with-temp-buffer \
-	        (insert-file-contents f) \
-	        (emacs-lisp-mode) \
-	        (condition-case err \
-	            (checkdoc-current-buffer t) \
-	          (error (setq ok nil) \
-	                 (message "checkdoc: %s: %s" f (error-message-string err)))))) \
-	    (unless ok (kill-emacs 1)))' \
-		2>&1 || true
+	@$(BATCH) --eval '(require (quote checkdoc))' --eval '(setq checkdoc-autofix-flag nil checkdoc--argument-missing-flag nil checkdoc-verb-check-experimental-flag nil)' --eval '(let ((files (directory-files "." t "^clime.*\\.el$$")) (ok t)) (dolist (f files) (with-temp-buffer (insert-file-contents f) (emacs-lisp-mode) (condition-case err (checkdoc-current-buffer) (error (setq ok nil) (message "checkdoc: %s: %s" f (error-message-string err)))))) (unless ok (kill-emacs 1)))'
 	@echo "Lint complete."
 
 SEL ?= ^clime-test-
@@ -50,11 +38,12 @@ test: clean-elc submodules
 		--eval '(clime-run-tests-batch "$(SELECTOR)")' \
 		< /dev/null
 
-test-all: bin/clime-make bin/greeter bin/pkm test
+test-all: bin/clime-make bin/clime bin/greeter bin/pkm test
 
 DIST_DIR ?= dist
 DIST_SRCS = clime-settings.el clime-core.el clime-param-type.el clime-parse.el \
-	clime-config.el clime-dsl.el clime-help.el clime-output.el clime-run.el \
+	clime-config.el clime-dsl.el clime-help.el clime-output.el \
+	clime-dotenv.el clime-run.el \
 	clime-invoke.el clime-serve.el clime.el clime-make.el
 
 dist:

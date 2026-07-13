@@ -263,5 +263,38 @@
          (opt (clime-node-find-option app "--skip")))
     (should (equal (clime-option-requires opt) '(reason)))))
 
+;;; ─── Nested Inline Groups ───────────────────────────────────────────
+
+(ert-deftest clime-test-requires/options-in-inline-group-are-checked ()
+  ":requires on options inside a nested inline group are visible to the
+checker.  Regression: previously `clime--find-unsatisfied-requires' used
+the flat `clime-node-options' instead of the recursive
+`clime-node-all-options', so constraints on options nested inside an
+inline group were silently never enforced."
+  (eval
+   '(clime-app clime-test--requires-inline-group-app
+      :version "1"
+      (clime-command run
+        :help "Run"
+        (clime-group section-write :inline t
+          (clime-option section ("--section") :help "Target section")
+          (clime-option content ("--content")
+                        :requires '(section)
+                        :help "Section content"))
+        (clime-handler (_ctx) "ok")))
+   t)
+  (let ((app (symbol-value 'clime-test--requires-inline-group-app)))
+    ;; --content without --section must be rejected (the bug allowed this
+    ;; to slip through because :requires was never inspected for nested
+    ;; inline-group options).
+    (should-error
+     (clime-parse app '("run" "--content" "x"))
+     :type 'clime-usage-error)
+    ;; Both together: parses cleanly, handler runs.
+    (let ((output (with-output-to-string
+                    (clime-run app '("run" "--section" "Notes"
+                                     "--content" "x")))))
+      (should (equal output "ok\n")))))
+
 (provide 'clime-requires-tests)
 ;;; clime-requires-tests.el ends here

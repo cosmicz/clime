@@ -310,8 +310,9 @@ GET /report/summary.html        →  command: report/summary, format: html
 #+end_src
 
 Apps without output formats are unaffected --- suffixes are treated as
-literal path segments.  ~_api~ endpoints auto-default to JSON when the
-app declares a JSON format.
+literal path segments.  The ~_api~ introspection endpoints auto-declare
+their own JSON format, so they return ~application/json~ regardless of
+whether the app itself registers a JSON output format.
 
 *** Introspection
 
@@ -586,6 +587,23 @@ Repeatable options collect values into a list:
 ;; --tag dev --tag ci → ("dev" "ci")
 #+end_src
 
+A ~:multiple~ option also accepts several values after a single flag,
+space-separated:
+
+#+begin_src bash
+./myapp.el run --tag dev ci prod    # → ("dev" "ci" "prod")
+#+end_src
+
+This greedy consumption is deliberately conservative: it fires only where
+it is unambiguous --- at a resolving node that has no positional args and
+no subcommands (a leaf command, or a single-command app/group).  It stops
+at the next option-like token (e.g. ~--verbose~), at ~--~, or at the end of
+the arguments, and each value still honors ~:separator~, ~:coerce~, and
+~:choices~.  When the node has positional args, a ~:rest~ arg, or
+subcommands, the single-token form is kept (so ~--tag dev~ takes only
+~dev~) and you repeat the flag instead.  The ~--tag=dev~ form is never
+greedy.
+
 *** Default values
 
 Default values are used when an option isn't provided:
@@ -663,6 +681,29 @@ to distinguish three states --- unset, enabled, and disabled:
 
 All long flags on the option get negated variants.  Short flags (~-c~)
 and flags already starting with ~--no-~ are not double-negated.
+
+A negatable flag with ~:default t~ declares that env and config may
+override the default in *both* directions.  Unlike a plain boolean
+(where env/config can only enable), a negatable flag can be explicitly
+disabled without the CLI:
+
+#+begin_example
+# env (with :env / :env-prefix): 0, false, or no disables
+MYAPP_COLOR=0    →  color = nil
+MYAPP_COLOR=1    →  color = t
+# (unset)        →  color = t   (the :default)
+#+end_example
+
+#+begin_src js
+// config file: explicit false disables; JSON null is "not configured"
+{ "color": false }   //  color = nil
+{ "color": true }    //  color = t
+// key absent       //  color = t   (the :default)
+#+end_src
+
+Precedence is unchanged: CLI > env > config > default.  A plain (non
+negatable) boolean keeps the "env/config can only enable" semantics ---
+a falsy env or config value leaves it at its default.
 
 *** Mutually exclusive options
 
@@ -1099,8 +1140,63 @@ For individual options, override the env var name with ~:env~:
   :help "Auth token")
 #+end_src
 
+For option-backed configuration, the canonical pattern is to declare
+the command-line flag and its env fallback on the same ~clime-opt~.
+Handlers should read the resolved value from the clime context, not
+re-read the same setting from ~getenv~ after parsing:
+
+#+begin_src emacs-lisp
+(clime-app embead
+  :version "1.0"
+  :env-prefix "EMBEAD"
+
+  (clime-opt embead-dir ("--embead-dir") :env "DIR"
+    :help "Embead directory")
+  (clime-opt embead-file ("--embead-file") :env "FILE"
+    :help "Embead data file"))
+#+end_src
+
+With this shape, ordinary option precedence is ~flag > env > default~.
+When every source is enabled, the full precedence is CLI/user value >
+app vals > real process env > ~.env~ > config provider > default.
+
+Do not bolt on a later env-first config layer for option-backed
+settings.  A post-parse resolver that calls ~getenv~ and overwrites
+clime's resolved params can make env values clobber explicit flags.
+The motivating downstream regression was embead's ~--embead-dir~ /
+~--embead-file~ settings: they were plain options followed by a later
+env-first resolver instead of using clime's ~:env~ / ~:env-prefix~
+machinery.
+
 Boolean flags accept ~1~/~true~/~yes~ and ~0~/~false~/~no~.  Multiple
 options split on comma: ~MYAPP_TAGS=dev,ci~ becomes ~("dev" "ci")~.
+
+*** Loading .env files
+
+Apps can load KEY=VALUE pairs from a ~.env~ file (dotenv format) via
+the ~:dotenv~ app option.  Loaded values populate the process
+environment for the duration of a single run, so they feed the same
+~:env~ / ~:env-prefix~ machinery described above without any per-option
+wiring.
+
+#+begin_src emacs-lisp
+(clime-app greet
+  :env-prefix "GREET"
+  :dotenv t                                  ;; load .env from CWD
+  ;; or :dotenv ".env.local"
+  ;; or :dotenv '(".env.local" ".env")       ;; earlier file wins per key
+  ...)
+#+end_src
+
+Precedence (high → low): CLI > app vals > real process env > ~.env~ >
+config provider > default.  Real ~process-environment~ entries always
+win over ~.env~ values --- ~.env~ is a fallback, not an override.
+
+Grammar accepted (v1): bare ~KEY=value~, double-quoted (~\n~/~\r~/~\t~
+escapes), single-quoted (literal), leading ~export~ tolerated, ~#~
+comments full-line or trailing on bare values.  Missing files are
+silently skipped; malformed files signal a usage error with file +
+line number.
 
 *** Values map
 
@@ -1306,6 +1402,25 @@ The output API:
 ~clime-output-format~ derives from ~clime-option~, so it supports
 ~:hidden~, ~:category~, etc.
 
+**** Group-level formats
+
+~clime-output-format~ may be declared on a ~clime-group~ as well as on the
+app, so a subtree can offer its own formats.  Two or more formats on the
+same node are automatically made mutually exclusive, exactly as at the app
+level:
+
+#+begin_src emacs-lisp
+(clime-group reports
+  :help "Reporting commands"
+  (clime-output-format json ("--json") :help "JSON output")
+  (clime-output-format csv ("--csv")  :help "CSV output")
+  ...)
+#+end_src
+
+A format flag declared on a group is honored for any command in that
+group's subtree; app-level formats keep precedence when the same flag is
+declared at both levels.
+
 **** Custom envelopes
 
 Use ~:finalize~ to control the JSON envelope shape:
@@ -1429,6 +1544,130 @@ the exit code.  The ~clime-context~ struct includes a ~start-time~
 slot (set automatically before handler invocation) available to
 handlers for timeout or progress logic.
 
+Because ~:after-execute~ fires from inside ~clime-run--execute~, it
+only observes invocations that reach handler dispatch.  Parse/usage
+failures, ~--help~, and ~--version~ never build a context and so never
+fire it.  When you need to log *every* attempted invocation, use the
+unified hook below.
+
+*** Unified invocation hooks (audit logging)
+
+The ~:on-invocation~ slot registers hooks that fire exactly once per
+invocation across *every* exit path — successful dispatch, runtime
+handler errors, parse/usage failures, and ~--help~ / ~--version~
+requests — on all surfaces (CLI ~clime-run~, ~clime-run-from-values~,
+HTTP ~clime-serve~ dispatch, and interactive ~clime-invoke~).
+
+Each hook receives a single ~clime-invocation-event~ struct.  Fields
+(read with ~clime-invocation-event-*~ accessors):
+
+| Field           | Meaning                                                    |
+|-----------------+------------------------------------------------------------|
+| ~app~           | the root ~clime-app~                                       |
+| ~surface~       | ~cli~, ~serve~, ~invoke~, or ~run-from-values~            |
+| ~phase~         | ~completed~, ~no-handler~, ~help~, ~version~, ~usage-error~, ~runtime-error~, ~not-found~ (serve 404) |
+| ~argv~          | raw argv list (CLI surface; nil elsewhere)                 |
+| ~path~          | node-name path from root to command, when known (requested URL segments for serve ~not-found~) |
+| ~display-path~  | user-facing path (excludes inline groups), when known      |
+| ~params~        | resolved params plist, when a context was built            |
+| ~command~       | resolved ~clime-command~ node, when known                  |
+| ~context~       | the ~clime-context~, or nil for pre-context failures       |
+| ~exit-code~     | 0 success / 1 runtime error / 2 usage error                |
+| ~error-type~    | error signal symbol, when failed                           |
+| ~error-message~ | error message string, when failed                          |
+| ~start-time~    | invocation start (~float-time~)                            |
+| ~duration~      | whole-invocation seconds (parse → done)                    |
+| ~format~        | active ~clime-output-format~, or nil for text mode         |
+
+As with ~:after-execute~, a bare function is normalized to a
+one-element list, multiple hooks are supported, and hook errors are
+caught and reported via ~message~ — they never propagate or alter the
+outcome.
+
+The two hooks are independent and may be used together.  Key
+differences: ~:after-execute~ fires only for handler dispatch with a
+handler-scoped ~duration~ and does *not* fire for help/version, while
+~:on-invocation~ fires for all outcomes (including help/version) with a
+whole-invocation ~duration~.
+
+**** Privacy and redaction
+
+The event exposes raw user input — ~argv~, ~params~, and values derived
+from the environment (env vars, ~.env~ files, config providers).  These
+routinely contain secrets: passwords, API tokens, access keys, personal
+data.  *Redaction is the logger's responsibility.*  clime does not
+scrub the event; it hands you everything so you can decide what is safe
+to persist.  Before writing ~params~ (or ~argv~) to durable storage,
+mask values whose parameter name looks sensitive, and prefer logging
+the structured ~path~/~command~ over the raw ~argv~ when the argv may
+carry inline credentials.
+
+**** Recipe: JSONL audit logging
+
+Append one JSON object per invocation to a log file — capturing
+successes, failures, usage errors, and serve 404s alike — with
+sensitive parameter values redacted:
+
+#+begin_src emacs-lisp
+(defvar my-app--secret-param-re
+  (rx (or "pass" "secret" "token" "key" "auth" "cred"))
+  "Parameter names matching this are redacted before logging.")
+
+(defun my-app--redact-params (plist)
+  "Return PLIST with sensitive values replaced by \"<redacted>\".
+PLIST is the event's `params' — keys are symbols, values are parsed."
+  (let (out)
+    (while plist
+      (let ((k (pop plist)) (v (pop plist)))
+        (push (cons k (if (string-match-p my-app--secret-param-re
+                                          (symbol-name k))
+                          "<redacted>"
+                        v))
+              out)))
+    (nreverse out)))
+
+(defun my-app--log-invocation (ev)
+  "Append EV as one redacted JSON line to ~/my-app.log.jsonl."
+  (let* ((st (clime-invocation-event-start-time ev))
+         (record
+          `((time      . ,(format-time-string "%FT%T%z" (seconds-to-time st)))
+            (app       . ,(clime-node-name (clime-invocation-event-app ev)))
+            (surface   . ,(clime-invocation-event-surface ev))
+            (phase     . ,(clime-invocation-event-phase ev))
+            ;; structured path is safer to log than raw argv
+            (path      . ,(or (clime-invocation-event-display-path ev)
+                              (clime-invocation-event-path ev)))
+            (command   . ,(string-join
+                           (or (clime-invocation-event-display-path ev)
+                               (clime-invocation-event-path ev))
+                           " "))
+            ;; argv may carry inline credentials — redact or omit in
+            ;; high-sensitivity deployments
+            (argv      . ,(clime-invocation-event-argv ev))
+            (params    . ,(my-app--redact-params
+                           (clime-invocation-event-params ev)))
+            (exit      . ,(clime-invocation-event-exit-code ev))
+            (duration  . ,(clime-invocation-event-duration ev))
+            ;; nil json-encodes to bare `null'
+            (error_type    . ,(clime-invocation-event-error-type ev))
+            (error_message . ,(clime-invocation-event-error-message ev)))))
+    (with-temp-buffer
+      (insert (json-encode record) "\n")
+      (append-to-file (point-min) (point-max)
+                      (expand-file-name "~/my-app.log.jsonl")))))
+
+(clime-app myapp
+  :version "1.0"
+  :on-invocation #'my-app--log-invocation
+  ...)
+#+end_src
+
+Every CLI run, HTTP request (including 404s), and interactive dispatch
+now leaves one durable JSONL record — successful or not, parsed or not —
+with secret-looking params masked.  Fields absent for a given outcome
+(e.g. ~argv~ on the serve surface, ~params~ before a context is built)
+serialize as JSON ~null~.
+
 ** Reusable Definitions
 
 *** Parameter templates
@@ -1523,6 +1762,37 @@ items merge with inline DSL forms (keyword items first, then inline):
 This enables cross-file app composition without dropping to raw
 struct constructors.
 
+Because ~clime-command~ accepts ~:children~ too, a single inline group
+defined once with ~clime-defgroup~ can be shared verbatim across several
+commands (and groups) — the canonical way to reuse a common option set:
+
+#+begin_src emacs-lisp
+;; A reusable inline option group, defined once.
+(clime-defgroup section-write-opts
+  :inline t
+  (clime-opt design ("--design") :help "Design section body")
+  (clime-opt plan   ("--plan")   :help "Plan section body"))
+
+(clime-app tracker
+  :version "1.0"
+  ;; A leaf command consumes the shared group via :children.
+  (clime-command create
+    :help "Create an item"
+    :children (list section-write-opts)
+    (clime-arg title :help "Item title")
+    (clime-handler (ctx) ...))
+  ;; A group consumes the SAME value — no redefinition.
+  (clime-group mutate
+    :inline t
+    :children (list section-write-opts)
+    (clime-command update
+      :help "Update an item"
+      (clime-handler (ctx) ...))))
+#+end_src
+
+Options in the shared inline group are promoted into each host's option
+namespace, so parsing, help, and ~:requires~ checking all see them.
+
 * DSL Reference
 
 All command-like forms (~clime-command~, ~clime-group~, ~clime-app~)
@@ -1535,7 +1805,7 @@ All parameter forms (~clime-opt~, ~clime-arg~) accept: ~:type~,
 
 | Macro                 | Alias              | Purpose                          | Distinctive arguments                                                 |
 |-----------------------+--------------------+----------------------------------+-----------------------------------------------------------------------|
-| ~clime-app~           |                    | Root application definition      | ~:version~, ~:env-prefix~, ~:setup~, ~:config~                      |
+| ~clime-app~           |                    | Root application definition      | ~:version~, ~:env-prefix~, ~:dotenv~, ~:setup~, ~:config~           |
 | ~clime-command~       |                    | Leaf command (has handler)       | All shared command slots                                              |
 | ~clime-group~         |                    | Branch node (has children)       | ~:inline~                                                             |
 | ~clime-opt~           | ~clime-option~     | Named option (flag or value)     | ~:bool~, ~:count~, ~:multiple~, ~:separator~, ~:negatable~, ~:required~, ~:optional~, ~:requires~, ~:env~, ~:category~ |
@@ -1603,6 +1873,46 @@ Re-running ~init~ on a file that already has a clime shebang updates
 it in place.  ~init~ refuses to overwrite a non-clime shebang (use
 ~--force~) or to downgrade a newer shebang format version.
 
+*** Pre-load eval injection (~--eval~, ~--no-jit~)
+
+The launcher runs ~emacs --batch -Q~ and then loads your app.  Some
+settings must be in effect /before/ the app's own source is loaded or
+compiled, so they cannot live in app code or a runtime hook — they have
+to be set on the launcher's command line.  ~init~ injects ~--eval~ forms
+immediately after ~-Q~ and before the load paths and load loop:
+
+#+begin_src bash
+# Disable native-comp JIT for the ephemeral process (built-in shorthand).
+# Cold runs of an uncompiled app otherwise spawn background libgccjit
+# subprocesses; --no-jit suppresses that CPU storm.
+./clime-make.el init --no-jit myapp.el
+
+# Inject an arbitrary pre-load form (repeatable, runs left-to-right).
+./clime-make.el init --eval '(setq gc-cons-threshold 80000000)' myapp.el
+
+# Combine: --no-jit's form is emitted first, then each --eval in order.
+./clime-make.el init --no-jit --eval '(setq foo t)' myapp.el
+#+end_src
+
+~--no-jit~ is shorthand for ~--eval '(setq native-comp-jit-compilation
+nil)'~.  Each ~--eval~ form is ~read~-validated at init time; an
+unbalanced or unreadable form is rejected before the file is written.
+A form must be a single physical line — the launcher is a two-line
+construct, so a form containing a newline (LF) or carriage return (CR) —
+which would split line 2 and orphan the format tag — is rejected before
+the file is written.  Put multi-form logic on one line with
+~(progn ...)~.
+
+With no ~--eval~/~--no-jit~ flags the emitted shebang is byte-identical
+to before, so existing scripts are unaffected.  Injected forms are
+launcher content (like ~--env~ vars and ~-L~ paths): they do not change
+the shebang format version, and ~strip~ removes them with the rest of
+the header.
+
+App-specific hardening that depends on a library the app loads (for
+example org-persist tuning for an org-backed app) belongs in the /app's/
+own load path, guarded by ~noninteractive~ — not in the generic launcher.
+
 ** Inserting entrypoint boilerplate (~scaffold~)
 
 ~scaffold~ detects the ~clime-app~ symbol in a file and inserts an
@@ -1648,7 +1958,7 @@ marker, the entrypoint is appended at the end.
 
 This is the fastest way to go from a source file to a runnable script.
 ~quickstart~ accepts all of ~init~'s flags (~--self-dir~, ~-R~, ~-L~,
-~--standalone~, ~--force~, ~-e~):
+~--standalone~, ~--force~, ~-e~, ~--eval~, ~--no-jit~):
 
 #+begin_src bash
 ./clime-make.el quickstart --self-dir -e MY_VAR=hello myapp.el

@@ -33,3 +33,4 @@ drafts/
 .embead/
 
 *.org~
+.meld/

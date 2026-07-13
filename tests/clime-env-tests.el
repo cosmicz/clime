@@ -349,5 +349,21 @@ BINDINGS is a list of (VAR VALUE) pairs.  Vars are unset after BODY."
          (app (clime-make-app :name "t" :version "1")))
     (should-not (clime--env-var-for-option opt app))))
 
+;;; ─── README contract guard ─────────────────────────────────────────────
+
+(ert-deftest clime-test-env/readme-documents-option-env-precedence-contract ()
+  "README documents the canonical option/env precedence contract."
+  (let ((readme (with-temp-buffer
+                  (insert-file-contents (expand-file-name "README.org" default-directory))
+                  (buffer-string))))
+    (dolist (text '("flag > env > default"
+                    ":env"
+                    ":env-prefix"
+                    "getenv"
+                    "option-backed"
+                    "--embead-dir"
+                    "--embead-file"))
+      (should (string-match-p (regexp-quote text) readme)))))
+
 (provide 'clime-env-tests)
 ;;; clime-env-tests.el ends here

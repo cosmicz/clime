@@ -44,7 +44,9 @@ Configure project-specific settings for clean test execution."
 (require 'clime-values-tests)
 (require 'clime-param-type-tests)
 (require 'clime-config-tests)
+(require 'clime-dotenv-tests)
 (require 'clime-integration-tests)
+(require 'clime-dispatch-tests)
 (require 'clime-serve-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────

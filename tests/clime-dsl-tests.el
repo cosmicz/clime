@@ -1044,6 +1044,46 @@
     (should (clime-node-find-option app "--json"))
     (should (eq (clime-output-format-name (car (clime-app-output-formats app))) 'json))))
 
+(ert-deftest clime-test-dsl/group-with-output-format ()
+  "clime-group with clime-output-format stores the format and registers
+the flag as an option on the group."
+  (eval '(clime-app clime-test--group-fmt-app
+           :version "1.0"
+           (clime-group reports
+             :help "Reports"
+             (clime-output-format json ("--json") :help "JSON")
+             (clime-command summary
+               :help "Summary"
+               (clime-handler (_ctx) "ok"))))
+        t)
+  (let* ((app (symbol-value 'clime-test--group-fmt-app))
+         (grp (cdr (assoc "reports" (clime-group-children app)))))
+    (should (clime-group-p grp))
+    (should (= (length (clime-group-output-formats grp)) 1))
+    (should (eq (clime-output-format-name
+                 (car (clime-group-output-formats grp)))
+                'json))
+    ;; The format is registered as a (boolean) option on the group
+    (should (clime-node-find-option grp "--json"))))
+
+(ert-deftest clime-test-dsl/group-two-formats-are-exclusive ()
+  "Two+ output-formats on a group get auto mutual-exclusivity conform."
+  (eval '(clime-app clime-test--group-fmt2-app
+           :version "1.0"
+           (clime-group reports
+             :help "Reports"
+             (clime-output-format json ("--json") :help "JSON")
+             (clime-output-format yaml ("--yaml") :help "YAML")
+             (clime-command summary
+               :help "Summary"
+               (clime-handler (_ctx) "ok"))))
+        t)
+  (let* ((app (symbol-value 'clime-test--group-fmt2-app))
+         (grp (cdr (assoc "reports" (clime-group-children app)))))
+    (should (= (length (clime-group-output-formats grp)) 2))
+    ;; A conform (exclusivity) hook was attached to the group
+    (should (clime-node-conform grp))))
+
 ;;; ─── Indent Rules ──────────────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/indent-option ()
@@ -1589,6 +1629,169 @@
   (let ((cmd (cdr (assoc "show" (clime-group-children clime-test--kw-cmd-app)))))
     (should (= 2 (length (clime-command-options cmd))))
     (should (eq 'format (clime-option-name (car (clime-command-options cmd)))))))
+
+;;; ─── Command :children keyword (inline-group composition) ───────────────
+
+(ert-deftest clime-test-dsl/command-kw-children ()
+  "clime-command accepts :children, merging with body-form children."
+  (eval '(progn
+           (clime-defgroup clime-test--cmd-kw-shared-grp
+             :inline t
+             (clime-opt scope ("--scope") :default "local"))
+           (clime-app clime-test--cmd-kw-children-app
+             :version "1"
+             (clime-command run
+               :help "Run"
+               :children (list clime-test--cmd-kw-shared-grp)
+               (clime-group local-grp :inline t
+                 (clime-opt color ("--color") :bool))
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((cmd (cdr (assoc "run" (clime-group-children clime-test--cmd-kw-children-app)))))
+    (should (clime-command-p cmd))
+    ;; Keyword child comes first, body-form child second (merge, not replace)
+    (should (= 2 (length (clime-command-children cmd))))
+    (should (equal "clime-test--cmd-kw-shared-grp" (caar (clime-command-children cmd))))
+    (should (equal "local-grp" (caadr (clime-command-children cmd))))))
+
+(ert-deftest clime-test-dsl/command-kw-children-empty ()
+  "Empty :children (list) on a command is a no-op."
+  (eval '(clime-app clime-test--cmd-kw-empty-app
+           :version "1"
+           (clime-command run
+             :help "Run"
+             :children (list)
+             (clime-handler (ctx) nil)))
+        t)
+  (let ((cmd (cdr (assoc "run" (clime-group-children clime-test--cmd-kw-empty-app)))))
+    (should (clime-command-p cmd))
+    (should (null (clime-command-children cmd)))))
+
+(ert-deftest clime-test-dsl/command-kw-children-keyword-only ()
+  "A command may compose entirely via :children with no body-form children."
+  (eval '(progn
+           (clime-defgroup clime-test--cmd-only-grp
+             :inline t
+             (clime-opt verbose ("-v" "--verbose") :bool))
+           (clime-app clime-test--cmd-only-app
+             :version "1"
+             (clime-command run
+               :help "Run"
+               :children (list clime-test--cmd-only-grp)
+               (clime-handler (ctx) nil))))
+        t)
+  (let ((cmd (cdr (assoc "run" (clime-group-children clime-test--cmd-only-app)))))
+    (should (= 1 (length (clime-command-children cmd))))
+    (should (equal "clime-test--cmd-only-grp" (caar (clime-command-children cmd))))))
+
+(ert-deftest clime-test-dsl/shared-defgroup-both-consumers ()
+  "One clime-defgroup value is consumable via :children on both a
+command and a group, with no redefinition or copying."
+  (eval '(progn
+           (clime-defgroup clime-test--shared-both-grp
+             :inline t
+             (clime-opt format ("-f" "--format") :default "text"))
+           (clime-app clime-test--shared-both-app
+             :version "1"
+             ;; Command consumer
+             (clime-command run
+               :help "Run"
+               :children (list clime-test--shared-both-grp)
+               (clime-handler (ctx) nil))
+             ;; Group consumer — same value, no redefinition
+             (clime-group admin
+               :help "Admin"
+               :children (list clime-test--shared-both-grp)
+               (clime-command audit
+                 :help "Audit"
+                 (clime-handler (ctx) nil)))))
+        t)
+  (let* ((app clime-test--shared-both-app)
+         (cmd (cdr (assoc "run" (clime-group-children app))))
+         (grp (cdr (assoc "admin" (clime-group-children app))))
+         (cmd-shared (cdr (assoc "clime-test--shared-both-grp"
+                                 (clime-command-children cmd))))
+         (grp-shared (cdr (assoc "clime-test--shared-both-grp"
+                                 (clime-group-children grp)))))
+    ;; Both consumers received the shared inline group as a child
+    (should (clime-group-p cmd-shared))
+    (should (clime-group-p grp-shared))
+    (should (clime-node-inline cmd-shared))
+    ;; The shared group's option is reachable through both consumers
+    (should (eq 'format (clime-option-name
+                         (car (clime-node-all-options cmd)))))
+    (should (eq 'format (clime-option-name
+                         (car (clime-node-all-options grp)))))))
+
+(ert-deftest clime-test-dsl/command-children-options-parse ()
+  "Options inside a :children inline group on a command are parsed."
+  (eval '(progn
+           (clime-defgroup clime-test--parse-shared-grp
+             :inline t
+             (clime-opt label ("--label") :default "none"))
+           (clime-app clime-test--parse-shared-app
+             :version "1"
+             (clime-command run
+               :help "Run"
+               :children (list clime-test--parse-shared-grp)
+               (clime-handler (ctx) (clime-ctx-get ctx 'label)))))
+        t)
+  (let ((result (clime-parse clime-test--parse-shared-app
+                             '("run" "--label" "hello"))))
+    (should (equal (clime-command-name (clime-parse-result-command result)) "run"))
+    (should (equal "hello" (plist-get (clime-parse-result-params result) 'label)))))
+
+(ert-deftest clime-test-dsl/command-children-requires-across-boundary ()
+  "A :requires constraint on an option inside a :children inline group is
+enforced for the hosting command — the group's options are visible to the
+required-deps machinery (regression for embead embd-f3k6)."
+  (eval '(progn
+           (clime-defgroup clime-test--req-shared-grp
+             :inline t
+             ;; --reason (in the shared group) requires --force (on the command)
+             (clime-opt reason ("--reason") :requires '(force)))
+           (clime-app clime-test--req-shared-app
+             :version "1"
+             (clime-command del
+               :help "Delete"
+               :children (list clime-test--req-shared-grp)
+               (clime-opt force ("--force") :bool)
+               (clime-handler (ctx) "deleted"))))
+        t)
+  ;; Setting the group option without its required command option errors
+  (should-error
+   (clime-parse clime-test--req-shared-app '("del" "--reason" "cleanup"))
+   :type 'clime-usage-error)
+  ;; Both together parse cleanly
+  (let ((result (clime-parse clime-test--req-shared-app
+                             '("del" "--reason" "cleanup" "--force"))))
+    (should (equal "cleanup" (plist-get (clime-parse-result-params result) 'reason))))
+  ;; Neither set is also fine
+  (should (clime-parse clime-test--req-shared-app '("del"))))
+
+(ert-deftest clime-test-dsl/command-children-options-in-help ()
+  "Options from a :children inline group appear in the hosting command's
+help output — the group's options are visible to the help machinery."
+  (eval '(progn
+           (clime-defgroup clime-test--help-shared-grp
+             :inline t
+             (clime-opt verbosity ("--verbosity")
+                        :help "How loud to be"))
+           (clime-app clime-test--help-shared-app
+             :version "1"
+             (clime-command run
+               :help "Run it"
+               :children (list clime-test--help-shared-grp)
+               (clime-opt dry-run ("--dry-run") :bool :help "No writes")
+               (clime-handler (ctx) nil))))
+        t)
+  (let* ((cmd (cdr (assoc "run" (clime-group-children
+                                 clime-test--help-shared-app))))
+         (help (clime-format-help cmd '("clime-test--help-shared-app" "run"))))
+    ;; Both the command's own option and the shared group's option render
+    (should (string-match-p "--dry-run" help))
+    (should (string-match-p "--verbosity" help))
+    (should (string-match-p "How loud to be" help))))
 
 (ert-deftest clime-test-dsl/kw-only-no-inline ()
   "Keyword-only composition works (no inline forms)."

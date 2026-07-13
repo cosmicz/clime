@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'clime-core)        ; for `clime--config-false'
 
 ;;; ─── JSON provider ─────────────────────────────────────────────────────
 
@@ -67,9 +68,11 @@ Return the raw JSON value or nil if any step fails."
   "Convert JSON value VAL to Elisp.
 json.el returns :json-false for false, nil for null, t for true,
 vectors for arrays.  Numbers and strings pass through unchanged.
-Returns nil for both false and null (treated as not-configured)."
+An explicit JSON false maps to `clime--config-false' so the apply
+layer can tell \"present and false\" from an absent key; JSON null
+maps to nil (treated as not-configured)."
   (cond
-   ((eq val :json-false) nil)
+   ((eq val :json-false) clime--config-false)
    ((eq val t) t)
    ((vectorp val) (append val nil))
    (t val)))
@@ -101,7 +104,10 @@ Returns nil if FILE does not exist."
     (while (and paths (not found))
       (let ((val (clime-config--walk-sexp data (car paths) param-name)))
         (when val
-          (setq result (car val)
+          ;; VAL is a one-element box (X).  An explicit nil value is
+          ;; "present and false" — surface the sentinel so the apply
+          ;; layer can disable a negatable bool rather than dropping it.
+          (setq result (if (null (car val)) clime--config-false (car val))
                 found t)))
       (setq paths (cdr paths)))
     result))

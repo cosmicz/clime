@@ -14,6 +14,7 @@
 
 (require 'ert)
 (require 'clime-test-helpers)
+(require 'clime-make)
 
 ;;; ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -26,6 +27,10 @@
 (defvar clime-test--clime-make
   (expand-file-name "bin/clime-make" clime-test--project-root)
   "Path to the clime-make executable (built by `make bin/clime-make').")
+
+(defvar clime-test--clime
+  (expand-file-name "bin/clime" clime-test--project-root)
+  "Path to the bundled clime executable (a copy of `dist/clime.el').")
 
 (defvar clime-test--pkm
   (expand-file-name "bin/pkm" clime-test--project-root)
@@ -105,6 +110,49 @@ process environment.  Skips the test if SCRIPT-PATH is not executable
        (kill-buffer buf)
        (should (= 0 exit-code))
        (should (equal "Hello, world!" output))))))
+
+;;; ─── Bundled CLI init (clime-8rk2) ──────────────────────────────────────
+
+(ert-deftest clime-test-integration/bundled-init-without-load-path ()
+  "Bundled `bin/clime init FILE' produces a runnable app without Clime on
+`load-path'.
+
+Regression for clime-8rk2.  Two failure modes this guards against:
+1. `clime-make--init-handler' computed
+   `(file-name-directory (locate-library \"clime\"))' unconditionally, so
+   the bundled executable (Clime not on `load-path') signalled
+   `wrong-type-argument stringp nil' and `init' exited 1.
+2. The first fix emitted `-L bin/' and left `(require 'clime)' in the app.
+   `bin/clime' has no require-able `clime.el' in its directory (only the
+   extensionless bundle), so the generated app exited 1 at runtime with
+   `file-missing ... \"clime\"'.
+
+The handler must both let `init' exit 0 AND emit an app that actually
+runs, by pre-loading the bundle executable by absolute path."
+  (skip-unless (file-executable-p clime-test--clime))
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     ;; init succeeds and writes a shebang
+     (let ((result (clime-test--run-script clime-test--clime
+                                           (list "init" app-file))))
+       (should (= 0 (car result)))
+       (should (string-match-p "is now executable" (cdr result))))
+     (with-temp-buffer
+       (insert-file-contents app-file)
+       (should (string-prefix-p "#!/bin/sh" (buffer-string))))
+     ;; The initialized app must actually run — not just carry a header.
+     (let ((result (clime-test--run-script app-file '("hello" "world"))))
+       (should (= 0 (car result)))
+       (should (equal "Hello, world!" (cdr result)))))))
+
+(ert-deftest clime-test-integration/bundled-init-missing-file ()
+  "Bundled `bin/clime init' with no file still exits 2 with usage error.
+Guards against the load-path fix regressing missing-argument handling."
+  (skip-unless (file-executable-p clime-test--clime))
+  (let ((result (clime-test--run-script clime-test--clime '("init"))))
+    (should (= 2 (car result)))
+    (should (string-match-p "Missing required argument" (cdr result)))))
 
 ;;; ─── Init ───────────────────────────────────────────────────────────────
 
@@ -1357,6 +1405,269 @@ Catches the extra-paren bug that caused Invalid read syntax at runtime."
       (should (string-match-p "hello" (cdr result)))
       (should (string-match-p "fortune" (cdr result)))
       (should (string-match-p "buffers" (cdr result))))))
+
+;;; ─── Pre-load eval injection (clime-ypv8) ──────────────────────────────
+
+;; A generic pre-load `--eval' injection slot in the shebang, plus the
+;; built-in `--no-jit' flag.  Evals are emitted after `-Q' and before the
+;; `-L' load paths / lexical-load eval loop, so they run before the app's
+;; first source load/compile.  Handler-level tests parse the real flags and
+;; inspect the written shebang (no built bin required).
+
+(defun clime-test--make-shebang-line2 (file)
+  "Return line 2 (the launcher line) of FILE."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (goto-char (point-min))
+    (forward-line 1)
+    (buffer-substring (point) (line-end-position))))
+
+(defun clime-test--run-make (argv)
+  "Parse ARGV against the clime-make app and return the parsed context."
+  (clime--build-context clime-make (clime-parse clime-make argv)))
+
+;; ── make-shebang generator: default / ordering / escaping ──
+
+(ert-deftest clime-test-integration/preeval-default-byte-identical ()
+  "With no pre-evals, make-shebang output is byte-identical to today."
+  (should (equal (clime-make--make-shebang nil "" nil)
+                 (clime-make--make-shebang nil "" nil nil)))
+  ;; And carries no injected setq form.
+  (should-not (string-search "native-comp-jit-compilation"
+                             (clime-make--make-shebang nil "-L /x" nil))))
+
+(ert-deftest clime-test-integration/preeval-injected-after-Q-before-load ()
+  "A pre-eval form is emitted after -Q and before -L/load evals."
+  (let ((sb (clime-make--make-shebang nil "-L /tmp/x" nil '("(setq aaa 1)"))))
+    (should (string-search "-Q --eval \"(setq aaa 1)\"" sb))
+    ;; ordering: injected eval < load path < lexical-load loop
+    (let ((i-eval (string-search "(setq aaa 1)" sb))
+          (i-path (string-search "-L /tmp/x" sb))
+          (i-load (string-search "with-temp-buffer" sb)))
+      (should (and i-eval i-path i-load))
+      (should (< i-eval i-path))
+      (should (< i-path i-load)))))
+
+(ert-deftest clime-test-integration/preeval-preserves-order ()
+  "Multiple pre-eval forms are emitted in the order given."
+  (let ((sb (clime-make--make-shebang nil "" nil '("(aaa)" "(bbb)"))))
+    (should (< (string-search "(aaa)" sb) (string-search "(bbb)" sb)))))
+
+(ert-deftest clime-test-integration/preeval-shell-escapes ()
+  "Pre-eval forms are shell-escaped for the double-quoted --eval context."
+  (let ((sb (clime-make--make-shebang
+             nil "" nil '("(message \"hi $USER `id` \\\\\")"))))
+    ;; inner double-quotes escaped as \"
+    (should (string-search "\\\"hi" sb))
+    ;; dollar escaped as \$, backtick as \`
+    (should (string-search "\\$USER" sb))
+    (should (string-search "\\`id\\`" sb))))
+
+(ert-deftest clime-test-integration/no-jit-eval-constant ()
+  "The built-in no-jit form disables native-comp JIT."
+  (should (equal clime-make--no-jit-eval
+                 "(setq native-comp-jit-compilation nil)")))
+
+;; ── init handler: --no-jit / --eval flags ──
+
+(ert-deftest clime-test-integration/init-no-jit-injects-eval ()
+  "init --no-jit injects the native-comp disable form, and the file runs."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     (clime-make--init-handler
+      (clime-test--run-make (list "init" "--no-jit" app-file)))
+     (let ((line2 (clime-test--make-shebang-line2 app-file)))
+       (should (string-search "native-comp-jit-compilation nil" line2))
+       ;; injected before the lexical-load loop
+       (should (< (string-search "native-comp-jit-compilation" line2)
+                  (string-search "with-temp-buffer" line2))))
+     ;; the generated script still loads and runs
+     (let ((result (clime-test--run-script app-file '("hello" "world"))))
+       (should (= 0 (car result)))
+       (should (equal "Hello, world!" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-eval-injects-form ()
+  "init --eval injects an arbitrary form, and the file still runs."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     (clime-make--init-handler
+      (clime-test--run-make
+       (list "init" "--eval" "(setq clime-marker 99)" app-file)))
+     (should (string-search "(setq clime-marker 99)"
+                            (clime-test--make-shebang-line2 app-file)))
+     (let ((result (clime-test--run-script app-file '("hello" "world"))))
+       (should (= 0 (car result)))
+       (should (equal "Hello, world!" (cdr result)))))))
+
+(ert-deftest clime-test-integration/init-no-jit-precedes-eval ()
+  "When both are given, the no-jit form precedes the --eval form."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     (clime-make--init-handler
+      (clime-test--run-make
+       (list "init" "--no-jit" "--eval" "(setq zzz 1)" app-file)))
+     (let ((line2 (clime-test--make-shebang-line2 app-file)))
+       (should (< (string-search "native-comp-jit-compilation" line2)
+                  (string-search "(setq zzz 1)" line2)))))))
+
+(ert-deftest clime-test-integration/init-default-has-no-preeval ()
+  "Default init (no flags) injects no pre-eval form."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     (clime-make--init-handler
+      (clime-test--run-make (list "init" app-file)))
+     (should-not (string-search "native-comp-jit-compilation"
+                                (clime-test--make-shebang-line2 app-file))))))
+
+(ert-deftest clime-test-integration/init-eval-rejects-malformed ()
+  "init --eval errors on an unreadable elisp form."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     (should-error
+      (clime-make--init-handler
+       (clime-test--run-make (list "init" "--eval" "(setq foo" app-file)))
+      :type 'clime-usage-error))))
+
+;; ── update (re-init) and strip round-trip with injected evals ──
+
+(ert-deftest clime-test-integration/update-rebuilds-evals-from-flags ()
+  "Re-running init rebuilds evals from passed flags; old evals dropped."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     ;; first: with --no-jit
+     (clime-make--init-handler
+      (clime-test--run-make (list "init" "--no-jit" app-file)))
+     (should (string-search "native-comp-jit-compilation"
+                            (clime-test--make-shebang-line2 app-file)))
+     ;; update: without --no-jit → form removed, action is "updated"
+     (let ((res (clime-make--init-handler
+                 (clime-test--run-make (list "init" app-file)))))
+       (should (string-match-p "updated" res)))
+     (should-not (string-search "native-comp-jit-compilation"
+                                (clime-test--make-shebang-line2 app-file))))))
+
+(ert-deftest clime-test-integration/strip-removes-shebang-with-evals ()
+  "strip removes a shebang that carries injected evals, leaving source intact."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     (clime-make--init-handler
+      (clime-test--run-make
+       (list "init" "--no-jit" "--eval" "(setq qqq 1)" app-file)))
+     (should (clime-make--clime-shebang-p app-file))
+     (clime-make--strip-handler
+      (clime-test--run-make (list "strip" app-file)))
+     (should-not (clime-make--clime-shebang-p app-file))
+     ;; source body preserved
+     (with-temp-buffer
+       (insert-file-contents app-file)
+       (should (string-search "(clime-app test-app" (buffer-string)))
+       (should-not (string-search "native-comp-jit-compilation"
+                                  (buffer-string)))))))
+
+(ert-deftest clime-test-integration/long-eval-still-detected ()
+  "A long --eval form pushes the tag past the old 512-byte cap, yet tag
+detection and version parsing still succeed (regression guard for the
+full-file read in the shebang helpers)."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el"))
+         ;; A form well over 512 bytes so the trailing clime-sh!:vN tag
+         ;; lands far past any fixed prefix.
+         (long-form (format "(setq clime-pad '(%s))"
+                            (mapconcat #'number-to-string
+                                       (number-sequence 1 300) " "))))
+     (clime-test--write-app-source app-file)
+     (clime-make--init-handler
+      (clime-test--run-make (list "init" "--eval" long-form app-file)))
+     (should (> (length (clime-test--make-shebang-line2 app-file)) 512))
+     (should (clime-make--clime-shebang-p app-file))
+     (should (= 2 (clime-make--shebang-file-version app-file)))
+     ;; round-trips: re-init updates it, strip removes it
+     (should (string-match-p
+              "updated"
+              (clime-make--init-handler
+               (clime-test--run-make (list "init" app-file)))))
+     (clime-make--strip-handler
+      (clime-test--run-make (list "strip" app-file)))
+     (should-not (clime-make--clime-shebang-p app-file)))))
+
+(ert-deftest clime-test-integration/eval-rejects-newline ()
+  "A multi-line --eval form is rejected: an embedded newline would split
+the two-line launcher and orphan the tag.  Rejection happens before the
+file is written, leaving any prior shebang intact."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     ;; LF and CR are both rejected (read() treats them as whitespace, so
+     ;; this would otherwise sneak past validation).
+     (should-error
+      (clime-make--init-handler
+       (clime-test--run-make
+        (list "init" "--eval" "(progn\n(setq a 1))" app-file)))
+      :type 'clime-usage-error)
+     (should-error
+      (clime-make--init-handler
+       (clime-test--run-make
+        (list "init" "--eval" "(progn\r(setq a 1))" app-file)))
+      :type 'clime-usage-error)
+     ;; Rejected before writing: file still has no shebang.
+     (should-not (clime-make--clime-shebang-p app-file)))))
+
+(ert-deftest clime-test-integration/eval-newline-reject-preserves-shebang ()
+  "Rejecting a newline --eval on re-init leaves the existing shebang (and
+its tag) detectable, updatable, and strippable — the launcher is never
+left in a split/corrupt state."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     ;; valid single-line init first
+     (clime-make--init-handler
+      (clime-test--run-make (list "init" "--no-jit" app-file)))
+     (should (clime-make--clime-shebang-p app-file))
+     ;; a bad multi-line re-init is rejected and does not touch the file
+     (should-error
+      (clime-make--init-handler
+       (clime-test--run-make
+        (list "init" "--eval" "(a)\n(b)" app-file)))
+      :type 'clime-usage-error)
+     ;; tag still detected at the right version; update + strip still work
+     (should (clime-make--clime-shebang-p app-file))
+     (should (= 2 (clime-make--shebang-file-version app-file)))
+     (should (string-match-p
+              "updated"
+              (clime-make--init-handler
+               (clime-test--run-make (list "init" app-file)))))
+     (clime-make--strip-handler
+      (clime-test--run-make (list "strip" app-file)))
+     (should-not (clime-make--clime-shebang-p app-file)))))
+
+(ert-deftest clime-test-integration/quickstart-accepts-eval-and-no-jit ()
+  "quickstart's own option list accepts --no-jit and --eval and forwards
+them to init: both forms land in line 2 (no-jit first, after -Q, before the
+lexical-load loop) and the generated script still runs."
+  (clime-test-with-temp-dir
+   (let ((app-file (expand-file-name "test-app.el")))
+     (clime-test--write-app-source app-file)
+     (clime-make--quickstart-handler
+      (clime-test--run-make
+       (list "quickstart" "--no-jit" "--eval" "(setq qs-marker 7)" app-file)))
+     (let ((line2 (clime-test--make-shebang-line2 app-file)))
+       (should (string-search "native-comp-jit-compilation nil" line2))
+       (should (string-search "(setq qs-marker 7)" line2))
+       ;; no-jit precedes the user form, both precede the load loop
+       (should (< (string-search "native-comp-jit-compilation" line2)
+                  (string-search "(setq qs-marker 7)" line2)))
+       (should (< (string-search "(setq qs-marker 7)" line2)
+                  (string-search "with-temp-buffer" line2))))
+     (let ((result (clime-test--run-script app-file '("hello" "world"))))
+       (should (= 0 (car result)))
+       (should (equal "Hello, world!" (cdr result)))))))
 
 (provide 'clime-integration-tests)
 ;;; clime-integration-tests.el ends here

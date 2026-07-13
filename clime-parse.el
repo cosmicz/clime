@@ -51,14 +51,31 @@ only when NAME is not in the params plist."
 ;;; ─── Internal Helpers ───────────────────────────────────────────────────
 
 (defun clime--option-like-p (token)
-  "Return non-nil if TOKEN looks like an option flag.
-Matches anything starting with \"-\" that isn't just \"-\" alone."
+  "Return non-nil for option-like TOKEN.
+Match anything starting with \"-\" that isn't just \"-\" alone."
   (and (stringp token)
        (> (length token) 1)
        (= (aref token 0) ?-)))
 
+(defun clime--greedy-leaf-p (node)
+  "Return non-nil if NODE can unambiguously absorb trailing bare tokens.
+True only when NODE has no positional args AND no subcommands to descend
+into: either a leaf command (which never descends) or a single-command
+app/group with no children.  In that case extra bare tokens following a
+value option can only be more list values, never an arg or subcommand."
+  (and (null (clime-node-args node))
+       (or (clime-command-p node)
+           (null (clime-group-children node)))))
+
+(defun clime--greedy-value-token-p (token)
+  "Return non-nil if TOKEN may be greedily consumed as a list value.
+Stops greedy consumption at option-like tokens and `--' (which is
+itself option-like), leaving them for the main parse loop."
+  (and (stringp token)
+       (not (clime--option-like-p token))))
+
 (defun clime--split-long-equals (token)
-  "Split \"--name=value\" into (\"--name\" . \"value\"), or nil if no \"=\"."
+  "Split TOKEN into (\"--name\" . \"value\"), or nil if no \"=\"."
   (when (and (> (length token) 2)
              (= (aref token 0) ?-)
              (= (aref token 1) ?-))
@@ -110,8 +127,9 @@ Locked options (from alias :vals) are skipped."
 
 (defun clime--expand-short-bundle (token current-node root)
   "Try to expand TOKEN as a short flag bundle like \"-abc\".
-Return a list of single-char flags if all are boolean in scope,
-or nil if TOKEN is not a valid bundle."
+CURRENT-NODE and ROOT define the option lookup scope.  Return a list
+of single-char flags if all are boolean in scope, or nil if TOKEN is
+not a valid bundle."
   (when (and (> (length token) 2)
              (= (aref token 0) ?-)
              (/= (aref token 1) ?-))
@@ -213,15 +231,31 @@ PATH is the command path for help signals."
           (list (clime--consume-option opt values nil negated)
                 (1+ i)
                 option-parsing)
-        ;; Value option: consume next token
+        ;; Value option: consume next token (or a greedy space-separated
+        ;; list when unambiguous — `:multiple' option at a node with no
+        ;; positional args and no subcommands).
         (let ((next-i (1+ i)))
           (when (>= next-i len)
             (signal 'clime-usage-error
                     (list (format "Option %s requires a value" tok))))
-          (list (clime--consume-option opt values
-                                       (clime--resolve-stdin-value (nth next-i argv)))
-                (+ i 2)
-                option-parsing)))))))
+          (if (and (clime-option-multiple opt)
+                   (clime--greedy-leaf-p current-node))
+              ;; Greedy: first token unconditionally (a value is required),
+              ;; then consecutive non-option tokens until `--'/option/end.
+              (let ((vals (clime--consume-option
+                           opt values (clime--resolve-stdin-value (nth next-i argv))))
+                    (j (1+ next-i)))
+                (while (and (< j len)
+                            (clime--greedy-value-token-p (nth j argv)))
+                  (setq vals (clime--consume-option
+                              opt vals (clime--resolve-stdin-value (nth j argv))))
+                  (cl-incf j))
+                (list vals j option-parsing))
+            ;; Single value (current behavior)
+            (list (clime--consume-option opt values
+                                         (clime--resolve-stdin-value (nth next-i argv)))
+                  (+ i 2)
+                  option-parsing))))))))
 
 (defun clime--negated-scope-p (scope)
   "Return non-nil if SCOPE indicates a negated option lookup."
@@ -378,8 +412,13 @@ APP is the root app node (for :env-prefix).  Returns updated VALUES."
                     (clime-option-choices opt)
                     (clime-option-coerce opt)
                     env-var)))))
-            ;; Boolean falsy returns nil from parse-boolean-env — skip
-            (when (or env-val (not (clime-option-boolean-p opt)))
+            ;; Boolean falsy returns nil from parse-boolean-env.
+            ;; Non-negatable bools skip falsy (env can only enable, which
+            ;; equals the nil default).  Negatable bools store the nil so
+            ;; env can explicitly disable a :default t.
+            (when (or env-val
+                      (not (clime-option-boolean-p opt))
+                      (clime-option-negatable opt))
               (setq values (clime-values-set values name env-val 'env))))))))
   values)
 
@@ -403,7 +442,14 @@ Returns updated VALUES."
     (let ((name (clime-option-name opt)))
       (unless (clime-values-get values name)
         (let ((val (funcall provider cmd-path (symbol-name name))))
-          (when val
+          (cond
+           ;; Explicit false/nil in config.  Only meaningful for
+           ;; negatable bools (disable a :default t); for any other
+           ;; option an explicit nil is dropped, as before.
+           ((eq val clime--config-false)
+            (when (clime-option-negatable opt)
+              (setq values (clime-values-set values name nil 'config))))
+           (val
             (let ((coerced
                    (if (stringp val)
                        (clime--transform-value
@@ -412,13 +458,15 @@ Returns updated VALUES."
                         (clime-option-coerce opt)
                         (format "config[%s]" name))
                      val)))
-              (setq values (clime-values-set values name coerced 'config))))))))
+              (setq values (clime-values-set values name coerced 'config)))))))))
   ;; Args
   (dolist (arg (clime-node-args node))
     (let ((name (clime-arg-name arg)))
       (unless (clime-values-get values name)
         (let ((val (funcall provider cmd-path (symbol-name name))))
-          (when val
+          ;; Args are never negatable bools; an explicit config nil
+          ;; (sentinel) is dropped, matching the pre-sentinel behaviour.
+          (when (and val (not (eq val clime--config-false)))
             (let ((coerced
                    (if (stringp val)
                        (clime--transform-value
@@ -494,13 +542,13 @@ Checks all options across NODES against VALUES.  Returns nil when
 all constraints are satisfied."
   (let ((all-opts '())
         (errors '()))
-    ;; Collect all options for flag lookup
+    ;; Collect all options for flag lookup (including nested inline groups)
     (dolist (node nodes)
-      (dolist (opt (clime-node-options node))
+      (dolist (opt (clime-node-all-options node))
         (push opt all-opts)))
-    ;; Check each option with :requires
+    ;; Check each option with :requires (including nested inline groups)
     (dolist (node nodes)
-      (dolist (opt (clime-node-options node))
+      (dolist (opt (clime-node-all-options node))
         (when-let* ((reqs (clime-option-requires opt)))
           (when (clime-values-get values (clime-option-name opt))
             (let ((missing (cl-remove-if
@@ -908,7 +956,8 @@ or on a synthetic :conform-error/NODE-NAME key for unattributed errors."
 
 (defun clime--conform-inline-children (node dispatch-nodes values)
   "Postorder-conform inline group children of NODE not on DISPATCH-NODES.
-Recurses into nested inline groups before conforming each."
+VALUES is the current values map.  Recurse into nested inline groups
+before conforming each."
   (when (clime-group-p node)
     (dolist (entry (clime-group-children node))
       (let ((child (cdr entry)))

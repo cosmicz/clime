@@ -438,8 +438,11 @@ Binds `config-file' to the absolute path.  File is deleted after BODY."
 ;;; ─── json-to-elisp unit tests ───────────────────────────────────────────
 
 (ert-deftest clime-test-config/json-to-elisp-false ()
-  "json-false is converted to nil."
-  (should (eq (clime-config--json-to-elisp :json-false) nil)))
+  "JSON false maps to the `clime--config-false' presence sentinel.
+This lets the apply layer distinguish an explicit false from an
+absent key (see clime-kqee).  JSON null still maps to nil."
+  (should (eq (clime-config--json-to-elisp :json-false) clime--config-false))
+  (should (eq (clime-config--json-to-elisp nil) nil)))
 
 (ert-deftest clime-test-config/json-to-elisp-true ()
   "JSON true is converted to t."

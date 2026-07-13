@@ -243,7 +243,7 @@ Must not contain :name (per-instance)."
   "Define NAME as a variable holding a composable command form.
 NAME serves as both the defvar symbol and the command name string.
 The stored value is (cons NAME-STRING COMMAND-STRUCT), directly
-usable in a container's :children keyword."
+usable in a container's :children keyword.  BODY is the command form."
   (declare (indent 1))
   `(defvar ,name (clime-command ,name ,@body)))
 
@@ -252,7 +252,7 @@ usable in a container's :children keyword."
   "Define NAME as a variable holding a composable group form.
 NAME serves as both the defvar symbol and the group name string.
 The stored value is (cons NAME-STRING GROUP-STRUCT), directly
-usable in a container's :children keyword."
+usable in a container's :children keyword.  BODY is the group form."
   (declare (indent 1))
   `(defvar ,name (clime-group ,name ,@body)))
 
@@ -270,7 +270,7 @@ are preserved.  Only truly absent keys are omitted."
     (nreverse result)))
 
 (defun clime--emit-body (classified keys)
-  "Return constructor pairs for non-nil classified body KEYS.
+  "Return constructor pairs from CLASSIFIED for non-nil body KEYS.
 Collections (:options, :args, :children, :output-formats) wrap values
 in (list ...).  :handler emits its value bare.  :conform is always a list."
   (let (result)
@@ -512,7 +512,7 @@ ARGS is (NAME &rest BODY)."
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:help :doc :aliases :key :hidden :epilog :examples :category :deprecated
-                             :options :args)))
+                             :options :args :children)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms))
@@ -556,7 +556,7 @@ ARGS is (NAME &rest BODY)."
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:help :doc :aliases :key :hidden :inline :epilog :examples :category :deprecated
-                             :options :args :children)))
+                             :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -565,7 +565,7 @@ ARGS is (NAME &rest BODY)."
            (clime-make-group
             :name ,name-str
             ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :inline :epilog :examples :category :deprecated))
-            ,@(clime--emit-merged keywords classified '(:conform :options :args :children :handler))))))
+            ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
 
@@ -592,7 +592,7 @@ Child forms:
          (extracted (clime--extract-keywords
                      body
                      '(:version :env-prefix :help :doc :json-mode :epilog :examples :setup :config
-                                :after-execute :options :args :children :output-formats)))
+                                :after-execute :on-invocation :dotenv :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
@@ -601,7 +601,7 @@ Child forms:
        (setq ,name
              (clime-make-app
               :name ,name-str
-              ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup :config :after-execute))
+              ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup :config :after-execute :on-invocation :dotenv))
               ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler)))))))
 
 ;;; ─── DSL Form Macros ───────────────────────────────────────────────────
@@ -628,18 +628,21 @@ Child forms:
   "Define a CLI option NAME with FLAGS.
 NAME is a symbol — the canonical parameter name.
 FLAGS is a list of flag strings, e.g. (\"--verbose\" \"-v\").
+PLIST contains the keyword arguments below.
 
 Keyword arguments:
   :bool t           Boolean flag (shorthand for :nargs 0)
   :count t          Stackable counter flag (-vvv = 3)
-  :multiple t       Collect repeated values into a list
+  :multiple t       Collect repeated values into a list; also accepts
+                    space-separated values (--opt a b c) where unambiguous
   :separator SEP    Split value by SEP (implies :multiple)
   :negatable t      Generate --no-X variant
   :required t       Option must be provided
   :optional t       Option is not required (exclusive with :required)
   :requires SYMS    Other options that must also be set
   :nargs N          Number of arguments (0 = boolean)
-  :type SYM-OR-FN   Type converter: symbol (\\='string, \\='integer, \\='number) or function
+  :type SYM-OR-FN   Type converter: symbol (\\='string, \\='integer,
+                    \\='number) or function
   :choices LIST     Allowed values or function
   :coerce FN        Transform after type coercion
   :conform FN       Pass-2 validation/normalization
@@ -669,7 +672,8 @@ Keyword arguments:
 NAME is a symbol — the canonical parameter name.
 
 Keyword arguments:
-  :type SYM-OR-FN   Type converter: symbol (\\='string, \\='integer, \\='number) or function
+  :type SYM-OR-FN   Type converter: symbol (\\='string, \\='integer,
+                    \\='number) or function
   :choices LIST     Allowed values or function
   :coerce FN        Transform after type coercion
   :conform FN       Pass-2 validation/normalization
