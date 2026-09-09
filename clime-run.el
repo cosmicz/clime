@@ -36,22 +36,105 @@ is nil), consumed by the invocation-event firing in `clime-run' and
 `clime-run-from-values' to populate `runtime-error' events.  Reset to nil
 at the start of every `clime-run--execute'.")
 
+(defvar clime-run--invocation-event-finalizer nil
+  "Internal adapter callback for finalized invocation events.
+When nil, runners deliver events directly to app hooks.  Dispatch binds this
+to a function of (APP EVENT) so it can add final adapter response metadata
+before delivering the same event exactly once.")
+
+(defvar clime-run--active-invocation-event nil
+  "Internal in-flight event retained by adapter dispatch across nonlocal exit.")
+
+(defvar clime-run--invocation-id nil
+  "Dynamically inherited lifecycle ID for nested invocation boundaries.")
+
+(defvar clime-run--supervisor-invocation-id-consumed nil
+  "Whether this process has consumed its supervisor lifecycle ID.")
+
+(defvar clime-run--lifecycle-terminal-delivered nil
+  "Dynamically scoped flag set after this boundary emits a terminal event.")
+
+(defun clime-run--new-invocation-id ()
+  "Return an opaque random lifecycle ID without process or host identity."
+  (secure-hash
+   'sha256
+   (mapconcat (lambda (_ignored)
+                (format "%x" (random most-positive-fixnum)))
+              (number-sequence 1 8) ":")))
+
+(defun clime-run--current-invocation-id ()
+  "Return a supervisor-provided ID once, or a newly generated lifecycle ID.
+Callers establishing nested boundaries must use `clime-run--new-invocation-id'
+directly.  Only an outer process boundary may consume CLIME_INVOCATION_ID."
+  (let ((supervisor-id
+         (and (not clime-run--supervisor-invocation-id-consumed)
+              (getenv "CLIME_INVOCATION_ID"))))
+    (if supervisor-id
+        (progn
+          (setq clime-run--supervisor-invocation-id-consumed t)
+          supervisor-id)
+      (clime-run--new-invocation-id))))
+
+(defun clime-run--fire-lifecycle (app event)
+  "Fire opt-in lifecycle hooks for APP with EVENT without changing results."
+  (unless (eq (clime-invocation-event-phase event) 'started)
+    (setq clime-run--lifecycle-terminal-delivered t))
+  (when app
+    (dolist (hook (clime-app-on-lifecycle app))
+      (condition-case err
+          (funcall hook event)
+        (error
+         (message "clime: on-lifecycle hook error: %s"
+                  (error-message-string err)))))))
+
+(defun clime-run--register-abort-finalizer (app surface start-time argv)
+  "Arrange a self-observed aborted terminal when the `kill-emacs-hook' runs."
+  (when (clime-app-on-lifecycle app)
+    (let* ((invocation-id clime-run--invocation-id)
+           (finalizer
+            (lambda ()
+              (clime-run--fire-lifecycle
+               app
+               (clime-invocation-event--create
+                :app app :invocation-id invocation-id :surface surface
+                :phase 'aborted :observer 'self :argv argv
+                :error-type 'aborted :start-time start-time)))))
+      (add-hook 'kill-emacs-hook finalizer)
+      finalizer)))
+
+(defun clime-run--unregister-abort-finalizer (finalizer)
+  "Remove this boundary's FINALIZER after it emits a terminal event."
+  (when finalizer
+    (remove-hook 'kill-emacs-hook finalizer)))
+
+(defun clime-run--start-lifecycle (app surface start-time &optional argv)
+  "Synchronously emit APP's initial lifecycle record for SURFACE.
+The record intentionally has no path because it is emitted before parsing."
+  (let ((event (clime-invocation-event--create
+                :app app :invocation-id clime-run--invocation-id
+                :surface surface :phase 'started :argv argv
+                :start-time start-time)))
+    (clime-run--fire-lifecycle app event)
+    (clime-run--register-abort-finalizer app surface start-time argv)))
+
 ;;; ─── Context Builder ───────────────────────────────────────────────────
 
-(defun clime--build-context (app parse-result)
+(defun clime--build-context (app parse-result &optional request)
   "Build a `clime-context' from APP and PARSE-RESULT."
   (clime-context--create
    :app app
    :command (clime-parse-result-command parse-result)
    :path (clime-parse-result-path parse-result)
-   :params (clime-parse-result-params parse-result)))
+   :params (clime-parse-result-params parse-result)
+   :request request))
 
 ;;; ─── Help Printing ─────────────────────────────────────────────────────
 
 (defun clime--print-help (data)
   "Print help or version from help-requested signal DATA."
   (let ((node (plist-get data :node))
-        (path (plist-get data :path))
+        (path (or (plist-get data :display-path)
+                  (plist-get data :path)))
         (version-p (plist-get data :version)))
     (if version-p
         (princ (clime-format-version node))
@@ -59,12 +142,12 @@ at the start of every `clime-run--execute'.")
 
 ;;; ─── Handler Execution ────────────────────────────────────────────────
 
-(defun clime-run--execute (handler ctx)
+(defun clime-run--execute (handler ctx &optional event)
   "Call HANDLER with CTX, flushing output and returning exit code.
 Uses `clime-out--active-format' for output routing.
 Re-signals `clime-usage-error' and `clime-help-requested' to caller.
-Returns integer exit code: 0 success, 1 runtime error.
-After execution, fires `:after-execute' hooks on the app (if any)."
+Returns integer exit code: 0 success, 1 runtime error.  When EVENT is
+non-nil, annotate it with handler invocation, return, and timing data."
   (let* ((fmt clime-out--active-format)
          (streaming (clime-output-format-streaming fmt))
          (clime-out--items nil)
@@ -72,46 +155,43 @@ After execution, fires `:after-execute' hooks on the app (if any)."
          (retval nil)
          (_t0 (setf (clime-context-start-time ctx) (float-time)))
          (_reset (setq clime-run--last-error nil))
-         (exit-code
-          (condition-case err
-              (progn (setq retval (funcall handler ctx)) 0)
-            (clime-usage-error
-             (signal (car err) (cdr err)))
-            (clime-help-requested
-             (signal (car err) (cdr err)))
-            (error
-             (if debug-on-error
-                 (signal (car err) (cdr err))
-               (setq clime-run--last-error
-                     (cons (car err) (error-message-string err)))
-               (if streaming
-                   (funcall (clime-output-format-error-handler fmt)
-                            (error-message-string err))
-                 (push (error-message-string err) clime-out--errors))
-               1)))))
-    (let ((has-errors (or clime-out--errors (> exit-code 0))))
-      (if streaming
-          (when retval
-            (princ (funcall (clime-output-format-encoder fmt) retval))
-            (terpri))
-        (clime-out--flush (clime-output-format-finalize fmt) retval))
-      (let ((final-code (if has-errors 1 0)))
-        (clime-run--fire-after-execute ctx final-code
-                                        (- (float-time)
-                                           (clime-context-start-time ctx)))
-        final-code))))
-
-(defun clime-run--fire-after-execute (ctx exit-code duration)
-  "Fire after-execute hooks from CTX's app with EXIT-CODE and DURATION.
-Each hook is called inside `condition-case'; errors are reported via
-`message' and do not propagate or alter the exit code."
-  (when-let ((app (clime-context-app ctx)))
-    (dolist (hook (clime-app-after-execute app))
-      (condition-case err
-          (funcall hook ctx exit-code duration)
-        (error
-         (message "clime: after-execute hook error: %s"
-                  (error-message-string err)))))))
+         (exit-code nil))
+    (when event
+      (setf (clime-invocation-event-handler-invoked-p event) t))
+    (unwind-protect
+        (progn
+          (setq exit-code
+                (condition-case err
+                    (progn
+                      (setq retval (funcall handler ctx))
+                      (when event
+                        (setf (clime-invocation-event-returned-p event) t
+                              (clime-invocation-event-return-value event) retval))
+                      0)
+                  (clime-usage-error
+                   (signal (car err) (cdr err)))
+                  (clime-help-requested
+                   (signal (car err) (cdr err)))
+                  (error
+                   (if debug-on-error
+                       (signal (car err) (cdr err))
+                     (setq clime-run--last-error
+                           (cons (car err) (error-message-string err)))
+                     (if streaming
+                         (funcall (clime-output-format-error-handler fmt)
+                                  (error-message-string err))
+                       (push (error-message-string err) clime-out--errors))
+                     1))))
+          (let ((has-errors (or clime-out--errors (> exit-code 0))))
+            (if streaming
+                (when retval
+                  (princ (funcall (clime-output-format-encoder fmt) retval))
+                  (terpri))
+              (clime-out--flush (clime-output-format-finalize fmt) retval))
+            (if has-errors 1 0)))
+      (when event
+        (setf (clime-invocation-event-execution-duration event)
+              (- (float-time) (clime-context-start-time ctx)))))))
 
 (defun clime-run--fire-invocation (app event)
   "Fire `:on-invocation' hooks on APP with the `clime-invocation-event' EVENT.
@@ -126,13 +206,36 @@ no hooks."
          (message "clime: on-invocation hook error: %s"
                   (error-message-string err)))))))
 
+(defun clime-run--complete-invocation (app event &optional skip-lifecycle)
+  "Deliver finalized EVENT for APP directly or through an adapter finalizer.
+When SKIP-LIFECYCLE is non-nil, preserve legacy completion delivery without
+closing a lifecycle boundary owned by an outer runner."
+  (if clime-run--invocation-event-finalizer
+      (funcall clime-run--invocation-event-finalizer app event)
+    (progn
+      (unless skip-lifecycle
+        (clime-run--fire-lifecycle app event))
+      (clime-run--fire-invocation app event))))
+
+(defun clime-run--provided-params (values)
+  "Return the flat plist of VALUES whose provenance source is `user'."
+  (cl-loop for (name . properties) in values
+           when (and (eq (plist-get properties :source) 'user)
+                     (plist-member properties :value))
+           append (list name (plist-get properties :value))))
+
 ;;; ─── Values → Execute Pipeline ──────────────────────────────────────────
 
-(defun clime-run-from-values (app node path values)
+(defun clime-run-from-values (app node path values &optional request)
   "Run NODE's handler from VALUES.
 Return (EXIT-CODE . OUTPUT).
 Creates a parse-result, finalizes it, builds a context, and executes
 the handler.  Output is captured via `with-output-to-string'.
+
+This is a trusted in-process entry for an already resolved NODE; it is
+not a surface path gate.  External adapters must resolve untrusted command
+paths through CLI parse, `clime-invoke', or `clime-dispatch-walk-path' before
+calling this function.
 
 APP is the root app.  NODE is the terminal node (command or group with
 handler).  PATH is the command path list.  VALUES is an alist of
@@ -144,12 +247,25 @@ Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error."
   ;; where query params arrive as strings.
   (let ((scope (cons node (clime-node-ancestors node))))
     (setq values (clime--coerce-string-values scope values)))
-  (let* ((start-time (float-time))
+  (let ((abort-finalizer nil)
+        (clime-run--lifecycle-terminal-delivered nil))
+    (unwind-protect
+        (let* ((start-time (float-time))
+               (outer-id clime-run--invocation-id)
+               (clime-run--invocation-id
+                (or outer-id (clime-run--current-invocation-id)))
+               (_start-event (unless outer-id
+                               (setq abort-finalizer
+                                     (clime-run--start-lifecycle
+                                      app (or clime--invocation-surface 'run-from-values)
+                                      start-time))))
          (event (clime-invocation-event--create
                  :app app
+                 :invocation-id clime-run--invocation-id
                  :surface (or clime--invocation-surface 'run-from-values)
                  :path path :display-path path
                  :params (clime-values-plist values)
+                 :provided-params (clime-run--provided-params values)
                  :command (and (clime-command-p node) node)
                  :format clime-out--active-format
                  :start-time start-time))
@@ -163,16 +279,21 @@ Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error."
                   :tree app))
          (exit-code nil)
          (output (with-output-to-string
+                   (when clime-run--invocation-event-finalizer
+                     (setq clime-run--active-invocation-event event))
                    (setq exit-code
                          (condition-case err
                              (clime-dotenv-with-app-env app
                                (clime-parse-finalize result)
-                               (let ((ctx (clime--build-context app result)))
+                               (let ((ctx (clime--build-context app result request)))
                                  (setf (clime-invocation-event-context event) ctx
                                        (clime-invocation-event-params event) (clime-context-params ctx)
+                                       (clime-invocation-event-provided-params event)
+                                       (clime-run--provided-params
+                                        (clime-parse-result-values result))
                                        (clime-invocation-event-path event) (clime-context-path ctx))
                                  (let ((code (clime-run--execute
-                                              (clime-node-handler node) ctx)))
+                                              (clime-node-handler node) ctx event)))
                                    (if clime-run--last-error
                                        (setf (clime-invocation-event-phase event) 'runtime-error
                                              (clime-invocation-event-error-type event) (car clime-run--last-error)
@@ -212,8 +333,10 @@ Exit codes: 0 = success/help/version, 1 = runtime error, 2 = usage error."
                             1))))))
     (setf (clime-invocation-event-exit-code event) (or exit-code 0)
           (clime-invocation-event-duration event) (- (float-time) start-time))
-    (clime-run--fire-invocation app event)
-    (cons (or exit-code 0) output)))
+          (clime-run--complete-invocation app event outer-id)
+          (cons (or exit-code 0) output))
+      (when clime-run--lifecycle-terminal-delivered
+        (clime-run--unregister-abort-finalizer abort-finalizer)))))
 
 ;;; ─── Public API ────────────────────────────────────────────────────────
 
@@ -248,11 +371,19 @@ the format and drives all output behavior through the format struct."
   ;; Reset stdin cache so each invocation reads fresh
   (setq clime--stdin-content nil)
   ;; Pre-parse output format before full parse so even parse errors emit correctly
-  (let* ((active-fmt (clime--detect-output-format app argv))
+  (let ((abort-finalizer nil)
+        (clime-run--lifecycle-terminal-delivered nil))
+    (unwind-protect
+        (let* ((start-time (float-time))
+               (clime-run--invocation-id (clime-run--current-invocation-id))
+               (_start-event
+                (setq abort-finalizer
+                      (clime-run--start-lifecycle app 'cli start-time argv)))
+         (active-fmt (clime--detect-output-format app argv))
          (clime-out--active-format (or active-fmt clime-out--active-format))
-         (start-time (float-time))
          (event (clime-invocation-event--create
-                 :app app :surface 'cli :argv argv
+                 :app app :invocation-id clime-run--invocation-id
+                 :surface 'cli :argv argv
                  :format active-fmt :start-time start-time))
          (exit-code
           (condition-case err
@@ -282,12 +413,15 @@ the format and drives all output behavior through the format struct."
                           (clime-invocation-event-command event) (clime-context-command ctx)
                           (clime-invocation-event-path event) (clime-context-path ctx)
                           (clime-invocation-event-display-path event) (clime-parse-result-display-path result)
-                          (clime-invocation-event-params event) (clime-context-params ctx))
+                          (clime-invocation-event-params event) (clime-context-params ctx)
+                          (clime-invocation-event-provided-params event)
+                          (clime-run--provided-params
+                           (clime-parse-result-values result)))
                     (if (not handler)
                         (progn
                           (setf (clime-invocation-event-phase event) 'no-handler)
                           0)
-                      (let ((code (clime-run--execute handler ctx)))
+                      (let ((code (clime-run--execute handler ctx event)))
                         (if clime-run--last-error
                             (setf (clime-invocation-event-phase event) 'runtime-error
                                   (clime-invocation-event-error-type event) (car clime-run--last-error)
@@ -313,7 +447,7 @@ the format and drives all output behavior through the format struct."
              2)
             (error
              ;; In debug mode, re-signal so a backtrace prints; the unified
-             ;; hook does NOT fire on this path (consistent with after-execute).
+             ;; hook cannot receive a finalized event on this path.
              (if debug-on-error
                  (signal (car err) (cdr err))
                (funcall (clime-output-format-error-handler clime-out--active-format) (error-message-string err))
@@ -323,8 +457,10 @@ the format and drives all output behavior through the format struct."
                1)))))
     (setf (clime-invocation-event-exit-code event) exit-code
           (clime-invocation-event-duration event) (- (float-time) start-time))
-    (clime-run--fire-invocation app event)
-    exit-code))
+          (clime-run--complete-invocation app event)
+          exit-code)
+      (when clime-run--lifecycle-terminal-delivered
+        (clime-run--unregister-abort-finalizer abort-finalizer)))))
 
 (defun clime-main-script-p (app-name)
   "Return non-nil if APP-NAME is the main entry point.

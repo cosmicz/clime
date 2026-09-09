@@ -292,6 +292,8 @@ Promotes inline group children."
       (let ((name (car entry))
             (child (cdr entry)))
         (cond
+         ((not (clime-node-surface-eligible-p child 'invoke))
+          nil)
          ((and (clime-group-p child) (clime-node-inline child))
           (dolist (sub-entry (clime-invoke--visible-children child))
             (push sub-entry result)))
@@ -382,7 +384,8 @@ Returns an alist of (KEY . ACTION) where ACTION is one of:
     (append (clime-invoke--build-child-actions node shared-used)
             (clime-invoke--build-arg-actions node shared-used)
             (clime-invoke--build-option-actions node)
-            (when (clime-node-handler node)
+            (when (and (clime-node-handler node)
+                       (clime-node-surface-eligible-p node 'invoke))
               (list (cons "RET" (list :run node)))))))
 
 ;;; ─── Value Formatting ───────────────────────────────────────────────
@@ -851,7 +854,8 @@ AT-ROOT non-nil means q exits entirely.  DIMMED dims all keys."
                                           'clime-invoke-heading))
           actions)
     (let ((items '()))
-      (when (clime-node-handler node)
+      (when (and (clime-node-handler node)
+                 (clime-node-surface-eligible-p node 'invoke))
         (push (format "%s %s"
                       (propertize "RET" 'face act-face)
                       "Run")
@@ -1444,6 +1448,9 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
         (clime-parse-finalize result))))
   ;; Prepare tree: parent refs, alias resolution, deep copy
   (let ((tree (clime--prepare-tree app)))
+    (unless (clime-node-surface-eligible-p tree 'invoke)
+      (user-error "Application %s is unavailable on invoke"
+                  (clime-node-name tree)))
     ;; Build initial values map from tree value-entries and user params
     (let ((clime-invoke--values nil))
       (clime-invoke--seed-values tree params app)
@@ -1452,11 +1459,14 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
             (nav-path '()))
         (when path
           (dolist (step path)
-            (let ((child (and (clime-group-p node)
-                              (clime-group-find-child node step))))
-              (unless child
+            (let ((match (and (clime-group-p node)
+                              (clime-group-find-child-path-on-surface
+                               node step 'invoke))))
+              (unless match
                 (user-error "Command not found: %s" step))
-              (setq node child)
+              (unless (eq (plist-get match :status) 'eligible)
+                (user-error "Command unavailable on invoke: %s" step))
+              (setq node (car (last (plist-get match :path))))
               (push step nav-path)))
           (setq nav-path (nreverse nav-path)))
         ;; Ask phase: prompt for params before showing menu
@@ -1480,7 +1490,8 @@ Return a plist (:params PLIST :exit EXIT :output OUTPUT) where:
                       (clime-invoke--prompt-params
                        ask-params node ask-buf)))))
           ;; Immediate mode: run without menu if possible
-          (when (and immediate ask-completed (clime-node-handler node))
+          (when (and immediate ask-completed (clime-node-handler node)
+                     (clime-node-surface-eligible-p node 'invoke))
             (let ((valid (clime-invoke--validate-all node)))
               (when (and (null (car valid)) (null (cdr valid))
                          (clime-invoke--all-required-satisfied-p node tree))

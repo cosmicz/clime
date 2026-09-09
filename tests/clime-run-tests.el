@@ -14,6 +14,7 @@
 (require 'clime-core)
 (require 'clime-dsl)
 (require 'clime-run)
+(require 'clime-dispatch)
 (require 'clime-test-helpers)
 
 ;;; ─── Test Fixtures ──────────────────────────────────────────────────────
@@ -465,126 +466,33 @@ could signal with non-standard data.  The guard must handle this."
       (setq code (clime-run--execute (lambda (_) (error "boom")) ctx)))
     (should (= 1 code))))
 
-;;; ─── after-execute hook ─────────────────────────────────────────────────
+;;; ─── removed after-execute hook ─────────────────────────────────────────
 
-(ert-deftest clime-test-run/after-execute-called ()
-  "After-execute hook is called with ctx, exit-code, duration."
-  (let ((log nil))
-    (eval '(clime-app clime-test--after-exec-app
-             :version "1"
-             (clime-command go
-               :help "Go"
-               (clime-handler (ctx) (princ "done") nil)))
-          t)
-    (setf (clime-app-after-execute clime-test--after-exec-app)
-          (list (lambda (ctx exit-code duration)
-                  (push (list ctx exit-code duration) log))))
-    (with-output-to-string (clime-run clime-test--after-exec-app '("go")))
-    (should (= 1 (length log)))
-    (let ((entry (car log)))
-      ;; ctx
-      (should (clime-context-p (nth 0 entry)))
-      (should (equal (clime-context-path (nth 0 entry)) '("clime-test--after-exec-app" "go")))
-      ;; start-time set on ctx
-      (should (floatp (clime-context-start-time (nth 0 entry))))
-      ;; exit-code
-      (should (= 0 (nth 1 entry)))
-      ;; duration is a positive float
-      (should (floatp (nth 2 entry)))
-      (should (>= (nth 2 entry) 0.0)))))
+(ert-deftest clime-test-run/after-execute-api-is-removed ()
+  "The legacy app accessor and runtime firing path no longer exist."
+  (should-not (fboundp 'clime-app-after-execute))
+  (should-not (fboundp 'clime-run--fire-after-execute)))
 
-(ert-deftest clime-test-run/after-execute-receives-error-exit-code ()
-  "After-execute hook receives exit code 1 on handler error."
-  (let ((log nil))
-    (eval '(clime-app clime-test--after-exec-err-app
-             :version "1"
-             (clime-command boom
-               :help "Boom"
-               (clime-handler (ctx) (error "kaboom"))))
-          t)
-    (setf (clime-app-after-execute clime-test--after-exec-err-app)
-          (list (lambda (ctx exit-code duration)
-                  (push (list exit-code duration) log))))
-    (let ((debug-on-error nil))
-      (with-output-to-string
-        (clime-run clime-test--after-exec-err-app '("boom"))))
-    (should (= 1 (length log)))
-    (should (= 1 (car (car log))))))
-
-(ert-deftest clime-test-run/after-execute-multiple-hooks ()
-  "Multiple after-execute hooks all fire."
-  (let ((log1 nil) (log2 nil))
-    (eval '(clime-app clime-test--after-exec-multi-app
-             :version "1"
-             (clime-command go
-               :help "Go"
-               (clime-handler (ctx) nil)))
-          t)
-    (setf (clime-app-after-execute clime-test--after-exec-multi-app)
-          (list (lambda (ctx exit-code duration)
-                  (push 'hook1 log1))
-                (lambda (ctx exit-code duration)
-                  (push 'hook2 log2))))
-    (with-output-to-string
-      (clime-run clime-test--after-exec-multi-app '("go")))
-    (should (equal log1 '(hook1)))
-    (should (equal log2 '(hook2)))))
-
-(ert-deftest clime-test-run/after-execute-error-does-not-propagate ()
-  "A broken after-execute hook does not crash the app or alter exit code."
-  (let ((log nil))
-    (eval '(clime-app clime-test--after-exec-broken-app
-             :version "1"
-             (clime-command go
-               :help "Go"
-               (clime-handler (ctx) (princ "ok") nil)))
-          t)
-    (setf (clime-app-after-execute clime-test--after-exec-broken-app)
-          (list (lambda (ctx exit-code duration)
-                  (error "logger broke"))
-                (lambda (ctx exit-code duration)
-                  (push 'second-ran log))))
-    (let ((code nil))
-      (with-output-to-string
-        (setq code (clime-run clime-test--after-exec-broken-app '("go"))))
-      ;; Exit code unchanged despite broken hook
-      (should (= 0 code))
-      ;; Second hook still ran
-      (should (equal log '(second-ran))))))
-
-(ert-deftest clime-test-run/after-execute-not-called-for-help ()
-  "After-execute hook does NOT fire for --help (no handler execution)."
-  (let ((log nil))
-    (eval '(clime-app clime-test--after-exec-help-app
-             :version "1"
-             (clime-command go
-               :help "Go"
-               (clime-handler (ctx) nil)))
-          t)
-    (setf (clime-app-after-execute clime-test--after-exec-help-app)
-          (list (lambda (ctx exit-code duration)
-                  (push t log))))
-    (with-output-to-string
-      (clime-run clime-test--after-exec-help-app '("--help")))
-    (should (null log))))
-
-(ert-deftest clime-test-run/after-execute-nil-is-noop ()
-  "App with no :after-execute works normally."
-  (let ((code nil))
-    (eval '(clime-app clime-test--after-exec-nil-app
-             :version "1"
-             (clime-command go
-               :help "Go"
-               (clime-handler (ctx) (princ "fine") nil)))
-          t)
-    (with-output-to-string
-      (setq code (clime-run clime-test--after-exec-nil-app '("go"))))
-    (should (= 0 code))))
+(ert-deftest clime-test-run/after-execute-dsl-keyword-is-rejected ()
+  "The DSL rejects the removed :after-execute keyword."
+  (should-error
+   (eval '(clime-app clime-test--removed-after-execute
+            :after-execute (lambda (_ctx _code _duration) nil)
+            (clime-command go (clime-handler (_ctx) nil)))
+         t)))
 
 ;;; ─── on-invocation (unified lifecycle hook) ─────────────────────────────
 
 (defvar clime-test--oi-hits 0
   "Number of times `clime-test--oi-counter' has fired.")
+
+(defvar clime-test--lifecycle-bare-phases nil
+  "Phases captured by the bare lifecycle DSL fixture.")
+
+(defun clime-test--lifecycle-bare-hook (event)
+  "Capture EVENT phase for the bare lifecycle DSL fixture."
+  (push (clime-invocation-event-phase event)
+        clime-test--lifecycle-bare-phases))
 
 (defun clime-test--oi-counter (_ev)
   "Increment `clime-test--oi-hits' for on-invocation tests."
@@ -618,10 +526,229 @@ BODY runs with the app defined and the hook installed."
            (list (lambda (ev) (push ev ,events))))
      ,@body))
 
+(ert-deftest clime-test-run/lifecycle-starts-before-setup-and-keeps-completion-hooks-terminal ()
+  "Lifecycle observers see a start before setup; completion hooks do not."
+  (let ((debug-on-error nil)
+        (lifecycle nil)
+        (completed nil))
+    (eval '(clime-app clime-test--lifecycle-setup
+             :setup (lambda (_app _result) (error "setup exploded"))
+             (clime-command go (clime-handler (_ctx) nil)))
+          t)
+    (setf (clime-app-on-lifecycle clime-test--lifecycle-setup)
+          (list (lambda (event) (push event lifecycle)))
+          (clime-app-on-invocation clime-test--lifecycle-setup)
+          (list (lambda (event) (push event completed))))
+    (with-output-to-string
+      (should (= 1 (clime-run clime-test--lifecycle-setup '("go")))))
+    (setq lifecycle (nreverse lifecycle))
+    (should (= 2 (length lifecycle)))
+    (should (eq 'started (clime-invocation-event-phase (car lifecycle))))
+    (should (eq 'runtime-error
+                (clime-invocation-event-phase (cadr lifecycle))))
+    (should (equal (clime-invocation-event-invocation-id (car lifecycle))
+                   (clime-invocation-event-invocation-id (cadr lifecycle))))
+    (should (= 1 (length completed)))
+    (should (eq 'runtime-error
+                (clime-invocation-event-phase (car completed))))))
+
+(ert-deftest clime-test-run/lifecycle-debug-resignal-uses-abort-finalizer ()
+  "A debug re-signal leaves runner cleanup but shutdown emits `aborted'."
+  (let ((events nil)
+        (debug-on-error t)
+        (finalizer nil))
+    (eval '(clime-app clime-test--lifecycle-debug
+             (clime-command boom (clime-handler (_ctx) (error "boom"))))
+          t)
+    (setf (clime-app-on-lifecycle clime-test--lifecycle-debug)
+          (list (lambda (event) (push event events))))
+    (let ((original-add-hook (symbol-function 'add-hook)))
+      (cl-letf (((symbol-function 'add-hook)
+                 (lambda (hook function &rest args)
+                   (when (eq hook 'kill-emacs-hook)
+                     (setq finalizer function))
+                   (apply original-add-hook hook function args))))
+        (should-error (with-output-to-string
+                        (clime-run clime-test--lifecycle-debug '("boom"))))))
+    (should (= 1 (length events)))
+    (should finalizer)
+    (should (memq finalizer kill-emacs-hook))
+    (funcall finalizer)
+    (remove-hook 'kill-emacs-hook finalizer)
+    (setq events (nreverse events))
+    (should (equal '(started aborted)
+                   (mapcar #'clime-invocation-event-phase events)))
+    (should-not (clime-invocation-event-returned-p (cadr events)))))
+
+(ert-deftest clime-test-run/lifecycle-nested-dispatches-have-distinct-paired-ids ()
+  "Each request inside a CLI worker gets its own lifecycle boundary."
+  (let ((events nil)
+        (kill-emacs-hook nil))
+    (eval '(clime-app clime-test--lifecycle-nested-dispatch
+             (clime-command serve
+               (clime-handler (_ctx)
+                 (dotimes (_ 2)
+                   (clime-dispatch-run-request
+                    clime-test--lifecycle-nested-dispatch
+                    (clime-make-dispatch-request
+                     :surface 'serve :adapter 'http :path '("child"))))))
+             (clime-command child (clime-handler (_ctx) nil)))
+          t)
+    (setf (clime-app-on-lifecycle clime-test--lifecycle-nested-dispatch)
+          (list (lambda (event) (push event events))))
+    (with-output-to-string
+      (should (= 0 (clime-run clime-test--lifecycle-nested-dispatch
+                              '("serve")))))
+    (setq events (nreverse events))
+    (should (= 6 (length events)))
+    (should-not (memq 'aborted
+                      (mapcar #'clime-invocation-event-phase events)))
+    (let ((pairs (make-hash-table :test #'equal)))
+      (dolist (event events)
+        (push (clime-invocation-event-phase event)
+              (gethash (clime-invocation-event-invocation-id event) pairs))
+        (puthash (clime-invocation-event-invocation-id event)
+                 (gethash (clime-invocation-event-invocation-id event) pairs)
+                 pairs))
+      (should (= 3 (hash-table-count pairs)))
+      (maphash (lambda (_id phases)
+                 (should (equal '(completed started) phases)))
+               pairs))
+    ;; A normal terminal unregisters the finalizer at that same boundary.
+    (should-not kill-emacs-hook)))
+
+(ert-deftest clime-test-run/lifecycle-nested-values-does-not-close-outer-pair ()
+  "Trusted nested execution preserves completion hooks without a lifecycle terminal."
+  (let ((lifecycle nil)
+        (completed nil))
+    (eval '(clime-app clime-test--lifecycle-nested-values
+             (clime-command parent
+               (clime-handler (_ctx)
+                 (clime-run-from-values
+                  clime-test--lifecycle-nested-values
+                  (cdr (assoc "child"
+                              (clime-group-children
+                               clime-test--lifecycle-nested-values)))
+                  '("clime-test--lifecycle-nested-values" "child") nil)
+                 nil))
+             (clime-command child (clime-handler (_ctx) nil)))
+          t)
+    (setf (clime-app-on-lifecycle clime-test--lifecycle-nested-values)
+          (list (lambda (event) (push event lifecycle)))
+          (clime-app-on-invocation clime-test--lifecycle-nested-values)
+          (list (lambda (event) (push event completed))))
+    (with-output-to-string
+      (should (= 0 (clime-run clime-test--lifecycle-nested-values
+                              '("parent")))))
+    (setq lifecycle (nreverse lifecycle)
+          completed (nreverse completed))
+    (should (equal '(started completed)
+                   (mapcar #'clime-invocation-event-phase lifecycle)))
+    (should (equal (clime-invocation-event-invocation-id (car lifecycle))
+                   (clime-invocation-event-invocation-id (cadr lifecycle))))
+    ;; This legacy completion behavior predates lifecycle telemetry and remains
+    ;; intentionally distinct from lifecycle boundary ownership.
+    (should (equal '(run-from-values cli)
+                   (mapcar #'clime-invocation-event-surface completed)))))
+
+(ert-deftest clime-test-run/lifecycle-honors-supervisor-invocation-id ()
+  "A propagated supervisor ID correlates both local lifecycle events."
+  (let ((events nil)
+        (clime-run--supervisor-invocation-id-consumed nil)
+        (process-environment
+         (cons "CLIME_INVOCATION_ID=supervised-invocation-42" process-environment)))
+    (eval '(clime-app clime-test--lifecycle-env
+             (clime-command go (clime-handler (_ctx) nil)))
+          t)
+    (setf (clime-app-on-lifecycle clime-test--lifecycle-env)
+          (list (lambda (event) (push event events))))
+    (with-output-to-string (clime-run clime-test--lifecycle-env '("go")))
+    (should (equal '("supervised-invocation-42" "supervised-invocation-42")
+                   (mapcar #'clime-invocation-event-invocation-id
+                           (nreverse events))))))
+
+(ert-deftest clime-test-run/lifecycle-consumes-supervisor-id-once ()
+  "A process-level supervisor ID cannot collapse later invocation boundaries."
+  (let ((events nil)
+        (clime-run--supervisor-invocation-id-consumed nil)
+        (process-environment
+         (cons "CLIME_INVOCATION_ID=supervised-invocation-once" process-environment)))
+    (eval '(clime-app clime-test--lifecycle-env-once
+             (clime-command go (clime-handler (_ctx) nil)))
+          t)
+    (setf (clime-app-on-lifecycle clime-test--lifecycle-env-once)
+          (list (lambda (event) (push event events))))
+    (with-output-to-string
+      (clime-run clime-test--lifecycle-env-once '("go"))
+      (clime-run clime-test--lifecycle-env-once '("go")))
+    (let ((ids (mapcar #'clime-invocation-event-invocation-id
+                        (nreverse events))))
+      (should (equal (nth 0 ids) "supervised-invocation-once"))
+      (should (equal (nth 0 ids) (nth 1 ids)))
+      (should (equal (nth 2 ids) (nth 3 ids)))
+      (should-not (equal (nth 0 ids) (nth 2 ids))))))
+
+(ert-deftest clime-test-run/lifecycle-direct-invoke-surface-starts-its-own-pair ()
+  "The interactive trusted runner starts a distinct invoke lifecycle pair."
+  (let ((events nil))
+    (eval '(clime-app clime-test--lifecycle-invoke
+             (clime-command go (clime-handler (_ctx) nil)))
+          t)
+    (setf (clime-app-on-lifecycle clime-test--lifecycle-invoke)
+          (list (lambda (event) (push event events))))
+    (let* ((node (cdr (assoc "go"
+                             (clime-group-children clime-test--lifecycle-invoke))))
+           (clime--invocation-surface 'invoke))
+      (clime-run-from-values clime-test--lifecycle-invoke node
+                             '("clime-test--lifecycle-invoke" "go") nil))
+    (setq events (nreverse events))
+    (should (equal '(started completed)
+                   (mapcar #'clime-invocation-event-phase events)))
+    (should (eq 'invoke (clime-invocation-event-surface (car events))))))
+
+(ert-deftest clime-test-run/lifecycle-dsl-normalizes-a-bare-hook ()
+  "The DSL accepts one lifecycle function without requiring a list wrapper."
+  (setq clime-test--lifecycle-bare-phases nil)
+  (eval '(clime-app clime-test--lifecycle-bare
+           :on-lifecycle #'clime-test--lifecycle-bare-hook
+           (clime-command go (clime-handler (_ctx) nil)))
+        t)
+  (with-output-to-string (clime-run clime-test--lifecycle-bare '("go")))
+  (should (equal '(completed started) clime-test--lifecycle-bare-phases)))
+
+(ert-deftest clime-test-run/lifecycle-start-hook-does-not-pollute-captured-output ()
+  "A lifecycle hook may write to stdout without altering captured command output."
+  (let ((events nil))
+    (eval '(clime-app clime-test--lifecycle-capture
+             (clime-command go (clime-handler (_ctx) (princ "command"))))
+          t)
+    (setf (clime-app-on-lifecycle clime-test--lifecycle-capture)
+          (list (lambda (event) (push event events) (princ "lifecycle"))))
+    (let* ((node (cdr (assoc "go"
+                             (clime-group-children
+                              clime-test--lifecycle-capture))))
+           (path '("clime-test--lifecycle-capture" "go"))
+           (baseline (progn
+                       (setf (clime-app-on-lifecycle
+                              clime-test--lifecycle-capture) nil)
+                       (clime-run-from-values
+                        clime-test--lifecycle-capture node path nil))))
+      (setf (clime-app-on-lifecycle clime-test--lifecycle-capture)
+            (list (lambda (event) (push event events) (princ "lifecycle"))))
+      (with-temp-buffer
+        (let ((standard-output (current-buffer)))
+          (let ((result (clime-run-from-values
+                         clime-test--lifecycle-capture node path nil)))
+            (should (equal (cdr baseline) (cdr result))))
+          (should (equal "lifecyclelifecycle" (buffer-string)))))
+      (should (= 2 (length events))))))
+
 (ert-deftest clime-test-run/on-invocation-success ()
   "Unified hook fires once on success with a fully-populated event."
   (clime-test--with-oi-app clime-test--oi-ok evs
-    (with-output-to-string (clime-run clime-test--oi-ok '("go" "Ada")))
+    (should (equal "done"
+                   (with-output-to-string
+                     (clime-run clime-test--oi-ok '("go" "Ada")))))
     (should (= 1 (length evs)))
     (let ((ev (car evs)))
       (should (clime-invocation-event-p ev))
@@ -632,6 +759,15 @@ BODY runs with the app defined and the hook installed."
       (should (equal '("clime-test--oi-ok" "go") (clime-invocation-event-path ev)))
       (should (clime-context-p (clime-invocation-event-context ev)))
       (should (equal "Ada" (plist-get (clime-invocation-event-params ev) 'name)))
+      (should (equal '(name "Ada")
+                     (clime-invocation-event-provided-params ev)))
+      (should (clime-invocation-event-handler-invoked-p ev))
+      (should (floatp (clime-invocation-event-execution-duration ev)))
+      (should (>= (clime-invocation-event-execution-duration ev) 0.0))
+      (should (clime-invocation-event-returned-p ev))
+      (should (null (clime-invocation-event-return-value ev)))
+      (should (null (clime-invocation-event-adapter ev)))
+      (should (null (clime-invocation-event-response-status ev)))
       (should (floatp (clime-invocation-event-start-time ev)))
       (should (floatp (clime-invocation-event-duration ev)))
       (should (>= (clime-invocation-event-duration ev) 0.0))
@@ -651,6 +787,10 @@ BODY runs with the app defined and the hook installed."
         (should (= 1 (clime-invocation-event-exit-code ev)))
         (should (string-match-p "kaboom" (clime-invocation-event-error-message ev)))
         (should (clime-invocation-event-error-type ev))
+        (should (clime-invocation-event-handler-invoked-p ev))
+        (should (floatp (clime-invocation-event-execution-duration ev)))
+        (should-not (clime-invocation-event-returned-p ev))
+        (should (null (clime-invocation-event-return-value ev)))
         ;; context exists because the failure was inside the handler
         (should (clime-context-p (clime-invocation-event-context ev)))))))
 
@@ -666,6 +806,9 @@ BODY runs with the app defined and the hook installed."
         (should (eq 'usage-error (clime-invocation-event-phase ev)))
         (should (= 2 (clime-invocation-event-exit-code ev)))
         (should (clime-invocation-event-error-message ev))
+        (should-not (clime-invocation-event-handler-invoked-p ev))
+        (should (null (clime-invocation-event-execution-duration ev)))
+        (should-not (clime-invocation-event-returned-p ev))
         ;; no context was built before the parse failed
         (should (null (clime-invocation-event-context ev)))))))
 
@@ -722,26 +865,38 @@ the observable phase is `help' (exit 0), just like an explicit --help."
   (with-output-to-string (clime-run clime-test--oi-bare '("go")))
   (should (= 1 clime-test--oi-hits)))
 
-(ert-deftest clime-test-run/on-invocation-coexists-with-after-execute ()
-  "On success both hooks fire; on --help only on-invocation fires (documented)."
-  (let ((ae nil) (oi nil))
-    (eval '(clime-app clime-test--oi-coexist
+(ert-deftest clime-test-run/on-invocation-hooks-run-in-order-and-ignore-returns ()
+  "Unified hooks run synchronously in registration order; returns are ignored."
+  (let ((calls nil))
+    (eval '(clime-app clime-test--oi-order
              :version "1"
              (clime-command go :help "Go" (clime-handler (ctx) nil)))
           t)
-    (setf (clime-app-after-execute clime-test--oi-coexist)
-          (list (lambda (_ctx _code _dur) (push 'ae ae))))
-    (setf (clime-app-on-invocation clime-test--oi-coexist)
-          (list (lambda (_ev) (push 'oi oi))))
-    ;; success: both fire
-    (with-output-to-string (clime-run clime-test--oi-coexist '("go")))
-    (should (equal '(ae) ae))
-    (should (equal '(oi) oi))
-    ;; help: after-execute does NOT fire, on-invocation DOES
-    (setq ae nil oi nil)
-    (with-output-to-string (clime-run clime-test--oi-coexist '("--help")))
-    (should (null ae))
-    (should (equal '(oi) oi))))
+    (setf (clime-app-on-invocation clime-test--oi-order)
+          (list (lambda (_event) (setq calls (append calls '(first))) 'ignored)
+                (lambda (_event) (setq calls (append calls '(second))) nil)))
+    (let (code)
+      (with-output-to-string
+        (setq code (clime-run clime-test--oi-order '("go"))))
+      (should (= 0 code)))
+    (should (equal '(first second) calls))))
+
+(ert-deftest clime-test-run/on-invocation-preserves-non-nil-return-value ()
+  "The event captures the raw handler return before text rendering."
+  (let ((events nil))
+    (eval '(clime-app clime-test--oi-return
+             (clime-command go
+               (clime-handler (_ctx) '(:answer 42))))
+          t)
+    (setf (clime-app-on-invocation clime-test--oi-return)
+          (list (lambda (event) (push event events))))
+    (let ((output (with-output-to-string
+                    (should (= 0 (clime-run clime-test--oi-return '("go")))))))
+      (should (string-match-p "answer" output)))
+    (let ((event (car events)))
+      (should (clime-invocation-event-returned-p event))
+      (should (equal '(:answer 42)
+                     (clime-invocation-event-return-value event))))))
 
 (ert-deftest clime-test-run/on-invocation-run-from-values-surface ()
   "clime-run-from-values produces consistent events; surface honors the dynvar."
@@ -751,20 +906,54 @@ the observable phase is `help' (exit 0), just like an explicit --help."
              (clime-command go
                :help "Go"
                (clime-arg name :optional :default "x" :help "Name")
+               (clime-option color ("--color") :default "blue" :help "Color")
                (clime-handler (ctx) (princ "ok") nil)))
           t)
     (setf (clime-app-on-invocation clime-test--oi-rfv)
           (list (lambda (ev) (push ev evs))))
     (let* ((node (cdr (assoc "go" (clime-group-children clime-test--oi-rfv))))
-           (vals (clime-values-set nil 'name "Bea" 'arg)))
+           (vals (clime-values-set nil 'name "Bea" 'user)))
       ;; default surface
       (clime-run-from-values clime-test--oi-rfv node '("clime-test--oi-rfv" "go") vals)
       (should (eq 'run-from-values (clime-invocation-event-surface (car evs))))
       (should (eq 'completed (clime-invocation-event-phase (car evs))))
+      (should (equal "blue"
+                     (plist-get (clime-invocation-event-params (car evs)) 'color)))
+      (should (equal '(name "Bea")
+                     (clime-invocation-event-provided-params (car evs))))
       ;; invoke surface via dynvar
       (let ((clime--invocation-surface 'invoke))
         (clime-run-from-values clime-test--oi-rfv node '("clime-test--oi-rfv" "go") vals))
       (should (eq 'invoke (clime-invocation-event-surface (car evs)))))))
+
+(ert-deftest clime-test-run/on-invocation-provided-params-filter-all-sources ()
+  "Only source=user values survive provenance filtering."
+  (let ((events nil))
+    (eval '(clime-app clime-test--oi-provenance
+             (clime-command go (clime-handler (_ctx) nil)))
+          t)
+    (setf (clime-app-on-invocation clime-test--oi-provenance)
+          (list (lambda (event) (push event events))))
+    (let ((values nil))
+      (dolist (entry '((direct "u" user)
+                       (locked "a" app)
+                       (environment "e" env)
+                       (configured "c" config)
+                       (fallback "d" default)
+                       (derived "x" conform)))
+        (setq values (clime-values-set values (nth 0 entry)
+                                       (nth 1 entry) (nth 2 entry))))
+      (let ((node (cdr (assoc "go"
+                              (clime-group-children
+                               clime-test--oi-provenance)))))
+        (clime-run-from-values
+         clime-test--oi-provenance node
+         '("clime-test--oi-provenance" "go") values)))
+    (let ((event (car events)))
+      (dolist (name '(direct locked environment configured fallback derived))
+        (should (plist-member (clime-invocation-event-params event) name)))
+      (should (equal '(direct "u")
+                     (clime-invocation-event-provided-params event))))))
 
 (ert-deftest clime-test-run/on-invocation-documented-accessors-exist ()
   "Every event accessor used by the README JSONL recipe is a real function.
@@ -777,8 +966,15 @@ renamed or dropped, the documented recipe breaks and this test fails."
                  clime-invocation-event-path
                  clime-invocation-event-display-path
                  clime-invocation-event-params
+                 clime-invocation-event-provided-params
                  clime-invocation-event-command
                  clime-invocation-event-context
+                 clime-invocation-event-handler-invoked-p
+                 clime-invocation-event-execution-duration
+                 clime-invocation-event-returned-p
+                 clime-invocation-event-return-value
+                 clime-invocation-event-adapter
+                 clime-invocation-event-response-status
                  clime-invocation-event-exit-code
                  clime-invocation-event-error-type
                  clime-invocation-event-error-message

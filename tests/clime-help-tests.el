@@ -165,14 +165,29 @@
          (help (clime-format-help cmd '("app" "x"))))
     (should (string-match-p "-v \\.\\.\\." help))))
 
-(ert-deftest clime-test-help/repeat-indicator-multiple ()
-  "Multiple options show ... indicator."
+(ert-deftest clime-test-help/multiple-option-no-repeat-indicator ()
+  "Multiple value options do not show a flag-column repeat indicator."
   (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
                                   :multiple t :help "Add tag"))
          (cmd (clime-make-command :name "x" :handler #'ignore
                                   :options (list opt)))
          (help (clime-format-help cmd '("app" "x"))))
-    (should (string-match-p "--tag VALUE \\.\\.\\." help))))
+    (should (string-match-p "--tag VALUE" help))
+    (should-not (string-match-p "--tag VALUE \\.\\.\\." help))))
+
+(ert-deftest clime-test-help/multiple-option-shows-repeatable-annotation ()
+  "Multiple options show repeatability without implying a space-separated list."
+  (let* ((opt (clime-make-option :name 'tag :flags '("--tag")
+                                  :multiple t :help "Add tag"))
+         (cmd (clime-make-command :name "x" :handler #'ignore
+                                  :options (list opt)))
+         (help (clime-format-help cmd '("app" "x")))
+         (line (cl-find-if (lambda (candidate)
+                             (string-match-p "--tag" candidate))
+                           (split-string help "\n"))))
+    (should line)
+    (should (string-match-p "^  --tag VALUE  +Add tag .*repeatable" line))
+    (should-not (string-match-p "--tag VALUE \\.\\.\\." line))))
 
 ;;; ─── Option Groups ────────────────────────────────────────────────────
 
@@ -206,6 +221,15 @@
   "Hidden commands are not shown in help."
   (let ((help (clime-format-help clime-test--help-app '("myapp"))))
     (should-not (string-match-p "debug" help))))
+
+(ert-deftest clime-test-help/surface-denied-command-omitted ()
+  "CLI help does not advertise a command unavailable on the CLI surface."
+  (let* ((private (clime-make-command :name "private" :handler #'ignore
+                                      :help "MCP only" :surfaces '(mcp)))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("private" . ,private))))
+         (help (clime-format-help (clime--prepare-tree app) '("test"))))
+    (should-not (string-match-p "private" help))))
 
 ;;; ─── Category Specs ──────────────────────────────────────────────────
 ;;

@@ -140,7 +140,10 @@ Priority: errors > items > retval.
 - all nil        → nil"
   (cond
    (errors
-    `((error . ,(car errors))))
+    (let ((first (car errors)))
+      (if (and (listp first) (assq 'error first))
+          first
+        `((error . ,first)))))
    (items
     (if (cdr items) (vconcat items) (car items)))
    (retval

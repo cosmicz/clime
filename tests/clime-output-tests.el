@@ -252,6 +252,12 @@
                  '(((x . 1))) "retval" '("fail"))))
     (should (equal (cdr (assq 'error result)) "fail"))))
 
+(ert-deftest clime-test-output/finalize-default-structured-error ()
+  "Default finalize: structured errors pass through as the error envelope."
+  (let* ((error '((error . "fail") (phase . "swarm-membership")))
+         (result (clime-out--finalize-default nil nil (list error))))
+    (should (equal result error))))
+
 (ert-deftest clime-test-output/finalize-default-multi-items ()
   "Default finalize: 2+ items → JSON array."
   (let ((result (clime-out--finalize-default

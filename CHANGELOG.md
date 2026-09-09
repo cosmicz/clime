@@ -1,6 +1,140 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-09-09
+
+This release adds command-surface policy, local RPC transports, Agent Skill
+export, an MCP tools engine, and correlated invocation telemetry.
+
+**Migration:** replace `:after-execute (CTX EXIT DURATION)` with
+`:on-invocation (EVENT)`. For handler-only logging, filter on
+`clime-invocation-event-handler-invoked-p`; use the event's context, exit code,
+and execution duration. `:on-lifecycle` is the separate opt-in hook for paired
+start and terminal events.
+
+### Added
+
+- **Surface-aware command contract policy**: `clime-contract-nodes`,
+  `clime-contract-find`, and `clime-contract-effective-options` expose
+  policy-filtered live declarations under mandatory `:surface`, `:tree-mode`,
+  `:visibility`, and `:value-mode` inputs. HTTP `/_api/commands` and
+  `/_routes` plus Agent Skill export use this shared traversal; static-safe
+  formatters never execute handlers or dynamic declaration values.
+
+- **Per-surface command availability**: `:surfaces` on apps, groups, and
+  commands restricts discovery and execution across `cli`, `invoke`, `serve`,
+  and `mcp`. Omitted declarations preserve the established CLI, interactive,
+  and serve behavior; MCP command leaves are default-closed while neutral app
+  and group containers remain pass-through for explicitly MCP-enabled
+  descendants. Declarations narrow by ancestor intersection, denied names
+  cannot fall through to positional routing, and the injected `/_routes` and
+  `/_api` nodes are explicitly serve-only.
+
+- **Transport-neutral MCP 2025-11-25 tools engine**: the optional
+  `clime-mcp` module provides per-session initialization, version and
+  capability negotiation, ping, `tools/list`, and `tools/call` handling over
+  decoded JSON-RPC objects. Tool discovery and invocation are explicit ports;
+  transports, command projection, policy, and Emacs introspection remain
+  separate. The V0 engine advertises only tools and deliberately omits tasks,
+  cancellation, prompts, resources, and server-initiated requests.
+
+- **Local invocation telemetry sinks**: the optional `clime-telemetry` module
+  keeps its privacy-safe metadata-only JSONL API and adds opt-in, result-aware
+  JSONL and readable ELD hook constructors. The fixed sensitive record stores
+  direct-user params, handler return presence/value, exit code, structured
+  error, and final HTTP status without capturing stdout or response bodies.
+  Unsupported values receive field-level tagged fallbacks; appenders write
+  UTF-8, retry transient locks, create parents, and protect new files as 0600.
+
+- **`clime-make skill` — export an app as a portable Agent Skill**: a new
+  subcommand that projects a `clime-app`'s command contract into a
+  provider-neutral [Agent Skills](https://code.claude.com/docs/en/skills)
+  package headed by `SKILL.md`. One generated skill is semantically
+  identical for Claude Code and Codex; `--target portable|codex|claude`
+  selects only the install layout (`<base>/.claude/skills/NAME/`,
+  `<base>/.agents/skills/NAME/`, or a standalone directory). Reuses the
+  `serve` app-loading contract (`--app`, `-L`, `--auto-paths`); `--command`
+  sets the executable spelling agents invoke. Generation is deterministic
+  (byte-identical output), atomic (temp-dir + rename; no partial directory
+  on failure), and fails closed on an existing destination unless
+  `--force`. New `clime-skill.el` module (`clime-skill-manifest` /
+  `clime-skill-render` / `clime-skill-write` / `clime-skill-export`).
+- **Skill export never leaks runtime state**: only static declaration
+  metadata is serialized. Handlers, `:setup`, `:config`, and dotenv are
+  never executed; env vars are documented by name only (never read);
+  function-valued `:default`/`:choices` are never resolved; opaque
+  defaults are redacted. The app file is still *loaded* (top-level Elisp
+  runs), so `skill` requires a trusted input file — documented explicitly.
+- **Agent Skills conformance and exact invocation grammar**: `name` is
+  clamped to the spec's 1–64 char token bound; `description` is
+  non-empty, ≤1024 chars, with a trigger-capable fallback when the app
+  has no help; YAML scalars that would retype (`true`, `123`, …) are
+  quoted so `name`/`description` stay strings. The rendered guide shows
+  fixed-arity `nargs=N` as N placeholders, documents `:count` as an
+  accumulating repeatable, renders root arguments/examples, and states
+  the option-scope rule (root options global until `--`; a group's or
+  command's options apply once its name appears). A `:multiple` option
+  documents both repeated (`--opt x --opt y`) and space-separated
+  (`--opt a b c`) values. `--command` is validated against a strict
+  executable-token grammar; shell/Markdown metacharacters are rejected.
+  The generated `name` always equals its destination directory basename
+  (Agent Skills conformance): the portable `--output` basename must be a
+  valid skill name and sets `name`; codex/claude derive both from the
+  app name. Forced replacement (`--force`) is rollback-safe even under
+  compound failure: the previous skill is moved aside, restored if the
+  install fails, and *preserved* (with its recovery path reported) if
+  the restore also fails — a failed replace never destroys a valid skill.
+
+- **Transport-neutral dispatch and local RPC transports**: `clime-dispatch`
+  defines input, request, and response ports that separate command dispatch
+  from its transport. `clime-pipe` accepts a framed request on standard input
+  for process-pipe callers, while `clime-spool` provides a file-spool RPC
+  transport for sandboxed clients; both preserve normal parsing, output, and
+  command policy rather than introducing a parallel execution path.
+
+- **Correlated lifecycle telemetry**: opt-in `:on-lifecycle` app slots and DSL
+  keywords emit
+  paired metadata-only `started` and terminal events, while the established
+  `:on-invocation` hook remains completion-only. Each pair carries an opaque
+  `invocation_id` and an `observer` (`self` or `parent`); these additive
+  safe-record fields are a pre-1.0 wire-format evolution. Terminal events are
+  `aborted` for SIGTERM, SIGINT, unhandled batch errors, and debug re-signals.
+  A supervisor may propagate `CLIME_INVOCATION_ID`, which the outer process
+  consumes once, then call `clime-telemetry-append-parent-exit-jsonl` to record
+  its observed terminal outcome. `clime-telemetry-lifecycle-jsonl-sink` and
+  `clime-telemetry-lifecycle-eld-sink` persist the lifecycle stream.
+
+### Changed
+
+- **HTTP adapter policies**: `clime-serve` validates explicit adapter-policy
+  declarations before dispatch, so policy-controlled HTTP requests fail closed
+  for unknown or invalid policy keys. Serve introspection continues to expose
+  its established wire shape through the shared contract projection.
+
+- **Test preflight**: the standard test command now reads every project source
+  and test form and checks balanced parentheses before loading the test runner,
+  producing a source location for syntax failures.
+
+### Removed
+
+- **Breaking completion-hook consolidation**: the `:after-execute (CTX EXIT DURATION)` app
+  slot, accessor, and runtime path are gone. `clime-app` rejects the removed
+  `:after-execute` DSL keyword with a migration error directing callers to
+  `:on-invocation`, rather than silently accepting a legacy callback. Unified
+  events now expose `provided-params`, `handler-invoked-p`,
+  `execution-duration`, `returned-p`, `return-value`,
+  `adapter`, and `response-status`; former handler-only observers
+  should filter on `handler-invoked-p` and read context, exit code, and
+  execution duration from the event.
+
+### Fixed
+
+- Mark value-taking `:multiple` options as repeatable in help text without
+  implying that a following positional argument is part of the option.
+- Show the target command's full path in shortcut help, including aliases for
+  nested commands.
+- Preserve structured error envelopes emitted through `clime-out-error`
+  instead of nesting them beneath a second `error` key. This retains the
+  structured fields used by downstream Clime applications.
 
 ## 0.7.1 — 2026-06-04
 

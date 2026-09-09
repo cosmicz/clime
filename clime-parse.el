@@ -580,6 +580,12 @@ of its required options are absent from VALUES."
   (when-let ((errors (clime--find-unsatisfied-requires nodes values)))
     (signal 'clime-usage-error (list (car errors)))))
 
+(defun clime--help-display-path (node fallback-path)
+  "Return NODE's help display path, or FALLBACK-PATH when none is set."
+  (if-let* ((target-path (clime-node-help-path node)))
+      (cons (car fallback-path) target-path)
+    fallback-path))
+
 ;;; ─── Main Parse Function ────────────────────────────────────────────────
 
 (defun clime-parse (app argv &optional skip-finalize)
@@ -606,13 +612,21 @@ This enables a setup hook to run between passes."
       (setq app tree-copy
             current-node tree-copy
             root tree-copy))
+    (unless (clime-node-surface-eligible-p root 'cli)
+      (signal 'clime-usage-error
+              (list (format "Application %s is unavailable on cli"
+                            (clime-node-name root)))))
     (condition-case err
         (progn
     (while (< i len)
       (let* ((token (nth i argv))
-             (child-path (and (clime-branch-p current-node)
-                              (clime--required-args-satisfied-p current-node values)
-                              (clime-group-find-child-path current-node token)))
+             (child-match (and (clime-branch-p current-node)
+                               (clime--required-args-satisfied-p current-node values)
+                               (clime-group-find-child-path-on-surface
+                                current-node token 'cli)))
+             (child-path (and (eq (plist-get child-match :status) 'eligible)
+                              (plist-get child-match :path)))
+             (child-denied (eq (plist-get child-match :status) 'ineligible))
              (child (car (last child-path))))
         (cond
          ;; 1. End of options
@@ -629,17 +643,28 @@ This enables a setup hook to run between passes."
                 (j (1+ i)))
             (while (< j len)
               (let* ((next (nth j argv))
-                     (found (and (clime-branch-p help-node)
-                                 (clime-group-find-child-path help-node next))))
-                (if found
+                     (match (and (clime-branch-p help-node)
+                                 (clime-group-find-child-path-on-surface
+                                  help-node next 'cli)))
+                     (found (and (eq (plist-get match :status) 'eligible)
+                                 (plist-get match :path))))
+                (cond
+                 ((eq (plist-get match :status) 'ineligible)
+                  (signal 'clime-usage-error
+                          (list (format "Command %s is unavailable on cli" next)
+                                :path help-path)))
+                 (found
                     (progn
                       (dolist (node found)
                         (setq help-node node)
                         (setq help-path (append help-path (list (clime-node-name node)))))
-                      (cl-incf j))
-                  (setq j len))))  ;; stop on non-command token
+                      (cl-incf j)))
+                 (t (setq j len)))))  ;; stop on non-command token
             (signal 'clime-help-requested
-                    (list :node help-node :path help-path))))
+                    (list :node help-node
+                          :path help-path
+                          :display-path (clime--help-display-path
+                                         help-node help-path)))))
 
          ((and option-parsing
                (string= token "--version")
@@ -647,6 +672,12 @@ This enables a setup hook to run between passes."
                (clime-app-version root))
           (signal 'clime-help-requested
                   (list :node root :path path :version t)))
+
+         ;; A matching but unavailable child must never become an argument.
+         (child-denied
+          (signal 'clime-usage-error
+                  (list (format "Command %s is unavailable on cli" token)
+                        :path display-path)))
 
          ;; 3. Rest arg pending — delegate to rest collector
          ;; (which handles known options internally)
@@ -738,7 +769,10 @@ This enables a setup hook to run between passes."
                (clime-group-children current-node)
                (not (clime-node-handler current-node)))
       (signal 'clime-help-requested
-              (list :node current-node :path path)))
+              (list :node current-node
+                    :path path
+                    :display-path (clime--help-display-path
+                                   current-node path))))
 
     ;; If we're still at root with children and no subcommand was given
     (when (and (clime-app-p current-node)
@@ -746,7 +780,10 @@ This enables a setup hook to run between passes."
                (not (clime-node-handler current-node))
                (= (length path) 1))
       (signal 'clime-help-requested
-              (list :node current-node :path path)))
+              (list :node current-node
+                    :path path
+                    :display-path (clime--help-display-path
+                                   current-node path))))
 
     ;; Build pass-1 result (derive params from values map)
     (let ((result (clime-parse-result--create

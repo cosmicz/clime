@@ -329,6 +329,17 @@ If :aliases is absent, returns KEYWORDS unchanged."
                  `',(clime--normalize-aliases (plist-get keywords :aliases)))
     keywords))
 
+(defun clime--prepare-surfaces (keywords)
+  "Return a copy of KEYWORDS with a literal :surfaces list quoted.
+The container DSL accepts the natural declarative spelling
+`:surfaces (cli invoke)'.  A non-list value remains an expression so the
+constructor can report its ordinary validation error at evaluation time."
+  (let ((surfaces (plist-get keywords :surfaces)))
+    (if (and (plist-member keywords :surfaces)
+             (listp surfaces) (cl-every #'symbolp surfaces))
+        (plist-put (cl-copy-list keywords) :surfaces `',surfaces)
+      keywords)))
+
 ;;; ─── Form Builders ──────────────────────────────────────────────────────
 
 (defun clime--build-option (args)
@@ -512,6 +523,7 @@ ARGS is (NAME &rest BODY)."
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:help :doc :aliases :key :hidden :epilog :examples :category :deprecated
+                             :surfaces :adapter-policies
                              :options :args :children)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
@@ -519,12 +531,12 @@ ARGS is (NAME &rest BODY)."
          (handler (plist-get classified :handler)))
     (unless handler
       (error "clime-command %s: missing clime-handler" name))
-    (setq keywords (clime--prepare-aliases keywords))
+    (setq keywords (clime--prepare-surfaces (clime--prepare-aliases keywords)))
     `(cons ,name-str
            (clime-make-command
             :name ,name-str
             :handler ,handler
-            ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :epilog :examples :category :deprecated))
+            ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :epilog :examples :category :deprecated :surfaces :adapter-policies))
             ,@(clime--emit-merged keywords classified '(:conform :options :args :children))))))
 
 (defun clime--build-alias-for (args)
@@ -556,15 +568,16 @@ ARGS is (NAME &rest BODY)."
          (extracted (clime--extract-keywords
                      (cdr args)
                      '(:help :doc :aliases :key :hidden :inline :epilog :examples :category :deprecated
+                             :surfaces :adapter-policies
                              :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
-    (setq keywords (clime--prepare-aliases keywords))
+    (setq keywords (clime--prepare-surfaces (clime--prepare-aliases keywords)))
     `(cons ,name-str
            (clime-make-group
             :name ,name-str
-            ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :inline :epilog :examples :category :deprecated))
+            ,@(clime--emit-kw keywords '(:help :key :aliases :hidden :inline :epilog :examples :category :deprecated :surfaces :adapter-policies))
             ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler))))))
 
 ;;; ─── Top-Level Macro ────────────────────────────────────────────────────
@@ -588,20 +601,23 @@ Child forms:
   (clime-group NAME &rest BODY)
   (clime-output-format NAME FLAGS &rest PLIST)"
   (declare (indent 1))
+  (when (memq :after-execute body)
+    (error "clime-app: :after-execute was removed; use :on-invocation"))
   (let* ((name-str (symbol-name name))
          (extracted (clime--extract-keywords
                      body
                      '(:version :env-prefix :help :doc :json-mode :epilog :examples :setup :config
-                                :after-execute :on-invocation :dotenv :options :args :children :output-formats)))
+                                :on-invocation :on-lifecycle :dotenv :surfaces :adapter-policies :options :args :children :output-formats)))
          (keywords (car extracted))
          (body-forms (cdr extracted))
          (classified (clime--classify-body body-forms)))
+    (setq keywords (clime--prepare-surfaces keywords))
     `(progn
        (defvar ,name nil ,(format "CLI app defined by `clime-app'."))
        (setq ,name
              (clime-make-app
               :name ,name-str
-              ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup :config :after-execute :on-invocation :dotenv))
+              ,@(clime--emit-kw keywords '(:version :env-prefix :help :json-mode :epilog :examples :setup :config :on-invocation :on-lifecycle :dotenv :surfaces :adapter-policies))
               ,@(clime--emit-merged keywords classified '(:output-formats :conform :options :args :children :handler)))))))
 
 ;;; ─── DSL Form Macros ───────────────────────────────────────────────────

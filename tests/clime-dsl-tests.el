@@ -119,6 +119,21 @@
     (should (clime-group-p grp))
     (should (clime-node-inline grp))))
 
+(ert-deftest clime-test-dsl/surface-declarations ()
+  "App, group, and command preserve explicit surface declarations."
+  (eval '(clime-app clime-test--dsl-surfaces
+           :surfaces (cli invoke serve)
+           (clime-group tools :surfaces (mcp)
+             (clime-command inspect :surfaces (mcp)
+               (clime-handler (ctx) (ignore ctx)))))
+        t)
+  (let* ((app clime-test--dsl-surfaces)
+         (group (cdr (assoc "tools" (clime-group-children app))))
+         (command (cdr (assoc "inspect" (clime-group-children group)))))
+    (should (equal (clime-node-surfaces app) '(cli invoke serve)))
+    (should (equal (clime-node-surfaces group) '(mcp)))
+    (should (equal (clime-node-surfaces command) '(mcp)))))
+
 ;;; ─── Nested Groups ─────────────────────────────────────────────────────
 
 (ert-deftest clime-test-dsl/nested-groups ()

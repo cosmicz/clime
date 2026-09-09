@@ -540,6 +540,16 @@ first are read as options, not list values; here -2 is unknown."
          (result (clime-parse app '("dep" "rm" "ID1"))))
     (should (equal (clime-command-name (clime-parse-result-command result)) "remove"))))
 
+(ert-deftest clime-test-parse/surface-denied-command-is-not-positional-input ()
+  "A denied command name fails instead of filling its parent's argument."
+  (let* ((arg (clime-make-arg :name 'value :required nil))
+         (private (clime-make-command :name "private" :handler #'ignore
+                                      :surfaces '(mcp)))
+         (app (clime-make-app :name "myapp" :version "1"
+                              :args (list arg)
+                              :children `(("private" . ,private)))))
+    (should-error (clime-parse app '("private")) :type 'clime-usage-error)))
+
 (ert-deftest clime-test-parse/group-with-root-global ()
   "Root global option works with group subcommand."
   (let* ((app (clime-test--group-app))

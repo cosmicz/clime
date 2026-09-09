@@ -216,6 +216,16 @@ Shows (required) when option is required and has no default."
           suffix))
     (or help-text "")))
 
+(defun clime-help--append-repeatable (help-text opt)
+  "Append (repeatable) annotation to HELP-TEXT for repeatable value OPT."
+  (if (and (clime-option-multiple opt)
+           (not (clime-option-boolean-p opt)))
+      (let ((suffix "(repeatable)"))
+        (if (and help-text (not (string-empty-p help-text)))
+            (concat help-text " " suffix)
+          suffix))
+    (or help-text "")))
+
 (defun clime-help--append-deprecated (help-text deprecated)
   "Append deprecation annotation to HELP-TEXT if DEPRECATED is non-nil.
 DEPRECATED is a string (migration hint) or t (generic)."
@@ -250,7 +260,7 @@ When WIDTH is non-nil, help text is wrapped to fit."
 (defun clime-help--format-option-flags (opt)
   "Format the flag column for OPT.
 Short flags first, then long.  Appends VALUE for value-taking options.
-Appends repeat indicator for :count and :multiple options."
+Appends repeat indicator for :count options."
   (let* ((flags (clime-option-flags opt))
          (shorts (cl-remove-if-not (lambda (f) (and (= (length f) 2)
                                                      (= (aref f 0) ?-)))
@@ -271,7 +281,6 @@ Appends repeat indicator for :count and :multiple options."
             (unless boolean-p " VALUE")
             (cond
              ((clime-option-count opt) " ...")
-             ((clime-option-multiple opt) " ...")
              (t "")))))
 
 (defun clime-help--format-options (options &optional width app)
@@ -316,7 +325,7 @@ values.  Returns a list of category strings, outermost first."
       (setq cur (clime-node-parent cur)))
     segments))
 
-(defun clime-help--collect-items (node)
+(defun clime-help--collect-items (node &optional surface)
   "Collect help items from NODE using `clime-node-collect'.
 Returns flat list of (CATEGORY-PATH TYPE ITEM SCOPE) where:
   CATEGORY-PATH — list of category strings (outermost first), or nil.
@@ -327,13 +336,20 @@ Returns flat list of (CATEGORY-PATH TYPE ITEM SCOPE) where:
 Options on uncategorized inline groups with no own :category are skipped.
 SCOPE is set for options that have a sub-category from an inline group,
 listing the group's command children to indicate which commands the
-options apply to."
-  (let ((raw (clime-node-collect node))
+options apply to.  SURFACE defaults to `cli'."
+  (let* ((surface (or surface 'cli))
+         (raw (clime-node-collect
+              node
+              :match-p (lambda (type item)
+                         (or (eq type :option)
+                             (clime-node-surface-eligible-p item surface)))))
         (items '()))
     (dolist (entry raw)
       (let* ((type (car entry))
              (item (cadr entry)))
-        (pcase type
+        (when (or (not (eq type :option))
+                  (clime-node-surface-eligible-p (caddr entry) surface))
+          (pcase type
           (:group
            ;; Emit group if it has :help (for section descriptions)
            (let ((path (clime-help--category-path item node)))
@@ -360,24 +376,26 @@ options apply to."
            (let* ((path (clime-help--category-path (clime-node-parent item) node))
                   (own-cat (clime-node-category item))
                   (full-path (if own-cat (append path (list own-cat)) path)))
-             (push (list full-path :command item nil) items))))))
+             (push (list full-path :command item nil) items)))))))
     (nreverse items)))
 
 (defun clime-help--option-row (opt &optional app)
   "Format OPT as a (left . help) table row.
 APP is the root app, used to resolve env var names.
-Pipeline: help → choices → type → required → env → deprecated."
+Pipeline: help → choices → type → required → repeatable → env → deprecated."
   (let ((choices (clime--effective-choices opt)))
     (cons (clime-help--format-option-flags opt)
           (clime-help--append-deprecated
            (clime-help--append-env
-            (clime-help--append-required
-             (clime-help--append-type
-              (clime-help--append-choices
-               (clime-option-help opt)
+            (clime-help--append-repeatable
+             (clime-help--append-required
+              (clime-help--append-type
+               (clime-help--append-choices
+                (clime-option-help opt)
+                choices)
+               (clime-option-type opt)
                choices)
-              (clime-option-type opt)
-              choices)
+              opt)
              opt)
             opt app)
            (clime-option-deprecated opt)))))

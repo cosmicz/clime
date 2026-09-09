@@ -473,6 +473,24 @@
     (should (assoc "RET" (clime-invoke--build-key-map cmd)))
     (should-not (assoc "RET" (clime-invoke--build-key-map grp)))))
 
+(ert-deftest clime-test-invoke/surface-gate-hides-child-and-run-action ()
+  "Invoke neither advertises nor runs a command excluded from invoke."
+  (let* ((private (clime-make-command :name "private" :handler #'ignore
+                                      :surfaces '(mcp)))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("private" . ,private)))))
+    (should-not (assoc "private" (clime-invoke--visible-children app)))
+    (should-not (assoc "RET" (clime-invoke--build-key-map private)))))
+
+(ert-deftest clime-test-invoke/surface-gate-rejects-direct-path ()
+  "A direct invoke PATH cannot bypass the menu's surface filter."
+  (let* ((private (clime-make-command :name "private" :handler #'ignore
+                                      :surfaces '(mcp)))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("private" . ,private)))))
+    (should-error (clime-invoke app '("private") nil :immediate 'no-confirm)
+                  :type 'user-error)))
+
 (ert-deftest clime-test-invoke/keymap-args-included ()
   "Positional args get key assignments."
   (let* ((arg (clime-make-arg :name 'file :help "File"))

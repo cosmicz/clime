@@ -34,7 +34,9 @@ VERBOSE ?=
 
 tests: test
 test: clean-elc submodules
-	@CLIME_TEST_VERBOSE=$(VERBOSE) $(BATCH) -l ./tests/clime-tests-runner.el \
+	@CLIME_TEST_VERBOSE=$(VERBOSE) $(BATCH) -l ./tests/clime-tests-preflight.el \
+		--eval '(clime-test-preflight-project)' \
+		-l ./tests/clime-tests-runner.el \
 		--eval '(clime-run-tests-batch "$(SELECTOR)")' \
 		< /dev/null
 
@@ -43,8 +45,9 @@ test-all: bin/clime-make bin/clime bin/greeter bin/pkm test
 DIST_DIR ?= dist
 DIST_SRCS = clime-settings.el clime-core.el clime-param-type.el clime-parse.el \
 	clime-config.el clime-dsl.el clime-help.el clime-output.el \
-	clime-dotenv.el clime-run.el \
-	clime-invoke.el clime-serve.el clime.el clime-make.el
+	clime-dotenv.el clime-run.el clime-dispatch.el \
+	clime-contract.el clime-invoke.el clime-serve.el clime-skill.el clime-pipe.el \
+	clime-mcp.el clime-telemetry.el clime.el clime-make.el
 
 dist:
 	@$(CLIME_MAKE) bundle -o $(DIST_DIR)/clime.el \

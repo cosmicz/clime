@@ -26,6 +26,7 @@ Configure project-specific settings for clean test execution."
 ;;; ─── Load Test Files ──────────────────────────────────────────────────
 
 (require 'clime-test-helpers)
+(require 'clime-tests-preflight-tests)
 (require 'clime-core-tests)
 (require 'clime-parse-tests)
 (require 'clime-dsl-tests)
@@ -47,7 +48,13 @@ Configure project-specific settings for clean test execution."
 (require 'clime-dotenv-tests)
 (require 'clime-integration-tests)
 (require 'clime-dispatch-tests)
+(require 'clime-mcp-tests)
+(require 'clime-contract-tests)
+(require 'clime-telemetry-tests)
+(require 'clime-pipe-tests)
+(require 'clime-spool-tests)
 (require 'clime-serve-tests)
+(require 'clime-skill-tests)
 
 ;;; ─── Test Runner Functions ────────────────────────────────────────────
 

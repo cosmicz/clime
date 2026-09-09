@@ -40,6 +40,31 @@
                     :children (list (cons "agents" grp)
                                     (cons "start" alias)))))
 
+(defun clime-test--inline-shortcut-app (&optional alias-help)
+  "Build an app with an inline shortcut alias to a nested command.
+When ALIAS-HELP is non-nil, use it as the alias help override."
+  (let* ((cmd-arg (clime-make-arg :name 'name :help "Agent name"))
+         (cmd-opt (clime-make-option :name 'prompt :flags '("--prompt")
+                                     :help "Initial prompt"))
+         (cmd-start (clime-make-command :name "start"
+                                        :help "Start an agent"
+                                        :handler #'ignore
+                                        :args (list cmd-arg)
+                                        :options (list cmd-opt)))
+         (grp (clime-make-group :name "agents"
+                                :help "Manage agents"
+                                :children (list (cons "start" cmd-start))))
+         (alias (clime-alias--create
+                 :name "start"
+                 :help alias-help
+                 :target '("agents" "start")))
+         (shortcuts (clime-make-group :name "shortcuts"
+                                      :inline t
+                                      :children (list (cons "start" alias)))))
+    (clime-make-app :name "myapp"
+                    :children (list (cons "agents" grp)
+                                    (cons "shortcuts" shortcuts)))))
+
 ;;; ─── Resolution ─────────────────────────────────────────────────────────
 
 (ert-deftest clime-test-alias-for/resolves-args-and-options ()
@@ -191,6 +216,29 @@
     (should (clime-command-p (clime-parse-result-node result)))
     (should (equal "myagent" (plist-get (clime-parse-result-params result) 'name)))
     (should (equal "hello" (plist-get (clime-parse-result-params result) 'prompt)))))
+
+(ert-deftest clime-test-alias-for/help-through-shortcut-shows-target-path ()
+  "Help requested through an inline shortcut shows the alias target path."
+  (let* ((app (clime-test--inline-shortcut-app "Start an agent (shortcut)"))
+         (output (with-output-to-string
+                   (clime-run app '("start" "--help"))))
+         (direct-output (with-output-to-string
+                          (clime-run app '("agents" "start" "--help")))))
+    (should (string-match-p "^Usage: myapp agents start \\[OPTIONS\\] <name>" output))
+    (should (string-match-p "Start an agent (shortcut)" output))
+    (should-not (string-match-p "^Usage: myapp shortcuts start" output))
+    (should (string-match-p "^Usage: myapp agents start \\[OPTIONS\\] <name>"
+                            direct-output))
+    (should (string-match-p "Start an agent" direct-output))))
+
+(ert-deftest clime-test-alias-for/help-through-shortcut-inherits-target-help ()
+  "Shortcut help inherits target help when the alias has no :help override."
+  (let* ((app (clime-test--inline-shortcut-app))
+         (output (with-output-to-string
+                   (clime-run app '("start" "--help")))))
+    (should (string-match-p "^Usage: myapp agents start \\[OPTIONS\\] <name>" output))
+    (should (string-match-p "Start an agent" output))
+    (should-not (string-match-p "Start an agent (shortcut)" output))))
 
 ;;; ─── DSL ────────────────────────────────────────────────────────────────
 

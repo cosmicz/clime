@@ -224,6 +224,58 @@
   (should-not (clime-node-p nil))
   (should-not (clime-node-p 42)))
 
+;;; ─── Surface Eligibility ────────────────────────────────────────────────
+
+(ert-deftest clime-test-surface/neutral-containers-and-explicit-mcp-leaf ()
+  "Neutral containers pass through MCP while leaves remain fail closed."
+  (let* ((mcp (clime-make-command :name "mcp" :surfaces '(mcp)
+                                  :handler #'ignore))
+         (legacy (clime-make-command :name "legacy" :handler #'ignore))
+         (group (clime-make-group :name "ops"
+                                  :children (list (cons "mcp" mcp)
+                                                  (cons "legacy" legacy))))
+         (app (clime-make-app :name "test"
+                              :children (list (cons "ops" group)))))
+    (should (clime-node-surface-eligible-p app 'mcp))
+    (should (clime-node-surface-eligible-p group 'mcp))
+    (should (clime-node-surface-eligible-p mcp 'mcp))
+    (should-not (clime-node-surface-eligible-p legacy 'mcp))
+    (should-not (clime-node-surface-eligible-p mcp 'cli))
+    (should (clime-node-surface-eligible-p legacy 'cli))))
+
+(ert-deftest clime-test-surface/ancestor-declaration-only-narrows ()
+  "A child cannot reopen a surface its parent explicitly excludes."
+  (let* ((leaf (clime-make-command :name "run" :surfaces '(mcp)
+                                   :handler #'ignore))
+         (group (clime-make-group :name "local" :surfaces '(cli invoke)
+                                  :children (list (cons "run" leaf))))
+         (app (clime-make-app :name "test"
+                              :children (list (cons "local" group)))))
+    (ignore app)
+    (should-not (clime-node-surface-eligible-p leaf 'mcp))
+    (should-not (clime-node-surface-eligible-p leaf 'cli))))
+
+(ert-deftest clime-test-surface/declaration-validation ()
+  "Surface declarations reject empty, duplicate, and unknown values."
+  (dolist (surfaces '(() (cli cli) (http) ("cli")))
+    (should-error (clime-make-command :name "bad" :surfaces surfaces
+                                      :handler #'ignore)
+                  :type 'error)))
+
+(ert-deftest clime-test-surface/lookup-distinguishes-denied-from-missing ()
+  "Surface lookup exposes a denied match without treating it as absent."
+  (let* ((private (clime-make-command :name "private" :surfaces '(mcp)
+                                      :handler #'ignore))
+         (group (clime-make-group :name "ops"
+                                  :children (list (cons "private" private))))
+         (denied (clime-group-find-child-path-on-surface group "private" 'cli))
+         (allowed (clime-group-find-child-path-on-surface group "private" 'mcp)))
+    (should (eq (plist-get denied :status) 'ineligible))
+    (should (equal (plist-get denied :path) (list private)))
+    (should (eq (plist-get allowed :status) 'eligible))
+    (should (equal (plist-get allowed :path) (list private)))
+    (should-not (clime-group-find-child-path-on-surface group "missing" 'cli))))
+
 ;;; ─── Node Option Lookup ─────────────────────────────────────────────────
 
 (ert-deftest clime-test-node-find-option/by-long-flag ()
@@ -624,6 +676,11 @@
   "clime-version looks like a semver string."
   (require 'clime)
   (should (string-match-p "^[0-9]+\\.[0-9]+\\.[0-9]" clime-version)))
+
+(ert-deftest clime-test-version/release-candidate ()
+  "The 0.8.0 release candidate exposes its exact package version."
+  (require 'clime)
+  (should (equal clime-version "0.8.0")))
 
 ;;; ─── Merge Template ────────────────────────────────────────────────────
 

@@ -468,6 +468,9 @@ under GROUP-NAME."
   (examples nil :type list :documentation "List of example invocations for help output.
 Each element is (INVOCATION . DESCRIPTION), (INVOCATION), or a bare INVOCATION string.")
   (deprecated nil :documentation "Deprecation notice: string (migration hint) or t (generic warning).")
+  (help-path nil :type list :documentation "Optional user-facing path for help usage lines.")
+  (surfaces nil :type list :documentation "Explicit eligible invocation surfaces, or nil when neutral.")
+  (adapter-policies nil :type list :documentation "Opaque adapter policy map keyed by adapter symbol.")
   (value-entries nil :type list :documentation "Alist of (NAME . PLIST) entries.
 Declarative values a node contributes to the values map during finalize.
 Each PLIST has :value and :source keys.  Alias vals have source `app'.")
@@ -475,6 +478,28 @@ Each PLIST has :value and :source keys.  Alias vals have source `app'.")
            :documentation "Transform/validate hook (run during finalization).
 Single function or list of functions, each: (values, node) → values.
 For lists, functions are called in sequence, threading params."))
+
+(defconst clime-surface-symbols '(cli invoke serve mcp)
+  "Invocation surfaces accepted by node availability declarations.")
+
+(defconst clime--default-open-surfaces '(cli invoke serve)
+  "Established surfaces left open by an omitted availability declaration.")
+
+(defun clime--validate-node-surfaces (args caller)
+  "Validate the optional :surfaces declaration in ARGS for CALLER.
+A declaration must be a nonempty proper list of distinct symbols from
+`clime-surface-symbols'.  An absent declaration is deliberately neutral."
+  (when (plist-member args :surfaces)
+    (let ((surfaces (plist-get args :surfaces)))
+      (unless (and (proper-list-p surfaces) surfaces
+                   (cl-every (lambda (surface)
+                               (memq surface clime-surface-symbols))
+                             surfaces)
+                   (= (length surfaces)
+                      (length (cl-remove-duplicates surfaces :test #'eq))))
+        (error "%s: :surfaces must be a nonempty list of distinct known surfaces"
+               caller))))
+  args)
 
 ;;; ─── Alias ──────────────────────────────────────────────────────────────
 
@@ -521,6 +546,7 @@ ARGS is a plist of slot values."
     (error "clime-make-command: :name is required"))
   (unless (plist-get args :handler)
     (error "clime-make-command: :handler is required"))
+  (clime--validate-node-surfaces args "clime-make-command")
   (apply #'clime-command--create args))
 
 (defun clime--prepare-tree (app)
@@ -576,7 +602,7 @@ Also runs ancestor collision checks after parent refs are established."
 
 ;;; ─── Dispatch Port Records ──────────────────────────────────────────────
 
-(defconst clime-dispatch-surfaces '(cli invoke serve)
+(defconst clime-dispatch-surfaces '(cli invoke serve mcp)
   "Known invocation surfaces accepted by `clime-make-dispatch-request'.")
 
 (defconst clime-dispatch-adapters '(http pipe spool mcp)
@@ -797,7 +823,10 @@ resolved command copies."
                             :category (clime-node-category child)
                             :hidden (clime-node-hidden child)
                             :aliases (clime-node-aliases child)
+                            :adapter-policies (clime-node-adapter-policies target)
                             :deprecated (clime-node-deprecated child))))
+            (setf (clime-node-help-path resolved)
+                  (copy-sequence (clime-alias-target child)))
             ;; Apply :defaults — patch :default on deep-copied options
             (dolist (dfl defaults)
               (let* ((name (car dfl))
@@ -889,6 +918,7 @@ ARGS is a plist of slot values.  Any :output-formats are registered as
 options on the group (see `clime--register-output-formats')."
   (unless (plist-get args :name)
     (error "clime-make-group: :name is required"))
+  (clime--validate-node-surfaces args "clime-make-group")
   (setq args (clime--register-output-formats args))
   (let ((group (apply #'clime-group--create args)))
     (clime--set-direct-parents group)
@@ -946,17 +976,17 @@ ARGS is a plist of slot values."
   (config nil :type (or function null) :documentation "Config factory: (app result) → provider or nil.
 Called between pass-1 and pass-2, after :setup.  The returned provider
 is a function (command-path param-name) → value, used during finalize.")
-  (after-execute nil :type (or function list null) :documentation "Hook(s) called after handler execution.
-Each function receives (ctx exit-code duration-secs).  A single function
-is normalized to a one-element list at creation time.  Errors in hooks
-are caught and reported via `message', never propagated.")
   (on-invocation nil :type (or function list null) :documentation "Unified invocation hook(s).
 Fired once per invocation across ALL exit paths — including parse/usage
 failures, help, and version requests that occur before a context exists.
 Each function receives a single `clime-invocation-event' struct.  A bare
 function is normalized to a one-element list at creation time.  Errors in
-hooks are caught and reported via `message', never propagated.  Unlike
-`after-execute' (handler-scoped), this also fires for help/version.")
+hooks are caught and reported via `message', never propagated.  The finalized
+event is borrowed read-only state shared by hooks in registration order.")
+  (on-lifecycle nil :type (or function list null) :documentation "Opt-in lifecycle hook(s).
+Each hook receives a safe-to-project start event before surface setup or
+parsing, followed by a terminal event when this process observes completion.
+Unlike `on-invocation', this list deliberately receives the start event.")
   (dotenv nil :documentation "Dotenv spec: nil, t (load `.env' from CWD),
 path string, or list of path strings.  Loaded values populate
 `process-environment' during parse/execute so existing :env / :env-prefix
@@ -971,6 +1001,7 @@ Output formats are added to both :output-formats and :options.
 ARGS is a plist of slot values."
   (unless (plist-get args :name)
     (error "clime-make-app: :name is required"))
+  (clime--validate-node-surfaces args "clime-make-app")
   (let ((output-formats (plist-get args :output-formats))
         (json-mode (plist-get args :json-mode)))
     ;; Error if both :json-mode and an explicit json output-format
@@ -989,14 +1020,14 @@ ARGS is a plist of slot values."
       (setq args (plist-put args :output-formats output-formats)))
     ;; Register output-formats as options + auto-exclusivity (shared with groups)
     (setq args (clime--register-output-formats args)))
-  ;; Normalize :after-execute — bare function → one-element list
-  (let ((ae (plist-get args :after-execute)))
-    (when (and ae (functionp ae))
-      (setq args (plist-put args :after-execute (list ae)))))
   ;; Normalize :on-invocation — bare function → one-element list
   (let ((oi (plist-get args :on-invocation)))
     (when (and oi (functionp oi))
       (setq args (plist-put args :on-invocation (list oi)))))
+  ;; Normalize :on-lifecycle — bare function → one-element list
+  (let ((ol (plist-get args :on-lifecycle)))
+    (when (and ol (functionp ol))
+      (setq args (plist-put args :on-lifecycle (list ol)))))
   (let ((app (apply #'clime-app--create args)))
     (clime--set-direct-parents app)
     (clime--resolve-aliases app)
@@ -1013,6 +1044,7 @@ ARGS is a plist of slot values."
   (command nil :documentation "The resolved `clime-command'.")
   (path nil :type list :documentation "List of node names from root to command.")
   (params nil :type list :documentation "Plist of parsed param values.")
+  (request nil :documentation "Sanitized dispatch request metadata, or nil outside request adapters.")
   (start-time nil :type (or float null) :documentation "Time handler execution started (`float-time')."))
 
 ;;; ─── Invocation Event ───────────────────────────────────────────────────
@@ -1020,19 +1052,27 @@ ARGS is a plist of slot values."
 (cl-defstruct (clime-invocation-event (:constructor clime-invocation-event--create)
                                       (:copier nil))
   "A unified invocation lifecycle event.
-Passed as the single argument to each `:on-invocation' hook.  Fired once
-per invocation across every exit path, so fields that depend on a built
-context (`context', `params', `command', `path') are nil for failures
-that occur before a context exists (e.g. parse/usage errors)."
+Passed to terminal `:on-invocation' hooks and opt-in lifecycle hooks.  Start
+events intentionally leave context-dependent fields nil; terminal events keep
+the established completion-hook shape."
   (app nil :documentation "The root `clime-app'.")
+  (invocation-id nil :type (or string null) :documentation "Opaque ID shared by lifecycle start and terminal events.")
   (surface nil :documentation "Entry surface: `cli', `serve', `invoke', or `run-from-values'.")
-  (phase nil :documentation "Outcome: `completed', `no-handler', `help', `version', `usage-error', `runtime-error', or `not-found' (serve route resolution failure / 404).")
+  (phase nil :documentation "Lifecycle phase: `started' or a terminal outcome.")
+  (observer 'self :documentation "Who observed this event: `self' or `parent'.")
   (argv nil :type list :documentation "Raw argv list (cli surface; nil elsewhere).")
   (path nil :type list :documentation "Node-name path from root to command, when known.  For serve `not-found' events, the requested URL segments.")
   (display-path nil :type list :documentation "User-facing path excluding inline groups, when known.")
   (params nil :type list :documentation "Resolved params plist, when a context was built.")
+  (provided-params nil :type list :documentation "Direct user-provided params plist, filtered by values-map provenance.")
   (command nil :documentation "Resolved `clime-command' node, when known.")
   (context nil :documentation "The `clime-context', when one was built (nil for pre-context failures).")
+  (handler-invoked-p nil :documentation "Non-nil when handler execution began, including signalled-error paths.")
+  (execution-duration nil :type (or float null) :documentation "Handler and output execution duration, or nil when no handler ran.")
+  (returned-p nil :documentation "Non-nil when the handler returned normally, including a nil return.")
+  (return-value nil :documentation "Raw final handler return value before output formatting.")
+  (adapter nil :documentation "Dispatch adapter symbol (`http', `pipe', `spool', or `mcp'), or nil.")
+  (response-status nil :documentation "Final adapter response status, or nil when no adapter response exists.")
   (exit-code nil :type (or integer null) :documentation "Exit code: 0 success, 1 runtime error, 2 usage error.")
   (error-type nil :documentation "Error signal symbol, when the invocation failed.")
   (error-message nil :type (or string null) :documentation "Error message string, when the invocation failed.")
@@ -1154,7 +1194,21 @@ For inline group lookups, includes the inline group(s) and the leaf."
                     (let ((sub-path (clime-group-find-child-path child name)))
                       (when sub-path
                         (cons child sub-path))))))
-              children))))
+             children))))
+
+(defun clime-group-find-child-path-on-surface (group name surface)
+  "Find NAME below GROUP for SURFACE, preserving denied-match information.
+Return nil when NAME has no matching child.  Otherwise return a plist with
+:status either `eligible' or `ineligible' and the unfiltered descent :path.
+Callers must treat an ineligible match as a failure before positional-arg
+fallback so unavailable command spellings cannot reach another handler."
+  (when-let ((path (clime-group-find-child-path group name)))
+    (list :status (if (cl-every (lambda (node)
+                                  (clime-node-surface-eligible-p node surface))
+                                path)
+                      'eligible
+                    'ineligible)
+          :path path)))
 
 (defun clime-node-collect (node &rest args)
   "Collect items from NODE's subtree into a flat list.
@@ -1213,6 +1267,23 @@ items, MAX-DEPTH limits recursion, and DEPTH tracks recursion level."
       (push parent ancestors)
       (setq parent (clime-node-parent parent)))
     (nreverse ancestors)))
+
+(defun clime-node-surface-eligible-p (node surface)
+  "Return non-nil when NODE may be discovered or run on SURFACE.
+Explicit declarations on NODE's path compose by intersection.  Omitted
+declarations retain the established CLI, invoke, and serve surfaces.  For
+the default-closed MCP surface, neutral app/group containers pass through
+while a command needs an explicit MCP declaration somewhere on its path."
+  (unless (memq surface clime-surface-symbols)
+    (error "Unknown Clime surface: %S" surface))
+  (let* ((path (cons node (clime-node-ancestors node)))
+         (declared (delq nil (mapcar #'clime-node-surfaces path)))
+         (permitted (cl-every (lambda (surfaces) (memq surface surfaces))
+                              declared)))
+    (and permitted
+         (or (memq surface clime--default-open-surfaces)
+             (not (clime-command-p node))
+             (cl-some (lambda (surfaces) (memq surface surfaces)) declared)))))
 
 (defun clime-node-all-ancestor-flags (node)
   "Collect all option flags from ancestors of NODE.

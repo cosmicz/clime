@@ -21,8 +21,11 @@
 (require 'cl-lib)
 (require 'eieio)
 (require 'json)
+(require 'subr-x)
 (require 'clime-core)
+(require 'clime-contract)
 (require 'clime-parse)
+(require 'clime-dispatch)
 (require 'clime-run)
 (require 'clime-output)
 
@@ -82,49 +85,14 @@ Returns nil for empty/nil BODY."
 
 ;;; ─── Path Walking ───────────────────────────────────────────────────────
 
-(defun clime-serve--next-unfilled-arg (node values)
-  "Return the next positional arg on NODE not yet in VALUES, or nil.
-A :rest arg is always returned (it accepts unlimited segments)."
-  (or (cl-find-if (lambda (arg)
-                    (eq (clime-arg-nargs arg) :rest))
-                  (clime-node-args node))
-      (cl-find-if (lambda (arg)
-                    (not (clime-values-get values (clime-param-name arg))))
-                  (clime-node-args node))))
-
 (defun clime-serve--walk-path (tree segments)
-  "Walk TREE by SEGMENTS, returning plist (:node N :path P :values V).
-Segments matching child names descend into that child.
-Non-matching segments are consumed as positional arg values.
-Signals error if a segment matches neither child nor available arg."
-  (let ((node tree)
-        (path (list (clime-node-name tree)))
-        (values nil))
-    (dolist (seg segments)
-      (let ((child (and (clime-branch-p node)
-                        (clime-group-find-child node seg))))
-        (if child
-            (progn
-              (setq node child)
-              (push (clime-node-name child) path))
-          ;; No child match — try consuming as positional arg
-          (let ((arg (clime-serve--next-unfilled-arg node values)))
-            (if arg
-                (let ((name (clime-param-name arg)))
-                  (if (eq (clime-arg-nargs arg) :rest)
-                      ;; Rest arg: accumulate into a list
-                      (let ((existing (clime-values-value values name)))
-                        (setq values (clime-values-set
-                                      values name
-                                      (append (and (listp existing) existing)
-                                              (list seg))
-                                      'user)))
-                    (setq values (clime-values-set values name seg 'user))))
-              (signal 'clime-serve-not-found
-                      (list (format "No match for path segment: %s" seg))))))))
-    (list :node node :path (nreverse path) :values values)))
+  "Compatibility wrapper for `clime-dispatch-walk-path'."
+  (condition-case err
+      (clime-dispatch-walk-path tree segments)
+    (clime-dispatch-not-found
+     (signal 'clime-serve-not-found (cdr err)))))
 
-(define-error 'clime-serve-not-found "Route not found")
+(define-error 'clime-serve-not-found "Route not found" 'clime-dispatch-not-found)
 
 ;;; ─── Values Seeding ─────────────────────────────────────────────────────
 
@@ -143,203 +111,398 @@ Values are set with source `user'.  Returns updated VALUES."
       (setq values (clime-values-set values sym val 'user))))
   values)
 
-;;; ─── Type Coercion ──────────────────────────────────────────────────────
+(defun clime-serve--seed-dispatch-inputs (values inputs)
+  "Compatibility wrapper for `clime-dispatch-seed-inputs'."
+  (clime-dispatch-seed-inputs values inputs))
+
+(defun clime-serve--alist-inputs (params source)
+  "Convert PARAMS alist to dispatch inputs with SOURCE provenance."
+  (mapcar (lambda (pair)
+            (clime-make-dispatch-input
+             :name (intern (car pair))
+             :value (cdr pair)
+             :source source))
+          params))
+
+(defun clime-serve--normalize-media-type (content-type)
+  "Return lower-case media type from CONTENT-TYPE, ignoring parameters."
+  (when (and content-type (stringp content-type)
+             (not (string-empty-p content-type)))
+    (downcase (string-trim (car (split-string content-type ";" t))))))
+
+(defun clime-serve--method-string (method)
+  "Return upper-case string form of METHOD."
+  (upcase (if (symbolp method) (symbol-name method) (format "%s" method))))
+
+(defun clime-serve--method-symbol (method)
+  "Return upper-case symbol form of METHOD."
+  (intern (clime-serve--method-string method)))
+
+(defun clime-serve--policy-key-present-p (policy key)
+  "Return non-nil when POLICY explicitly contains KEY."
+  (and (listp policy) (plist-member policy key)))
+
+(defconst clime-serve--http-policy-keys
+  '(:methods :param-sources :content-types :max-body-bytes :same-origin)
+  "Known HTTP adapter policy keys.")
+
+(defun clime-serve--policy-node-name (node)
+  "Return NODE name for validation errors."
+  (or (clime-node-name node) "<unnamed>"))
+
+(defun clime-serve--validate-http-policy-keys (node policy)
+  "Validate raw local HTTP POLICY keys for NODE."
+  (unless (listp policy)
+    (error "clime-serve: malformed HTTP adapter policy on `%s'"
+           (clime-serve--policy-node-name node)))
+  (let ((rest policy))
+    (while rest
+      (unless (and (consp rest) (consp (cdr rest)))
+        (error "clime-serve: malformed HTTP adapter policy on `%s'"
+               (clime-serve--policy-node-name node)))
+      (let ((key (car rest)))
+        (unless (memq key clime-serve--http-policy-keys)
+          (error "clime-serve: unknown HTTP adapter policy key %S on `%s'"
+                 key (clime-serve--policy-node-name node))))
+      (setq rest (cddr rest)))))
+
+(defun clime-serve--validate-adapter-policies (node)
+  "Validate raw local adapter policies for NODE."
+  (dolist (entry (clime-node-adapter-policies node))
+    (unless (consp entry)
+      (error "clime-serve: malformed adapter policy entry on `%s'"
+             (clime-serve--policy-node-name node)))
+    (let ((adapter (car entry))
+          (policy (cdr entry)))
+      (unless (memq adapter clime-dispatch-adapters)
+        (error "clime-serve: unknown adapter policy `%s' on `%s'"
+               adapter (clime-serve--policy-node-name node)))
+      (when (eq adapter 'http)
+        (clime-serve--validate-http-policy-keys node policy)))))
+
+(defun clime-serve--intersect-symbol-list (left right)
+  "Return intersection of LEFT and RIGHT preserving LEFT order."
+  (cl-remove-if-not (lambda (item) (memq item right)) left))
+
+(defun clime-serve--intersect-string-list (left right)
+  "Return case-insensitive media-type intersection preserving LEFT order."
+  (cl-remove-if-not
+   (lambda (item)
+     (member (clime-serve--normalize-media-type item)
+             (mapcar #'clime-serve--normalize-media-type right)))
+   left))
+
+(defun clime-serve--merge-http-policy (effective local)
+  "Restrictively merge LOCAL HTTP policy into EFFECTIVE."
+  (let ((result (copy-sequence effective)))
+    (when (clime-serve--policy-key-present-p local :methods)
+      (let ((methods (mapcar #'clime-serve--method-symbol
+                             (plist-get local :methods))))
+        (setq result
+              (plist-put result :methods
+                         (if (clime-serve--policy-key-present-p result :methods)
+                             (clime-serve--intersect-symbol-list
+                              (plist-get result :methods) methods)
+                           methods)))))
+    (when (clime-serve--policy-key-present-p local :param-sources)
+      (let ((sources (plist-get local :param-sources)))
+        (setq result
+              (plist-put result :param-sources
+                         (if (clime-serve--policy-key-present-p result :param-sources)
+                             (clime-serve--intersect-symbol-list
+                              (plist-get result :param-sources) sources)
+                           sources)))))
+    (when (clime-serve--policy-key-present-p local :content-types)
+      (let ((types (plist-get local :content-types)))
+        (setq result
+              (plist-put result :content-types
+                         (if (clime-serve--policy-key-present-p result :content-types)
+                             (clime-serve--intersect-string-list
+                              (plist-get result :content-types) types)
+                           types)))))
+    (when (clime-serve--policy-key-present-p local :max-body-bytes)
+      (let ((limit (plist-get local :max-body-bytes)))
+        (setq result
+              (plist-put result :max-body-bytes
+                         (if (clime-serve--policy-key-present-p result :max-body-bytes)
+                             (min (plist-get result :max-body-bytes) limit)
+                           limit)))))
+    (when (clime-serve--policy-key-present-p local :same-origin)
+      (setq result
+            (plist-put result :same-origin
+                       (or (plist-get result :same-origin)
+                           (plist-get local :same-origin)))))
+    result))
+
+(defun clime-serve--effective-http-policy (node)
+  "Return effective HTTP adapter policy for NODE."
+  (let ((effective nil))
+    (dolist (scope (append (clime-node-ancestors node) (list node)))
+      (when-let ((policy (cdr (assq 'http (clime-node-adapter-policies scope)))))
+        (setq effective (clime-serve--merge-http-policy effective policy))))
+    effective))
+
+(defun clime-serve--validate-http-policy (node)
+  "Validate NODE's effective HTTP policy, if any."
+  (clime-serve--validate-adapter-policies node)
+  (let ((policy (clime-serve--effective-http-policy node)))
+    (when (and (clime-serve--policy-key-present-p policy :methods)
+               (null (plist-get policy :methods)))
+      (error "clime-serve: empty effective HTTP :methods on `%s'"
+             (clime-node-name node)))
+    (when (and (clime-serve--policy-key-present-p policy :param-sources)
+               (null (plist-get policy :param-sources)))
+      (error "clime-serve: empty effective HTTP :param-sources on `%s'"
+             (clime-node-name node)))
+    (when (and (clime-serve--policy-key-present-p policy :content-types)
+               (null (plist-get policy :content-types)))
+      (error "clime-serve: empty effective HTTP :content-types on `%s'"
+             (clime-node-name node)))))
+
+(defun clime-serve--validate-http-policies (node)
+  "Validate effective HTTP policies across NODE's tree."
+  (clime-serve--validate-http-policy node)
+  (when (clime-group-p node)
+    (dolist (entry (clime-group-children node))
+      (clime-serve--validate-http-policies (cdr entry)))))
+
+(defun clime-serve--request-input-sources (request)
+  "Return unique input sources present in REQUEST."
+  (delete-dups (mapcar #'clime-dispatch-input-source
+                       (clime-dispatch-request-inputs request))))
+
+(defun clime-serve--format-error-body (message fmt)
+  "Render rejection MESSAGE for output format FMT."
+  (if (and fmt (eq (clime-output-format-name fmt) 'json))
+      (clime-json-encode `((error . ,message)))
+    (concat message "\n")))
+
+(defun clime-serve--policy-response
+    (status message fmt &optional headers error-type)
+  "Return an HTTP adapter policy rejection dispatch response."
+  (clime-make-dispatch-response
+   :outcome 'rejected
+   :body (clime-serve--format-error-body message fmt)
+   :format fmt
+   :content-type (clime-serve--content-type-for-format fmt)
+   :error-type (or error-type 'clime-serve-policy-rejected)
+   :error-message message
+   :adapter-data (list :http-status status :headers headers)))
+
+(defun clime-serve--origin-allowed-p (request)
+  "Return non-nil when REQUEST satisfies same-origin browser checks."
+  (let* ((metadata (clime-dispatch-request-metadata request))
+         (origin (plist-get metadata :origin))
+         (fetch-site (plist-get metadata :sec-fetch-site))
+         (server-origin (plist-get metadata :server-origin)))
+    (and (not (equal origin "null"))
+         (not (member fetch-site '("cross-site" "same-site")))
+         (or (null origin)
+             (and server-origin (string= origin server-origin)))
+         (or (null fetch-site)
+             (member fetch-site '("same-origin" "none"))))))
+
+(defun clime-serve--policy-rejection (policy request fmt)
+  "Return rejection response if POLICY rejects REQUEST, else nil."
+  (let* ((metadata (clime-dispatch-request-metadata request))
+         (method (clime-serve--method-symbol (plist-get metadata :method)))
+         (body-bytes (or (plist-get metadata :body-bytes) 0))
+         (content-type (clime-serve--normalize-media-type
+                        (plist-get metadata :content-type)))
+         (sources (clime-serve--request-input-sources request)))
+    (cond
+     ((and (clime-serve--policy-key-present-p policy :param-sources)
+           (memq 'json-body (plist-get policy :param-sources))
+           (plist-get metadata :json-error))
+      (clime-serve--policy-response
+       400 (plist-get metadata :json-error) fmt nil
+       'clime-serve-malformed-json))
+     ((and (clime-serve--policy-key-present-p policy :methods)
+           (not (memq method (plist-get policy :methods))))
+      (let ((allow (mapconcat #'clime-serve--method-string
+                              (plist-get policy :methods) ", ")))
+        (clime-serve--policy-response
+         405 "Method Not Allowed" fmt (list (cons "Allow" allow))
+         'clime-serve-method-not-allowed)))
+     ((and (clime-serve--policy-key-present-p policy :max-body-bytes)
+           (> body-bytes (plist-get policy :max-body-bytes)))
+      (clime-serve--policy-response
+       413 "Request Entity Too Large" fmt nil
+       'clime-serve-request-too-large))
+     ((and (clime-serve--policy-key-present-p policy :content-types)
+           sources
+           (not (member content-type
+                        (mapcar #'clime-serve--normalize-media-type
+                                (plist-get policy :content-types)))))
+      (clime-serve--policy-response
+       415 "Unsupported Media Type" fmt nil
+       'clime-serve-unsupported-media-type))
+     ((and (clime-serve--policy-key-present-p policy :param-sources)
+           (or (cl-set-difference sources (plist-get policy :param-sources))
+               (> (length sources) 1)))
+      (clime-serve--policy-response
+       400 "Forbidden request parameter source" fmt nil
+       'clime-serve-forbidden-param-source))
+     ((and (plist-get policy :same-origin)
+           (not (clime-serve--origin-allowed-p request)))
+      (clime-serve--policy-response
+       403 "Forbidden origin" fmt nil
+       'clime-serve-forbidden-origin))
+     (t nil))))
 
 ;;; ─── Format Helpers ─────────────────────────────────────────────────────
 
-(defvar clime-serve--default-json-format
-  (clime-make-output-format :name 'json :flags '("--json")
-                            :help "Output as JSON")
-  "Fallback JSON `clime-output-format' for `_api' introspection endpoints.
-Used when the app registers no json format, so API responses always
-default to JSON.  Also installed on the injected `_api' group.")
+(defvaralias 'clime-serve--default-json-format
+  'clime-dispatch--default-json-format
+  "Fallback JSON `clime-output-format' for `_api' introspection endpoints.")
 
 (defun clime-serve--content-type-for-format (fmt)
-  "Return MIME content-type string for output format FMT.
-FMT is a `clime-output-format' struct or nil (defaults to text/plain)."
-  (if (null fmt)
-      "text/plain; charset=utf-8"
-    (pcase (clime-output-format-name fmt)
-      ('json "application/json")
-      ('html "text/html")
-      ('yaml "text/yaml")
-      (_ "text/plain; charset=utf-8"))))
+  "Compatibility wrapper for `clime-dispatch-content-type-for-format'."
+  (clime-dispatch-content-type-for-format fmt))
 
 (defun clime-serve--extract-suffix (segments app)
-  "Try to strip a format suffix from the last element of SEGMENTS.
-Returns (STRIPPED-SEGMENTS . FORMAT) if a registered output format
-matches, or (SEGMENTS . nil) if no match or no formats on APP."
-  (let* ((formats (clime-app-output-formats app))
-         (last-seg (car (last segments))))
-    (if (or (null formats) (null last-seg)
-            (not (string-match "\\`\\(.+\\)\\.\\([^.]+\\)\\'" last-seg)))
-        (cons segments nil)
-      (let* ((base (match-string 1 last-seg))
-             (ext  (match-string 2 last-seg))
-             (fmt  (cl-find (intern ext) formats
-                            :key #'clime-output-format-name)))
-        (if fmt
-            (cons (append (butlast segments) (list base)) fmt)
-          (cons segments nil))))))
+  "Compatibility wrapper for `clime-dispatch-extract-suffix'."
+  (clime-dispatch-extract-suffix segments app))
 
 ;;; ─── Dispatch ───────────────────────────────────────────────────────────
 
+(defun clime-serve--legacy-request (segments params)
+  "Build a legacy HTTP dispatch request from SEGMENTS and PARAMS."
+  (clime-make-dispatch-request
+   :surface 'serve
+   :adapter 'http
+   :path segments
+   :inputs (clime-serve--alist-inputs params 'query)
+   :metadata (list :method 'GET :body-bytes 0)))
+
 (defun clime-serve--dispatch (app segments params &optional default-format)
-  "Dispatch a request to APP.
-SEGMENTS is a list of URL path segments (strings).
-PARAMS is an alist of (KEY . VALUE) from query string or body.
+  "Dispatch a legacy request to APP.
+SEGMENTS is a list of URL path segments (strings).  PARAMS is an alist
+of (KEY . VALUE) from query string or body.  New HTTP adapter code should
+prefer `clime-serve--dispatch-request'."
+  (clime-serve--dispatch-request
+   app (clime-serve--legacy-request segments params) default-format))
+
+(defun clime-serve--http-policy-rejection (node request fmt _start-time)
+  "Return HTTP adapter rejection for NODE and REQUEST, or nil."
+  (clime-serve--policy-rejection
+   (clime-serve--effective-http-policy node) request fmt))
+
+(defun clime-serve--dispatch-response-plist (response)
+  "Convert dispatch RESPONSE to the legacy serve response plist."
+  (let ((adapter-data (clime-dispatch-response-adapter-data response)))
+    (list :status (clime-dispatch-response-status response)
+          :body (or (clime-dispatch-response-body response) "")
+          :content-type (or (clime-dispatch-response-content-type response)
+                            "text/plain; charset=utf-8")
+          :headers (plist-get adapter-data :headers))))
+
+(defun clime-serve--dispatch-request (app request &optional default-format)
+  "Dispatch normalized REQUEST to APP.
 DEFAULT-FORMAT, when non-nil, is a `clime-output-format' to use when
 no path suffix overrides the format.
-Returns plist (:status N :body STRING :content-type STRING)."
-  (let* ((suffix-result (clime-serve--extract-suffix segments app))
-         (segments (car suffix-result))
-         (suffix-fmt (cdr suffix-result))
-         ;; _api introspection always defaults to JSON.  Prefer an
-         ;; app-registered json format, else the auto-declared default.
-         (api-fmt (when (and (null default-format)
-                             (equal (car segments) "_api"))
-                    (or (cl-find 'json (clime-app-output-formats app)
-                                 :key #'clime-output-format-name)
-                        clime-serve--default-json-format)))
-         (active-fmt (or suffix-fmt default-format api-fmt))
-         (start-time (float-time)))
-    (condition-case err
-        (let* ((tree (clime--prepare-tree app))
-               (walk (clime-serve--walk-path tree segments))
-               (node (plist-get walk :node))
-               (path (plist-get walk :path))
-               (values (plist-get walk :values))
-               (handler (clime-node-handler node)))
-          (unless handler
-            (signal 'clime-serve-not-found
-                    (list (format "No handler at path: /%s"
-                                  (string-join segments "/")))))
-          ;; Seed values from request params
-          (setq values (clime-serve--seed-values values params))
-          ;; Finalize → execute via shared pipeline
-          (let* ((result
-                  (catch 'clime-serve--not-found
-                    (let ((clime-out--active-format
-                           (or active-fmt clime-out--active-format))
-                          (clime--invocation-surface 'serve))
-                      (clime-run-from-values app node path values)))))
-            ;; catch returns the thrown string (not-found) or the (exit-code . output) cons
-            (if (stringp result)
-                ;; A handler threw `clime-serve--not-found' (e.g. introspection
-                ;; detail walk): the throw escapes `clime-run-from-values' before
-                ;; it can fire, so fire the unified not-found event here.
-                (progn
-                  (clime-serve--fire-not-found app segments active-fmt start-time result)
-                  (list :status 404 :body result
-                        :content-type "text/plain; charset=utf-8"))
-              (let ((exit-code (car result))
-                    (output (cdr result)))
-                (list :status (pcase (or exit-code 0)
-                                (0 200)
-                                (2 400)
-                                (_ 500))
-                      :body output
-                      :content-type (clime-serve--content-type-for-format active-fmt))))))
-      (clime-serve-not-found
-       ;; Route resolution failed (unknown segment or handlerless node) before
-       ;; `clime-run-from-values' ran — fire one unified not-found event so
-       ;; every HTTP request is observable, then return 404.
-       (clime-serve--fire-not-found app segments active-fmt start-time (cadr err))
-       (list :status 404 :body (cadr err)
-             :content-type "text/plain; charset=utf-8")))))
-
-(defun clime-serve--fire-not-found (app segments fmt start-time message)
-  "Fire APP's serve `not-found' :on-invocation event for a 404 dispatch.
-SEGMENTS are the requested URL path segments, FMT the active output
-format, START-TIME the dispatch start (`float-time'), and MESSAGE the
-404 reason.  No handler ran, so the event carries a nil exit code."
-  (clime-run--fire-invocation
-   app
-   (clime-invocation-event--create
-    :app app :surface 'serve :phase 'not-found
-    :path segments
-    :format fmt
-    :error-type 'clime-serve-not-found
-    :error-message message
-    :start-time start-time
-    :duration (- (float-time) start-time))))
+Returns plist (:status N :body STRING :content-type STRING :headers ALIST)."
+  (clime-serve--dispatch-response-plist
+   (clime-dispatch-run-request
+    app request default-format
+    :policy-rejector #'clime-serve--http-policy-rejection
+    :default-json-format clime-serve--default-json-format)))
 
 ;;; ─── JSON Serialization ─────────────────────────────────────────────────
 
-(defun clime-serve--option-to-alist (opt)
-  "Serialize OPT (`clime-option') to an alist for JSON encoding."
-  (let ((result `(("name" . ,(symbol-name (clime-option-name opt)))
-                  ("flags" . ,(vconcat (clime-option-flags opt)))
-                  ("type" . ,(let ((ty (clime-option-type opt)))
-                               (if (listp ty)
-                                   (symbol-name (car ty))
-                                 (symbol-name ty))))
-                  ("help" . ,(or (clime-option-help opt) :json-false))
-                  ("required" . ,(if (clime-option-required opt) t :json-false)))))
-    (when (clime-option-default opt)
-      (push `("default" . ,(clime-option-default opt)) result))
-    (when (clime-option-choices opt)
-      (let ((choices (clime-option-choices opt)))
-        (when (listp choices)
-          (push `("choices" . ,(vconcat choices)) result))))
-    (when (clime-option-negatable opt)
+(defconst clime-serve--contract-policy
+  '(:surface serve :tree-mode prepared :visibility visible :value-mode declared)
+  "Explicit declaration policy for HTTP introspection.")
+
+(defconst clime-serve--detail-contract-policy
+  '(:surface serve :tree-mode prepared :visibility all :value-mode declared)
+  "Explicit lookup policy for HTTP command detail.
+
+The command listing omits hidden nodes, while the established detail endpoint
+allows a hidden command that remains serve-eligible to be inspected directly.")
+
+(defun clime-serve--contract-type-name (type policy)
+  "Return HTTP's legacy type name for declaration TYPE under POLICY."
+  (or (apply #'clime-contract-describe-type type policy) "function"))
+
+(defun clime-serve--option-to-alist (option policy)
+  "Serialize declaration OPTION to an alist for JSON encoding."
+  (let ((result `(("name" . ,(symbol-name (clime-option-name option)))
+                  ("flags" . ,(vconcat (clime-option-flags option)))
+                  ("type" . ,(clime-serve--contract-type-name
+                               (clime-option-type option) policy))
+                  ("help" . ,(or (clime-option-help option) :json-false))
+                  ("required" . ,(if (clime-option-required option)
+                                      t :json-false)))))
+    (when-let ((default (apply #'clime-contract-safe-default option policy)))
+      (push `("default" . ,default) result))
+    (let ((choices (apply #'clime-contract-safe-choices option policy)))
+      (when (and choices (listp choices))
+        (push `("choices" . ,(vconcat choices)) result)))
+    (when (clime-option-negatable option)
       (push '("negatable" . t) result))
-    (when (clime-option-deprecated opt)
-      (push `("deprecated" . ,(let ((d (clime-option-deprecated opt)))
+    (when (clime-option-deprecated option)
+      (push `("deprecated" . ,(let ((d (clime-option-deprecated option)))
                                  (if (stringp d) d t)))
             result))
     result))
 
-(defun clime-serve--arg-to-alist (arg)
-  "Serialize ARG (`clime-arg') to an alist for JSON encoding."
-  (let ((result `(("name" . ,(symbol-name (clime-param-name arg)))
-                  ("type" . ,(let ((ty (clime-arg-type arg)))
-                               (if (listp ty)
-                                   (symbol-name (car ty))
-                                 (symbol-name ty))))
-                  ("help" . ,(or (clime-param-help arg) :json-false))
-                  ("required" . ,(if (clime-param-required arg) t :json-false)))))
-    (when (clime-param-default arg)
-      (push `("default" . ,(clime-param-default arg)) result))
-    (when (clime-arg-choices arg)
-      (let ((choices (clime-arg-choices arg)))
-        (when (listp choices)
-          (push `("choices" . ,(vconcat choices)) result))))
+(defun clime-serve--arg-to-alist (arg policy)
+  "Serialize declaration ARG to an alist for JSON encoding."
+  (let ((result `(("name" . ,(symbol-name (clime-arg-name arg)))
+                  ("type" . ,(clime-serve--contract-type-name
+                               (clime-arg-type arg) policy))
+                  ("help" . ,(or (clime-arg-help arg) :json-false))
+                  ("required" . ,(if (clime-arg-required arg)
+                                      t :json-false)))))
+    (when-let ((default (apply #'clime-contract-safe-default arg policy)))
+      (push `("default" . ,default) result))
+    (let ((choices (apply #'clime-contract-safe-choices arg policy)))
+      (when (and choices (listp choices))
+        (push `("choices" . ,(vconcat choices)) result)))
     result))
 
-(defun clime-serve--node-to-alist (node)
-  "Serialize NODE to an alist for JSON encoding.
-Recurses into children for groups.  Omits hidden nodes and options."
-  (let* ((is-group (and (clime-group-p node)
-                        (not (clime-command-p node))))
+(defun clime-serve--node-to-alist (entry policy nodes)
+  "Render contract ENTRY from NODES as HTTP command metadata."
+  (let* ((node (car entry))
+         (is-group (clime-branch-p node))
          (result `(("name" . ,(clime-node-name node))
                    ("type" . ,(if is-group "group" "command"))
                    ("help" . ,(or (clime-node-help node) :json-false)))))
     ;; Aliases
     (when (clime-node-aliases node)
       (push `("aliases" . ,(vconcat (clime-node-aliases node))) result))
-    ;; Options (non-hidden)
-    (let ((opts (cl-remove-if #'clime-option-hidden
-                              (clime-node-options node))))
+    ;; Projection policy has already removed hidden options.
+    (let ((opts (apply #'clime-contract-options node policy)))
       (when opts
-        (push `("options" . ,(vconcat (mapcar #'clime-serve--option-to-alist opts)))
+        (push `("options" . ,(vconcat
+                               (mapcar (lambda (option)
+                                         (clime-serve--option-to-alist option policy))
+                                       opts)))
               result)))
     ;; Args
     (when (clime-node-args node)
-      (push `("args" . ,(vconcat (mapcar #'clime-serve--arg-to-alist
-                                          (clime-node-args node))))
+      (push `("args" . ,(vconcat
+                          (mapcar (lambda (arg)
+                                    (clime-serve--arg-to-alist arg policy))
+                                  (clime-node-args node))))
             result))
-    ;; Children (non-hidden, recurse)
-    (when (clime-branch-p node)
-      (let ((children (cl-remove-if
-                       (lambda (entry)
-                         (clime-node-hidden (cdr entry)))
-                       (clime-group-children node))))
-        (when children
-          (push `("children" . ,(vconcat (mapcar (lambda (entry)
-                                                    (clime-serve--node-to-alist (cdr entry)))
-                                                  children)))
-                result))))
+    ;; Surface and node visibility are also contract policy decisions.  The
+    ;; hidden guard additionally preserves the legacy detail rendering rule:
+    ;; a hidden node may be fetched directly, but its hidden descendants stay
+    ;; omitted from that node's rendered children.
+    (let ((children (and is-group
+                         (delq nil (mapcar (lambda (child)
+                                             (and (not (clime-node-hidden (cdr child)))
+                                                  (assq (cdr child) nodes)))
+                                           (clime-group-children node))))))
+      (when children
+        (push `("children" . ,(vconcat
+                                (mapcar (lambda (child)
+                                          (clime-serve--node-to-alist
+                                           child policy nodes))
+                                        children)))
+              result)))
     ;; Deprecated
     (when (clime-node-deprecated node)
       (push `("deprecated" . ,(let ((d (clime-node-deprecated node)))
@@ -357,40 +520,27 @@ Recurses into children for groups.  Omits hidden nodes and options."
             result))
     result))
 
+(defun clime-serve--command-contract (app)
+  "Return APP's prepared, visible HTTP node traversal."
+  (apply #'clime-contract-nodes app clime-serve--contract-policy))
+
 ;;; ─── API Handlers ──────────────────────────────────────────────────────
 
 (defun clime-serve--routes-handler (ctx)
   "Handle CTX for /_routes as a plain text route listing."
   (let* ((app (clime-context-app ctx))
-         (tree (clime--prepare-tree app))
-         (items (clime-node-collect
-                 tree
-                 :recurse-p (lambda (n) (and (clime-group-p n)
-                                             (not (clime-command-p n))))
-                 :match-p (lambda (type item)
-                            (and (memq type '(:command :group))
-                                 (clime-command-p item)
-                                 (clime-node-handler item)
-                                 (not (clime-node-hidden item)))))))
+         (items (clime-serve--command-contract app)))
     (princ (string-join
             (mapcar
              (lambda (entry)
-               (let* ((cmd (cadr entry))
-                      (ancestors (clime-node-ancestors cmd))
-                      (path-parts
-                       (mapcar #'clime-node-name
-                               (seq-filter
-                                (lambda (n)
-                                  (and (not (clime-app-p n))
-                                       (not (clime-node-inline n))))
-                                ancestors))))
+               (let ((command (car entry)))
                  (format "/%s  %s"
-                         (string-join
-                          (append path-parts
-                                  (list (clime-node-name cmd)))
-                          "/")
-                         (or (clime-node-help cmd) ""))))
-             items)
+                         (string-join (cdr entry) "/")
+                         (or (clime-node-help command) ""))))
+             (cl-remove-if-not (lambda (entry)
+                                 (and (clime-command-p (car entry))
+                                      (clime-node-handler (car entry))))
+                               items))
             "\n"))
     nil))
 
@@ -404,29 +554,32 @@ Recurses into children for groups.  Omits hidden nodes and options."
 (defun clime-serve--api-commands-handler (ctx)
   "Handle CTX for /_api/commands as full tree or single command detail."
   (let* ((app (clime-context-app ctx))
-         (path-segs (clime-ctx-get ctx 'path))
-         (tree (clime--prepare-tree app)))
+         (path-segs (clime-ctx-get ctx 'path)))
     (if path-segs
-        ;; Single command detail — walk to the target node
-        (condition-case _err
-            (let* ((walk (clime-serve--walk-path tree path-segs))
-                   (node (plist-get walk :node)))
-              (clime-out (clime-serve--node-to-alist node)))
-          (clime-serve-not-found
-           ;; throw bypasses clime-run--execute's condition-case;
-           ;; dispatch catches it and returns 404
-           (throw 'clime-serve--not-found
-                  (format "Unknown command path: %s"
-                          (string-join path-segs "/")))))
-      ;; Full tree — list visible top-level children
-      (let ((children (cl-remove-if
-                       (lambda (entry)
-                         (clime-node-hidden (cdr entry)))
-                       (clime-group-children tree))))
+        (let ((detail-nodes (apply #'clime-contract-nodes app
+                                   clime-serve--detail-contract-policy)))
+          (if-let* ((found (apply #'clime-contract-find app path-segs
+                                  clime-serve--detail-contract-policy))
+                    (entry (cl-find (cdr found) detail-nodes
+                                    :key #'cdr :test #'equal)))
+              (clime-out (clime-serve--node-to-alist entry
+                                                      clime-serve--contract-policy
+                                                      detail-nodes))
+            ;; throw bypasses clime-run--execute's condition-case;
+            ;; dispatch catches it and returns 404
+            (throw 'clime-dispatch--not-found
+                   (format "Unknown command path: %s"
+                           (string-join path-segs "/")))))
+      (let* ((nodes (clime-serve--command-contract app))
+             (children (delq nil (mapcar (lambda (entry)
+                                           (assq (cdr entry) nodes))
+                                         (clime-group-children (caar nodes))))))
         (clime-out `(("commands" . ,(vconcat
-                                     (mapcar (lambda (entry)
-                                               (clime-serve--node-to-alist (cdr entry)))
-                                             children)))))))))
+                                      (mapcar (lambda (entry)
+                                                (clime-serve--node-to-alist
+                                                 entry clime-serve--contract-policy
+                                                 nodes))
+                                              children)))))))))
 
 ;;; ─── API Command Injection ─────────────────────────────────────────────
 
@@ -439,18 +592,21 @@ Idempotent — does nothing if `_api' is already a child."
            :name "_routes"
            :help "Plain text route listing"
            :hidden t
+           :surfaces '(serve)
            :handler #'clime-serve--routes-handler))
          (meta-cmd
           (clime-make-command
            :name "meta"
            :help "App metadata"
            :hidden t
+           :surfaces '(serve)
            :handler #'clime-serve--api-meta-handler))
          (commands-cmd
           (clime-make-command
            :name "commands"
            :help "Command tree"
            :hidden t
+           :surfaces '(serve)
            :args (list (clime-arg--create :name 'path :nargs :rest))
            :handler #'clime-serve--api-commands-handler))
          (api-group
@@ -458,6 +614,7 @@ Idempotent — does nothing if `_api' is already a child."
            :name "_api"
            :help "API endpoints"
            :hidden t
+           :surfaces '(serve)
            ;; Auto-declare json so introspection endpoints default to JSON
            ;; even when the app registers no output formats.
            :output-formats (list clime-serve--default-json-format)
@@ -519,15 +676,18 @@ dispatch whenever this returns non-nil."
 
 (defun clime-serve--send-response (process result)
   "Send RESULT to PROCESS as an HTTP response.
-RESULT is a plist (:status N :body STRING :content-type STRING)."
+RESULT is a plist (:status N :body STRING :content-type STRING :headers ALIST)."
   (let ((status (plist-get result :status))
         (ct (or (plist-get result :content-type)
                 "text/plain; charset=utf-8"))
-        (response-body (or (plist-get result :body) "")))
-    (ws-response-header process status
-                        (cons "Content-Type" ct)
-                        (cons "Content-Length"
-                              (number-to-string (string-bytes response-body))))
+        (response-body (or (plist-get result :body) ""))
+        (headers (plist-get result :headers)))
+    (apply #'ws-response-header process status
+           (append headers
+                   (list (cons "Content-Type" ct)
+                         (cons "Content-Length"
+                               (number-to-string
+                                (string-bytes response-body))))))
     (process-send-string process response-body)))
 
 (cl-defun clime-serve (app &key (port clime-serve-default-port)
@@ -568,14 +728,72 @@ Returns the server process object."
                 (setf (clime-parse-result-config-provider result) provider))))
           (clime-parse-finalize result))))
     ;; Build root handler and start server
-    (let* ((handler (clime-serve--make-handler app fmt auth))
+    (clime-serve--validate-http-policies app)
+    (let* ((handler (clime-serve--make-handler app fmt auth host port))
            (server (ws-start handler port nil :host host)))
       (push (cons port server) clime-serve--servers)
       (message "clime-serve: %s listening on %s:%d"
                (clime-node-name app) host port)
       server)))
 
-(defun clime-serve--make-handler (app &optional default-format auth)
+(defun clime-serve--header-value (headers name)
+  "Return case-insensitive HTTP header NAME from HEADERS."
+  (or (cdr (assoc-string name headers t))
+      (cdr (assoc (intern (concat ":" name)) headers))))
+
+(defun clime-serve--method-url (headers)
+  "Return (METHOD . URL) extracted from web-server HEADERS."
+  (let ((known '(:GET :POST :PUT :PATCH :DELETE :HEAD :OPTIONS)))
+    (or (cl-some (lambda (method)
+                   (when-let ((url (cdr (assoc method headers))))
+                     (cons (intern (substring (symbol-name method) 1)) url)))
+                 known)
+        (cons nil "/"))))
+
+(defun clime-serve--json-body-inputs (body metadata)
+  "Return (INPUTS . METADATA) parsed from BODY with controlled errors."
+  (if (not (and body (not (string-empty-p body))))
+      (cons nil metadata)
+    (condition-case err
+        (let* ((json-object-type 'alist)
+               (json-key-type 'string)
+               (parsed (json-read-from-string body)))
+          (if (listp parsed)
+              (cons (clime-serve--alist-inputs parsed 'json-body) metadata)
+            (cons nil (plist-put metadata :json-error
+                                  "JSON body must be an object"))))
+      (error
+       (cons nil (plist-put metadata :json-error
+                             (format "Malformed JSON body: %s"
+                                     (error-message-string err))))))))
+
+(defun clime-serve--request-from-web-server
+    (method url headers body host port query-params)
+  "Build a normalized dispatch request from web-server request data."
+  (let* ((segments (mapcar #'url-unhex-string
+                           (cl-remove-if #'string-empty-p
+                                         (split-string url "/" t))))
+         (content-type (clime-serve--header-value headers "Content-Type"))
+         (origin (clime-serve--header-value headers "Origin"))
+         (fetch-site (clime-serve--header-value headers "Sec-Fetch-Site"))
+         (metadata (list :method method
+                         :content-type content-type
+                         :body-bytes (if body (string-bytes body) 0)
+                         :server-origin (format "http://%s:%d" host port)
+                         :origin origin
+                         :sec-fetch-site fetch-site))
+         (json-result (clime-serve--json-body-inputs body metadata))
+         (json-inputs (car json-result))
+         (metadata (cdr json-result)))
+    (clime-make-dispatch-request
+     :surface 'serve
+     :adapter 'http
+     :path segments
+     :inputs (append (clime-serve--alist-inputs query-params 'query)
+                     json-inputs)
+     :metadata metadata)))
+
+(defun clime-serve--make-handler (app &optional default-format auth host port)
   "Build the root ws-start handler function for APP.
 DEFAULT-FORMAT, when non-nil, is a `clime-output-format' used for bare
 routes (no `.<ext>' suffix) and for rendering an AUTH rejection.  AUTH,
@@ -585,12 +803,9 @@ when non-nil, is a request-info predicate enforced before dispatch (see
     (let* ((process (with-no-warnings (slot-value request 'process)))
            (headers (with-no-warnings (slot-value request 'headers)))
            (body    (with-no-warnings (slot-value request 'body)))
-           (url (or (cdr (assoc :GET headers))
-                    (cdr (assoc :POST headers))
-                    "/"))
-           (method (cond ((assoc :GET headers) 'GET)
-                         ((assoc :POST headers) 'POST)
-                         (t nil)))
+           (method-url (clime-serve--method-url headers))
+           (method (car method-url))
+           (url (cdr method-url))
            ;; Web-server-agnostic view handed to the auth predicate.
            (request-info (list :method method :path url
                                :headers headers :body body))
@@ -598,18 +813,17 @@ when non-nil, is a request-info predicate enforced before dispatch (see
       (if reject
           ;; Auth failed: respond (format-aware) 401 and never dispatch.
           (clime-serve--send-response process reject)
-        (let* ((segments (mapcar #'url-unhex-string
-                                 (cl-remove-if #'string-empty-p
-                                               (split-string url "/" t))))
-               ;; web-server parses query params into headers as
+        (let* (;; web-server parses query params into headers as
                ;; string-keyed entries; keyword keys are HTTP headers
                (query-params (cl-remove-if-not
                               (lambda (e) (stringp (car e)))
                               headers))
-               (params (or query-params
-                           (and body (clime-serve--parse-json-body body))))
-               (result (clime-serve--dispatch app segments params
-                                              default-format)))
+               (dispatch-request
+                (clime-serve--request-from-web-server
+                 method url headers body (or host "127.0.0.1")
+                 (or port clime-serve-default-port) query-params))
+               (result (clime-serve--dispatch-request
+                        app dispatch-request default-format)))
           (clime-serve--send-response process result))))))
 
 (defun clime-serve-stop (&optional server)

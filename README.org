@@ -160,6 +160,40 @@ parsing, interactive menus, and network servers.  Each surface
 translates user input into the values map, validates it through the
 same pipeline, and calls the handler.
 
+** Per-command availability
+
+Use ~:surfaces~ on an app, group, or command to restrict where a path
+is discoverable and callable.  Valid surface symbols are ~cli~, ~invoke~,
+~serve~, and ~mcp~.  ~serve~ is the HTTP/IPC invocation surface; ~http~ is
+an adapter name, not a surface declaration.
+
+#+begin_src emacs-lisp
+(clime-app ops
+  (clime-command status
+    (clime-handler (_ctx) "ok"))
+  (clime-command serve
+    :surfaces (cli invoke)
+    (clime-handler (_ctx) ...))
+  (clime-command inspect
+    :surfaces (mcp)
+    (clime-handler (_ctx) ...)))
+#+end_src
+
+An omitted declaration preserves existing behavior on ~cli~, ~invoke~, and
+~serve~.  MCP is deliberately default-closed for command leaves: an MCP
+command needs an explicit ~mcp~ declaration somewhere on its path.  Neutral
+app and group containers are pass-through, so an MCP-only command may live
+under otherwise undeclared ancestors; an undeclared sibling remains absent
+from MCP.
+
+Explicit declarations compose by intersection from the app root to the
+command.  A child may narrow its parent but cannot restore a surface the
+parent excluded.  Availability is independent of ~:hidden~: an eligible
+hidden command remains callable but unadvertised, while an ineligible command
+is neither advertised nor callable.  Matching unavailable names fail before
+positional-argument routing, so they cannot accidentally reach another
+handler.
+
 ** CLI (~clime-run-batch~)
 
 The default surface.  ~clime-run-batch~ parses argv, runs the two-pass
@@ -286,6 +320,24 @@ GET /db/migrate?dry-run&limit=100
 POST /db/seed  { "file": "data.sql" }
 #+end_src
 
+*** HTTP adapter policies
+
+HTTP adapter policies restrict the request boundary before a handler
+runs.  Policies inherit restrictively down the command tree, and
+unknown HTTP policy keys fail at server initialization instead of being
+ignored.
+
+When ~:param-sources~ is present, each request may use exactly one
+parameter provenance.  Listing both ~query~ and ~json-body~ permits
+either source on separate requests; it does not permit mixing query and
+JSON body parameters in the same policied request.
+
+~:same-origin t~ compares browser metadata by exact string equality
+against the computed server origin, currently ~http://HOST:PORT~.
+There is no ~localhost~ / ~127.0.0.1~ normalization.  ~Origin: null~
+is rejected, and ~Sec-Fetch-Site: same-site~ is treated as not
+same-origin.
+
 *** Response mapping
 
 Handler output is captured (same as ~clime-invoke~) and returned as
@@ -319,7 +371,9 @@ whether the app itself registers a JSON output format.
 ~GET /_routes~ returns a plain-text listing of available commands with
 their help strings.
 
-Structured API endpoints are injected as hidden commands at startup:
+Structured API endpoints are injected as hidden, serve-only commands at
+startup.  They remain callable only on the ~serve~ surface and do not appear
+in normal command listings:
 
 | Endpoint                     | Returns                                    |
 |------------------------------+--------------------------------------------|
@@ -342,6 +396,90 @@ git submodule update --init
 Or use ~make submodules~.  ~clime-serve~ auto-adds
 ~lib/web-server/~ to the load-path at require time, so no manual
 configuration is needed beyond initializing the submodule.
+
+** Local RPC: dispatch, pipe and file spool
+
+~clime-dispatch~ runs a normalized ~clime-dispatch-request~ through the same
+command tree, value validation, output formatting and invocation hooks used by
+the HTTP adapter.  Adapters supply paths and inputs and map the resulting
+~clime-dispatch-response~ to their wire format; the shared runner does not
+start a server.
+
+~clime-pipe~ and ~clime-spool~ use readable, versioned Lisp data frames. They
+do not evaluate requests or require ~web-server~. Both currently dispatch on
+the ~serve~ surface, so a command limited to ~cli~ is unavailable to them.
+Request IDs correlate responses; the frame's ~:status~, ~:outcome~ and
+~:error-type~ distinguish a completed command from a refusal or failure.
+
+#+begin_src emacs-lisp
+(require 'clime-pipe)
+(clime-pipe-dispatch-frame
+ my-app
+ '(:clime/pipe-request 1 :id "r1" :path ("hello")
+   :inputs ((:name name :value "Ada"))))
+#+end_src
+
+For a warm worker, ~clime-pipe-run-worker~ reads successive frames from an
+input stream and writes one response frame per request to an output stream.
+~clime-pipe-dispatch-frame~ is the single-request entry point.
+
+The file-spool adapter is an optional source module: load ~clime-spool.el~
+from a source installation (it is not included in the single-file bundle).
+~clime-spool-submit-request~ atomically writes a request into a spool root;
+~clime-spool-process-one~ handles one available request. Use ~:wait nil~ when
+the producer and worker share one Emacs, then process the request before
+calling ~clime-spool-wait-for-response~. A separate worker can instead run
+~clime-spool-process-loop~ while the producer waits for its response.
+
+Spool frames use ~:clime/spool-request~ rather than ~:clime/pipe-request~.
+An optional worker ~:capability~ must match the request's
+~:auth (:capability VALUE)~; it does not replace filesystem permissions.
+Keep the spool root private to the intended participants.
+
+[[file:examples/transports.el][The transport example]] declares one command with explicit surface eligibility
+and invokes it through both adapters. It starts no service and removes only
+its own temporary spool directory:
+
+#+begin_src sh
+emacs --batch -Q -L . -l examples/transports.el \
+  --eval '(prin1 (clime-example-transports-demo))'
+#+end_src
+
+** MCP protocol engine (~clime-mcp~)
+
+~clime-mcp~ implements the transport-neutral MCP 2025-11-25 tools-only
+session engine.  It owns JSON-RPC envelope validation, initialization,
+version negotiation, ping, ~tools/list~, and ~tools/call~.  Tool discovery
+and invocation are functions supplied by the caller.  The module does not
+decode bytes, start a transport, traverse a ~clime-app~, or inspect Emacs.
+
+Decoded JSON objects and returned responses are equal-tested hash tables;
+arrays are vectors.  Adapters must decode JSON null and false as
+~clime-mcp-json-null~ and ~clime-mcp-json-false~ so member absence remains
+distinct from either value.
+
+#+begin_src emacs-lisp
+(require 'clime-mcp)
+
+(setq session
+      (clime-mcp-make-session
+       :server-info (let ((object (make-hash-table :test #'equal)))
+                      (puthash "name" "my-server" object)
+                      (puthash "version" "1.0.0" object)
+                      object)
+       :list-tools #'my-mcp-list-tools ; (CURSOR) -> ListToolsResult object
+       :call-tool #'my-mcp-call-tool)) ; (NAME ARGUMENTS) -> CallToolResult
+
+(clime-mcp-handle session decoded-json-rpc-message)
+(clime-mcp-close session)
+#+end_src
+
+The V0 capability declaration contains only ~tools~ and no
+~listChanged~.  Prompts, resources, logging, completions, sampling,
+elicitation, tasks, active cancellation, server-initiated requests,
+transports, command projection, and live Emacs introspection are deliberate
+exclusions.  Because no task capability is declared, MCP 2025-11-25 requires
+the engine to ignore ~params.task~ and execute ~tools/call~ normally.
 
 ** Hot-reload (~clime-reload~)
 
@@ -1520,37 +1658,7 @@ return ~nil~ to prevent the runner from encoding their return value.
   (do-more ctx))
 #+end_src
 
-*** After-execute hooks
-
-The ~:after-execute~ slot on ~clime-app~ registers hooks that fire
-after every handler invocation — CLI, interactive, and HTTP surfaces
-all go through ~clime-run--execute~.
-
-Each hook receives three arguments: the context, the integer exit
-code, and the wall-clock duration in seconds:
-
-#+begin_src emacs-lisp
-(clime-app myapp
-  :version "1.0"
-  :after-execute (lambda (ctx exit-code duration)
-                   (message "Finished in %.2fs (exit %d)"
-                            duration exit-code))
-  ...)
-#+end_src
-
-Multiple hooks are supported (pass a list).  Errors in hooks are
-caught and reported via ~message~ — they never propagate or alter
-the exit code.  The ~clime-context~ struct includes a ~start-time~
-slot (set automatically before handler invocation) available to
-handlers for timeout or progress logic.
-
-Because ~:after-execute~ fires from inside ~clime-run--execute~, it
-only observes invocations that reach handler dispatch.  Parse/usage
-failures, ~--help~, and ~--version~ never build a context and so never
-fire it.  When you need to log *every* attempted invocation, use the
-unified hook below.
-
-*** Unified invocation hooks (audit logging)
+*** Invocation hooks and audit logging
 
 The ~:on-invocation~ slot registers hooks that fire exactly once per
 invocation across *every* exit path — successful dispatch, runtime
@@ -1561,46 +1669,173 @@ HTTP ~clime-serve~ dispatch, and interactive ~clime-invoke~).
 Each hook receives a single ~clime-invocation-event~ struct.  Fields
 (read with ~clime-invocation-event-*~ accessors):
 
-| Field           | Meaning                                                    |
-|-----------------+------------------------------------------------------------|
-| ~app~           | the root ~clime-app~                                       |
-| ~surface~       | ~cli~, ~serve~, ~invoke~, or ~run-from-values~            |
-| ~phase~         | ~completed~, ~no-handler~, ~help~, ~version~, ~usage-error~, ~runtime-error~, ~not-found~ (serve 404) |
-| ~argv~          | raw argv list (CLI surface; nil elsewhere)                 |
-| ~path~          | node-name path from root to command, when known (requested URL segments for serve ~not-found~) |
-| ~display-path~  | user-facing path (excludes inline groups), when known      |
-| ~params~        | resolved params plist, when a context was built            |
-| ~command~       | resolved ~clime-command~ node, when known                  |
-| ~context~       | the ~clime-context~, or nil for pre-context failures       |
-| ~exit-code~     | 0 success / 1 runtime error / 2 usage error                |
-| ~error-type~    | error signal symbol, when failed                           |
-| ~error-message~ | error message string, when failed                          |
-| ~start-time~    | invocation start (~float-time~)                            |
-| ~duration~      | whole-invocation seconds (parse → done)                    |
-| ~format~        | active ~clime-output-format~, or nil for text mode         |
+| Field                | Meaning                                                    |
+|----------------------+------------------------------------------------------------|
+| ~app~                | the root ~clime-app~                                       |
+| ~surface~            | ~cli~, ~serve~, ~invoke~, or ~run-from-values~            |
+| ~invocation-id~      | opaque ID shared by lifecycle start and terminal records    |
+| ~phase~              | ~completed~, ~no-handler~, ~help~, ~version~, ~usage-error~, ~runtime-error~, ~not-found~, ~rejected~, or lifecycle-only ~started~/~aborted~ |
+| ~observer~           | ~self~ for application-process observations; ~parent~ for supervisor records |
+| ~argv~               | raw argv list (CLI surface; nil elsewhere)                 |
+| ~path~               | node-name path from root to command, when known             |
+| ~display-path~       | user-facing path (excludes inline groups), when known       |
+| ~params~             | all effective params, including defaults/config/env         |
+| ~provided-params~    | direct invocation inputs only (values-map source ~user~)    |
+| ~command~            | resolved ~clime-command~ node, when known                  |
+| ~context~            | the ~clime-context~, or nil for pre-context failures       |
+| ~handler-invoked-p~  | non-nil once handler execution began                        |
+| ~execution-duration~ | handler/output seconds, or nil when no handler ran          |
+| ~returned-p~         | non-nil when the handler returned normally, including nil   |
+| ~return-value~       | raw final handler value before output formatting            |
+| ~adapter~            | ~http~, ~pipe~, ~spool~, ~mcp~, or nil                    |
+| ~response-status~    | final adapter response status, or nil                       |
+| ~exit-code~          | 0 success / 1 runtime error / 2 usage error                 |
+| ~error-type~         | error signal symbol, when failed                            |
+| ~error-message~      | error message string, when failed                           |
+| ~start-time~         | invocation start (~float-time~)                             |
+| ~duration~           | whole-invocation seconds (parse → final response)           |
+| ~format~             | active ~clime-output-format~, or nil for text mode          |
 
-As with ~:after-execute~, a bare function is normalized to a
-one-element list, multiple hooks are supported, and hook errors are
-caught and reported via ~message~ — they never propagate or alter the
-outcome.
+A bare function is normalized to a one-element list.  A list of hooks runs
+synchronously in registration order.  Return values are ignored, and each
+hook is isolated with ~condition-case~ so a failure cannot change handler
+output, the exit code, or an adapter response.  Every hook receives the same
+finalized event as borrowed, read-only state.  Do not mutate the event or its
+nested values; copy or project data during the hook if it must outlive the
+call.
 
-The two hooks are independent and may be used together.  Key
-differences: ~:after-execute~ fires only for handler dispatch with a
-handler-scoped ~duration~ and does *not* fire for help/version, while
-~:on-invocation~ fires for all outcomes (including help/version) with a
-whole-invocation ~duration~.
+~:on-invocation~ remains the completion-only hook contract.  The old
+~:after-execute (CTX EXIT-CODE DURATION)~ slot was removed as a breaking
+change.  Migrate handler-only observers by filtering the unified event:
+
+#+begin_src emacs-lisp
+;; Before
+:after-execute
+(lambda (ctx exit-code duration)
+  (observe ctx exit-code duration))
+
+;; After
+:on-invocation
+(lambda (event)
+  (when (clime-invocation-event-handler-invoked-p event)
+    (observe (clime-invocation-event-context event)
+             (clime-invocation-event-exit-code event)
+             (clime-invocation-event-execution-duration event))))
+#+end_src
+
+**** Correlated lifecycle telemetry
+
+Opt into durable start/terminal pairs with ~:on-lifecycle~.  It is separate
+from ~:on-invocation~, so existing completion observers never receive a start
+event.  Clime emits ~started~ synchronously at the outer CLI or dispatch entry,
+before format detection, parsing, setup, configuration, policy checks, or a
+handler.  The initial path is therefore often nil.  A terminal event shares
+the opaque ~invocation-id~ and carries the resolved outcome when available.
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+  :on-lifecycle
+  (clime-telemetry-lifecycle-jsonl-sink
+   (expand-file-name "events/lifecycle.jsonl" my-app-data-directory))
+  :on-invocation #'my-existing-completion-observer
+  ...)
+#+end_src
+
+The lifecycle JSONL and ELD sinks persist metadata only: invocation ID,
+timestamp, app, surface, phase, observer, structured path, exit code,
+duration, output format, and error type.  They exclude argv, parameter values,
+handler output, error text, cwd, actor, PID/PPID, and targets.  The schema is
+pre-1.0; ~invocation_id~ is an intentional additive field.  Append order is
+observation order, not invocation order, so consumers must correlate by ID.
+Append-only writers disable Emacs lockfiles: lock contention may otherwise
+drop a whole record that consumers would misclassify as a killed process.
+
+~SIGKILL~, interpreter abort, and host loss cannot run cleanup, so they leave
+an unmatched start.  ~SIGTERM~, ~SIGINT~, and unhandled Emacs shutdown paths
+run ~kill-emacs-hook~ and therefore produce a self-observed ~aborted~ terminal
+without a return value.  A supervisor can propagate ~CLIME_INVOCATION_ID~ to a
+child outer boundary and append its own observed exit without inventing an
+application result.  Clime consumes that value once; every nested normalized
+dispatch request receives a fresh ID:
+
+#+begin_src emacs-lisp
+(clime-telemetry-append-parent-exit-jsonl
+ lifecycle-file invocation-id nil 'SIGKILL)
+#+end_src
+
+The generated Clime shebang uses ~exec emacs --batch~, so an app launched
+through its own shebang has no surviving parent to do this automatically.
+Parent-observed exits require an external
+supervisor; worker supervision remains [[bd:clime-u05a]].  Stdout/stderr
+capture, storage, digests, and log paths are explicitly out of scope.
+
+For local operational telemetry that does not need user input, require the
+optional ~clime-telemetry~ module and use its metadata-only JSONL sink:
+
+#+begin_src emacs-lisp
+(require 'clime-telemetry)
+
+(defun my-app--log-invocation (event)
+  (clime-telemetry-append-jsonl
+   event (expand-file-name "events/clime-invocations.jsonl"
+                           my-app-data-directory)))
+
+(clime-app myapp
+  :version "1.0"
+  :on-invocation #'my-app--log-invocation
+  ...)
+#+end_src
+
+The default record contains timestamp, app, surface, phase, structured path,
+exit code, duration, output format, and error type.  It deliberately excludes
+~argv~, ~params~, ~context~, handler output/return values, and error messages.
+It also omits unresolved HTTP 404 paths because those are raw URL segments,
+not a resolved command path.
+The sink creates parent directories, appends UTF-8 JSONL, and retries bounded
+transient Emacs file-lock conflicts.
+
+**** Result-aware JSONL and ELD sinks
+
+For explicit result-aware storage, the module provides ordinary one-argument
+invocation hooks with either a fixed filename or an event-to-filename resolver:
+
+#+begin_src emacs-lisp
+(clime-app myapp
+  :version "1.0"
+  :on-invocation
+  (list #'my-app-observer
+        (clime-telemetry-jsonl-sink
+         (expand-file-name "invocations.jsonl" my-app-data-directory))
+        (clime-telemetry-eld-sink
+         (lambda (event)
+           (expand-file-name
+            (format "%s.eld" (clime-invocation-event-phase event))
+            my-app-data-directory))))
+  ...)
+#+end_src
+
+~clime-telemetry-invocation-record~ is the canonical fixed sensitive alist.
+It contains the metadata fields plus direct-user ~params~, ~returned~,
+~return_value~, ~exit_code~, structured ~error~ (~type~ and ~message~), and
+~http_status~.  HTTP status is independent of errors and is nil for non-HTTP
+invocations.  A legitimate nil handler result is distinguished from no return
+by ~returned~.  Unsupported parameter or return values become explicit
+~serialization_fallback~ records without dropping the rest of the invocation.
+JSONL stores one JSON object per line; ELD stores one readable Lisp record per
+line.  Both append UTF-8, preserve existing records, retry transient locks,
+create parents, and protect new files with mode 0600.  Neither captures stdout,
+~clime-out~ emissions, nor rendered response bodies.
 
 **** Privacy and redaction
 
-The event exposes raw user input — ~argv~, ~params~, and values derived
-from the environment (env vars, ~.env~ files, config providers).  These
-routinely contain secrets: passwords, API tokens, access keys, personal
-data.  *Redaction is the logger's responsibility.*  clime does not
-scrub the event; it hands you everything so you can decide what is safe
-to persist.  Before writing ~params~ (or ~argv~) to durable storage,
-mask values whose parameter name looks sensitive, and prefer logging
-the structured ~path~/~command~ over the raw ~argv~ when the argv may
-carry inline credentials.
+The event exposes raw user input, all effective params, handler return values,
+and error messages.  These routinely contain passwords, API tokens, access
+keys, or personal data.  The result-aware fixed schema deliberately does not
+redact them.  Use the metadata-only ~clime-telemetry-append-jsonl~ API when
+these values are not required, or write a project-specific ~:on-invocation~
+projector.  Configurable field selection, projectors, and redaction policies
+are tracked by [[bd:clime-e5wm]].
 
 **** Recipe: JSONL audit logging
 
@@ -2095,6 +2330,103 @@ The server blocks until interrupted (Ctrl-C).  Requires
 [[https://github.com/eschulte/emacs-web-server][web-server]] at runtime --- see [[*Dependencies][Dependencies]] under the Server
 section.  In the dist bundle, ~clime-serve~ is included but
 ~web-server~ must be on the ~load-path~ separately.
+
+** Exporting an Agent Skill (~skill~)
+
+A ~clime-app~ already declares the full command contract an AI coding
+agent needs to drive the CLI: nested commands, positional arguments,
+options and their aliases, requiredness, multiplicity, choices, types,
+and help.  ~skill~ projects that contract into a single, provider-neutral
+[[https://code.claude.com/docs/en/skills][Agent Skills]] package headed by ~SKILL.md~ --- one artifact both Claude
+Code and Codex consume, instead of maintaining separate instructions.
+
+#+begin_src bash
+./clime-make.el skill myapp.el --command myapp --output ./myapp-skill
+#+end_src
+
+~--command~ is the executable spelling agents should type (the name of
+your installed binary/wrapper).  Pass it explicitly whenever the app's
+own name is not the command users actually run.
+
+*** Install layouts (~--target~)
+
+The rendered ~SKILL.md~ is identical across targets; only the install
+location differs:
+
+| Target       | Destination                    | Consumer            |
+|--------------+--------------------------------+---------------------|
+| ~portable~   | the ~--output~ directory       | any Agent Skills host |
+| ~codex~      | ~<base>/.agents/skills/NAME/~  | Codex project layout |
+| ~claude~     | ~<base>/.claude/skills/NAME/~  | Claude Code project layout |
+
+~portable~ is the default and treats ~--output~ as the skill directory.
+The Agent Skills ~name~ must equal that directory, so the ~--output~
+basename must itself be a valid skill name (lowercase letters, digits,
+single hyphens; 1--64 chars) --- the generated ~name~ is set from it, not
+from the app name.  A non-conformant basename is rejected; rename the
+directory or use ~--target codex|claude~.  For ~codex~ and ~claude~,
+~--output~ is the project base (default: the current directory) and
+~NAME~ is derived (sanitized) from the app name:
+
+#+begin_src bash
+./clime-make.el skill myapp.el -c myapp --target claude        # -> .claude/skills/myapp/
+./clime-make.el skill myapp.el -c myapp --target codex -o ~/proj  # -> ~/proj/.agents/skills/myapp/
+#+end_src
+
+App loading matches ~serve~: ~--app SYMBOL~ overrides auto-detection,
+~-L DIR~ adds load paths, and ~--no-auto-paths~ disables shebang-based
+detection of load paths and ~CLIME_MAIN_APP~.
+
+*** Regeneration
+
+Generation is deterministic --- the same app and arguments produce
+byte-identical files, so a checked-in skill only changes when the CLI's
+declared contract does.  An existing destination fails closed; pass
+~--force~ to replace it (the write is atomic, so a failure never leaves a
+partial skill directory).  Forced replacement is rollback-safe even under
+compound failure: the previous skill is moved aside, the new package is
+installed, and the old copy is discarded only on success; if the install
+fails it is restored, and if that restore also fails the old copy is
+*preserved* (never deleted) and its recovery path is reported:
+
+#+begin_src bash
+./clime-make.el skill myapp.el -c myapp -o ./myapp-skill --force
+#+end_src
+
+*** Security limitations
+
+~skill~ serializes *declaration metadata only*.  It never executes app
+handlers, ~:setup~, ~:config~, or dotenv loading, and it never resolves
+runtime values.  Concretely:
+
+- Environment variables are documented by *name* only (e.g. ~[env:
+  $APP_TOKEN]~); their live values are never read.
+- Function-valued ~:default~ and ~:choices~ are never called --- dynamic
+  choices render as "determined at runtime" and computed defaults are
+  omitted.
+- Only safe static defaults (strings, numbers, booleans, plain symbols)
+  are shown; opaque or function-valued defaults are redacted.
+
+As a result no resolved env/config/dotenv value, secret, invocation
+history, or function body can reach a generated file.
+
+*** Trusted input only
+
+~skill~ *loads* (evaluates) the app file to obtain its ~clime-app~ value,
+exactly as ~serve~ does.  Projection reads declaration slots only and
+never runs handlers, ~:setup~, ~:config~, or dotenv --- but arbitrary
+top-level Elisp in the file still executes at load time.  Run ~skill~
+only on app files you trust.  Contract-only static extraction (no
+evaluation) is separate future work ([[bd:clime-o169]]).
+
+*** Command spelling is a plain token
+
+~--command~ is rendered verbatim into shell example lines an agent may
+copy and run, so it must be a single safe executable token: an optional
+leading ~./~ or ~/~, then letters, digits, and ~._-/~.  Whitespace and
+shell/Markdown metacharacters (~;~ backtick ~$()~ ~|~ ~&~ ~>~ ~<~ quotes)
+are rejected --- a spelling like ~demo; rm -rf /~ signals a usage error
+rather than being emitted.
 
 ** How the shebang works
 

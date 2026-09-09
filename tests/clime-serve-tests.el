@@ -119,6 +119,38 @@
                (clime-out '(("status" . "ok")))))))
       t)
 
+(eval '(clime-app clime-test--serve-policy-app
+         :version "1.0"
+         :adapter-policies '((http . (:same-origin t)))
+         (clime-output-format json ("--json"))
+         (clime-command view
+           :adapter-policies '((http . (:methods (GET)
+                                        :param-sources (query))))
+           (clime-option name ("--name") :type 'string)
+           (clime-handler (ctx)
+             (format "view:%s:%s"
+                     (clime-ctx-get ctx 'name)
+                     (plist-get (clime-dispatch-request-metadata
+                                 (clime-context-request ctx))
+                                :method))))
+         (clime-command submit
+           :adapter-policies '((http . (:methods (POST)
+                                        :param-sources (json-body)
+                                        :content-types ("application/json")
+                                        :max-body-bytes 64)))
+           (clime-option name ("--name") :type 'string)
+           (clime-handler (ctx)
+             (format "submit:%s:%s"
+                     (clime-ctx-get ctx 'name)
+                     (clime-dispatch-input-source
+                      (car (clime-dispatch-request-inputs
+                            (clime-context-request ctx)))))))
+         (clime-command legacy
+           (clime-option name ("--name") :type 'string)
+           (clime-handler (ctx)
+             (format "legacy:%s" (clime-ctx-get ctx 'name)))))
+      t)
+
 ;; Inject API commands on all fixtures (mirrors clime-serve startup)
 (when (featurep 'clime-serve)
   (dolist (app (list clime-test--serve-app
@@ -126,7 +158,8 @@
                      clime-test--serve-err-app
                      clime-test--serve-typed-app
                      clime-test--serve-hidden-app
-                     clime-test--serve-fmt-app))
+                     clime-test--serve-fmt-app
+                     clime-test--serve-policy-app))
     (clime-serve--inject-api-commands app)))
 
 ;;; ─── Path Walking ───────────────────────────────────────────────────────
@@ -160,6 +193,24 @@
          (result (clime-serve--walk-path tree '())))
     (should result)
     (should (clime-app-p (plist-get result :node)))))
+
+(ert-deftest clime-test-serve/introspection-omits-surface-denied-children ()
+  "Serve metadata does not advertise a command unavailable on serve."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((private (clime-make-command :name "private" :handler #'ignore
+                                      :surfaces '(mcp)))
+         (public (clime-make-command :name "public" :handler #'ignore))
+         (app (clime-make-app :name "test" :version "1"
+                              :children `(("private" . ,private)
+                                          ("public" . ,public))))
+         (nodes (clime-contract-nodes
+                 app :surface 'serve :tree-mode 'prepared
+                 :visibility 'visible :value-mode 'declared))
+         (data (clime-serve--node-to-alist
+                (car nodes) clime-serve--contract-policy nodes))
+         (children (cdr (assoc "children" data)))
+         (names (mapcar (lambda (child) (cdr (assoc "name" child))) children)))
+    (should (equal names '("public")))))
 
 ;;; ─── Path Params ────────────────────────────────────────────────────────
 
@@ -331,6 +382,331 @@ text (regression for the serve usage-error rendering fix)."
     (let ((obj (json-read-from-string (plist-get result :body))))
       (should (equal (cdr (assq 'error obj)) "bad input")))))
 
+;;; ─── HTTP adapter policies ──────────────────────────────────────────────
+
+(defun clime-test-serve--query-input (name value)
+  (clime-make-dispatch-input :name name :value value :source 'query))
+
+(defun clime-test-serve--json-input (name value)
+  (clime-make-dispatch-input :name name :value value :source 'json-body))
+
+(defun clime-test-serve--request (&rest args)
+  (apply #'clime-make-dispatch-request
+         (list :surface 'serve
+               :adapter 'http
+               :path (plist-get args :path)
+               :inputs (plist-get args :inputs)
+               :metadata (append (list :method (or (plist-get args :method) 'GET)
+                                       :content-type (plist-get args :content-type)
+                                       :body-bytes (or (plist-get args :body-bytes) 0)
+                                       :server-origin "http://127.0.0.1:8080")
+                                 (plist-get args :metadata)))))
+
+(ert-deftest clime-test-serve/dsl-adapter-policies-on-app-and-command ()
+  "DSL stores opaque adapter policy metadata on nodes."
+  (skip-unless (featurep 'clime-serve))
+  (let ((cmd (cdr (assoc "submit"
+                         (clime-group-children clime-test--serve-policy-app)))))
+    (should (equal (cdr (assq 'http (clime-node-adapter-policies
+                                     clime-test--serve-policy-app)))
+                   '(:same-origin t)))
+    (should (equal (plist-get (cdr (assq 'http (clime-node-adapter-policies cmd)))
+                              :methods)
+                   '(POST)))))
+
+(ert-deftest clime-test-serve/policy-free-mixed-inputs-json-body-wins ()
+  "Legacy policy-free routes accept mixed inputs and body duplicates win."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("legacy")
+                   :method 'POST
+                   :content-type "application/json"
+                   :inputs (list (clime-test-serve--query-input 'name "query")
+                                 (clime-test-serve--json-input 'name "body"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 200))
+    (should (string-match-p "legacy:body" (plist-get result :body)))))
+
+(ert-deftest clime-test-serve/http-policy-disallowed-method-405-allow ()
+  "Disallowed HTTP methods reject before handler execution and set Allow."
+  (skip-unless (featurep 'clime-serve))
+  (let ((calls 0)
+        (events nil))
+    (cl-letf (((symbol-function 'clime-test-serve--counting-handler)
+               (lambda (_ctx) (setq calls (1+ calls)) "called")))
+      (let* ((app (clime-make-app
+                   :name "policy-method"
+                   :children
+                   (list (cons "post"
+                               (clime-make-command
+                                :name "post"
+                                :adapter-policies '((http . (:methods (POST))))
+                                :handler #'clime-test-serve--counting-handler)))
+                   :on-invocation (lambda (ev) (push ev events))))
+             (request (clime-test-serve--request :path '("post") :method 'GET))
+             (result (clime-serve--dispatch-request app request nil)))
+        (should (equal (plist-get result :status) 405))
+        (should (equal (cdr (assoc "Allow" (plist-get result :headers))) "POST"))
+        (should (= calls 0))
+        (should (= (length events) 1))
+        (should (eq (clime-invocation-event-phase (car events)) 'rejected))))))
+
+(ert-deftest clime-test-serve/http-policy-json-content-type-required-415 ()
+  "Routes requiring JSON body reject non-JSON media types before handlers."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("submit")
+                   :method 'POST
+                   :content-type "text/plain"
+                   :inputs (list (clime-test-serve--json-input 'name "Ada"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 415))))
+
+(ert-deftest clime-test-serve/http-policy-malformed-required-json-400 ()
+  "Required JSON routes turn parse failures into controlled 400 responses."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("submit")
+                   :method 'POST
+                   :content-type "application/json"
+                   :metadata '(:json-error "Malformed JSON body")))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 400))
+    (should (string-match-p "Malformed JSON" (plist-get result :body)))))
+
+(ert-deftest clime-test-serve/http-policy-real-malformed-json-400 ()
+  "Malformed JSON bytes from the web-server adapter become controlled 400s."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-serve--request-from-web-server
+                   'POST "/submit"
+                   '((:Content-Type . "application/json"))
+                   "{\"name\":" "127.0.0.1" 8080 nil))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 400))
+    (should (string-match-p "Malformed JSON" (plist-get result :body)))))
+
+(ert-deftest clime-test-serve/http-policy-forbidden-mixed-sources-400 ()
+  "Routes constrained to JSON body reject query/body mixing."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("submit")
+                   :method 'POST
+                   :content-type "application/json; charset=utf-8"
+                   :inputs (list (clime-test-serve--query-input 'name "query")
+                                 (clime-test-serve--json-input 'name "body"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 400))))
+
+(ert-deftest clime-test-serve/http-policy-body-limit-413 ()
+  "Route-level max body bytes rejects oversized requests."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("submit")
+                   :method 'POST
+                   :content-type "application/json"
+                   :body-bytes 65
+                   :inputs (list (clime-test-serve--json-input 'name "Ada"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 413))))
+
+(ert-deftest clime-test-serve/http-policy-same-origin-403 ()
+  "Same-origin policy rejects mismatched browser origins."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("view")
+                   :method 'GET
+                   :metadata '(:origin "http://evil.example"
+                               :sec-fetch-site "cross-site")
+                   :inputs (list (clime-test-serve--query-input 'name "Ada"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 403))))
+
+(ert-deftest clime-test-serve/http-policy-same-origin-null-origin-403 ()
+  "Same-origin policy rejects browser Origin: null."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("view")
+                   :method 'GET
+                   :metadata '(:origin "null")
+                   :inputs (list (clime-test-serve--query-input 'name "Ada"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 403))))
+
+(ert-deftest clime-test-serve/http-policy-same-origin-fetch-site-same-site-403 ()
+  "Same-origin policy rejects Sec-Fetch-Site: same-site."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("view")
+                   :method 'GET
+                   :metadata '(:origin "http://127.0.0.1:8080"
+                               :sec-fetch-site "same-site")
+                   :inputs (list (clime-test-serve--query-input 'name "Ada"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 403))))
+
+(ert-deftest clime-test-serve/http-policy-same-origin-fetch-site-none-accepted ()
+  "Same-origin policy accepts Sec-Fetch-Site: none with a matching origin."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("view")
+                   :method 'GET
+                   :metadata '(:origin "http://127.0.0.1:8080"
+                               :sec-fetch-site "none")
+                   :inputs (list (clime-test-serve--query-input 'name "Ada"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 200))))
+
+(ert-deftest clime-test-serve/http-policy-same-origin-fetch-site-absent-accepted ()
+  "Same-origin policy accepts requests with no browser origin metadata."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("view")
+                   :method 'GET
+                   :inputs (list (clime-test-serve--query-input 'name "Ada"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 200))))
+
+(ert-deftest clime-test-serve/http-policy-accepted-request-context ()
+  "Accepted policy routes receive the sanitized dispatch request explicitly."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((request (clime-test-serve--request
+                   :path '("submit")
+                   :method 'POST
+                   :content-type "application/json; charset=utf-8"
+                   :metadata '(:origin "http://127.0.0.1:8080"
+                               :sec-fetch-site "same-origin")
+                   :inputs (list (clime-test-serve--json-input 'name "Ada"))))
+         (result (clime-serve--dispatch-request clime-test--serve-policy-app
+                                                request nil)))
+    (should (equal (plist-get result :status) 200))
+    (should (string-match-p "submit:Ada:json-body" (plist-get result :body)))))
+
+(ert-deftest clime-test-serve/http-policy-descendant-cannot-weaken-same-origin ()
+  "Descendant :same-origin nil cannot weaken an ancestor requirement."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((app (clime-make-app
+               :name "same-origin-app"
+               :adapter-policies '((http . (:same-origin t)))
+               :children
+               (list (cons "open"
+                           (clime-make-command
+                            :name "open"
+                            :adapter-policies '((http . (:same-origin nil)))
+                            :handler (lambda (_ctx) "open"))))))
+         (request (clime-test-serve--request
+                   :path '("open")
+                   :method 'GET
+                   :metadata '(:origin "http://evil.example"))))
+    (should (equal (plist-get (clime-serve--dispatch-request app request nil)
+                              :status)
+                   403))))
+
+(ert-deftest clime-test-serve/http-policy-unknown-key-fails-validation ()
+  "Unknown local HTTP policy keys fail closed at validation."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((app (clime-make-app
+               :name "unknown-key"
+               :children
+               (list (cons "submit"
+                           (clime-make-command
+                            :name "submit"
+                            :adapter-policies '((http . (:methdos (POST))))
+                            :handler (lambda (_ctx) "submit"))))))
+         (err (should-error (clime-serve--validate-http-policies app)
+                            :type 'error))
+         (msg (error-message-string err)))
+    (should (string-match-p ":methdos" msg))
+    (should (string-match-p "submit" msg))))
+
+(ert-deftest clime-test-serve/http-policy-unknown-adapter-fails-validation ()
+  "Unknown adapter policy symbols fail closed at validation."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((app (clime-make-app
+               :name "unknown-adapter"
+               :children
+               (list (cons "submit"
+                           (clime-make-command
+                            :name "submit"
+                            :adapter-policies '((htttp . (:methods (POST))))
+                            :handler (lambda (_ctx) "submit"))))))
+         (err (should-error (clime-serve--validate-http-policies app)
+                            :type 'error))
+         (msg (error-message-string err)))
+    (should (string-match-p "htttp" msg))
+    (should (string-match-p "submit" msg))))
+
+(ert-deftest clime-test-serve/http-policy-malformed-plist-fails-validation ()
+  "Malformed local HTTP policy plists fail closed at validation."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((app (clime-make-app
+               :name "malformed-policy"
+               :children
+               (list (cons "submit"
+                           (clime-make-command
+                            :name "submit"
+                            :adapter-policies '((http . (:same-origin)))
+                            :handler (lambda (_ctx) "submit"))))))
+         (err (should-error (clime-serve--validate-http-policies app)
+                            :type 'error))
+         (msg (error-message-string err)))
+    (should (string-match-p "malformed" msg))
+    (should (string-match-p "submit" msg))))
+
+(ert-deftest clime-test-serve/http-policy-contradictory-methods-fail-validation ()
+  "Contradictory inherited method sets fail closed at validation."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((app (clime-make-app
+               :name "contradict-methods"
+               :adapter-policies '((http . (:methods (POST))))
+               :children
+               (list (cons "read"
+                           (clime-make-command
+                            :name "read"
+                            :adapter-policies '((http . (:methods (GET))))
+                            :handler (lambda (_ctx) "read")))))))
+    (should-error (clime-serve--validate-http-policies app))))
+
+(ert-deftest clime-test-serve/http-policy-survives-alias-and-deep-copy ()
+  "Alias reconstruction and per-request deep copy preserve adapter policy."
+  (skip-unless (featurep 'clime-serve))
+  (eval '(clime-app clime-test--serve-policy-alias-app
+           (clime-command target
+             :adapter-policies '((http . (:methods (POST))))
+             (clime-handler (_ctx) "target"))
+           (clime-alias-for alias (target)))
+        t)
+  (let* ((tree (clime--prepare-tree clime-test--serve-policy-alias-app))
+         (alias (clime-group-find-child tree "alias"))
+         (request (clime-test-serve--request
+                   :path '("alias")
+                   :method 'GET))
+         (events nil))
+    (unwind-protect
+        (progn
+          (setf (clime-app-on-invocation clime-test--serve-policy-alias-app)
+                (list (lambda (event) (push event events))))
+          (let ((result (clime-serve--dispatch-request
+                         clime-test--serve-policy-alias-app request nil)))
+            (should (equal (plist-get (clime-serve--effective-http-policy alias)
+                                      :methods)
+                           '(POST)))
+            (should (equal (plist-get result :status) 405))
+            (should (= 1 (length events)))
+            (should (= 405 (clime-invocation-event-response-status
+                            (car events))))))
+      (setf (clime-app-on-invocation clime-test--serve-policy-alias-app) nil))))
+
 ;;; ─── on-invocation events through serve ─────────────────────────────────
 
 (ert-deftest clime-test-serve/on-invocation-surface-serve ()
@@ -406,6 +782,35 @@ text (regression for the serve usage-error rendering fix)."
               (should (eq 'not-found (clime-invocation-event-phase ev)))
               (should (equal '("db") (clime-invocation-event-path ev))))))
       (setf (clime-app-on-invocation clime-test--serve-app) nil))))
+
+(ert-deftest clime-test-serve/on-invocation-api-detail-404-once ()
+  "The /_api/commands detail-walk 404 throw fires one not-found event."
+  (skip-unless (featurep 'clime-serve))
+  (let ((app (clime--deep-copy-tree clime-test--serve-app))
+        (evs nil))
+    (unwind-protect
+        (progn
+          (clime-serve--inject-api-commands app)
+          (setf (clime-app-on-invocation app)
+                (list (lambda (ev) (push ev evs))))
+          (let ((result (clime-serve--dispatch app
+                                               '("_api" "commands" "missing")
+                                               nil)))
+            (should (equal (plist-get result :status) 404))
+            (should (= 1 (length evs)))
+            (let ((ev (car evs)))
+              (should (eq 'serve (clime-invocation-event-surface ev)))
+              (should (eq 'not-found (clime-invocation-event-phase ev)))
+              (should (clime-invocation-event-handler-invoked-p ev))
+              (should (floatp
+                       (clime-invocation-event-execution-duration ev)))
+              (should-not (clime-invocation-event-returned-p ev))
+              (should (equal '("_api" "commands" "missing")
+                             (clime-invocation-event-path ev)))
+              (should (string-match-p
+                       "Unknown command path: missing"
+                       (clime-invocation-event-error-message ev))))))
+      (setf (clime-app-on-invocation app) nil))))
 
 ;;; ─── Introspection ──────────────────────────────────────────────────────
 
@@ -766,6 +1171,46 @@ Regression test for URL-decode fix (clime-azs1)."
                             (not (eq (cdr (assoc "required" a)) :json-false))))
                      args))))
 
+(ert-deftest clime-test-serve/api-commands-preserves-choices-presence ()
+  "/_api/commands omits absent choices and preserves declared choices."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((app (eval '(clime-app clime-test--serve-choices-app
+                      (clime-command inspect
+                        (clime-option format ("--format")
+                          :choices '("json" "text"))
+                        (clime-arg target :choices '("one" "two"))
+                        (clime-handler (_ctx) "ok")))))
+         (_ (clime-serve--inject-api-commands app))
+         (result (clime-serve--dispatch app '("_api" "commands") nil))
+         (json-object-type 'alist)
+         (json-key-type 'string)
+         (commands (cdr (assoc "commands"
+                               (json-read-from-string (plist-get result :body)))))
+         (inspect (aref commands 0))
+         (option (aref (cdr (assoc "options" inspect)) 0))
+         (arg (aref (cdr (assoc "args" inspect)) 0)))
+    (should (equal (plist-get result :status) 200))
+    (should (equal (cdr (assoc "choices" option)) ["json" "text"]))
+    (should (equal (cdr (assoc "choices" arg)) ["one" "two"]))
+    (let* ((base-result (clime-serve--dispatch clime-test--serve-app
+                                                '("_api" "commands") nil))
+           (base-commands
+            (cdr (assoc "commands"
+                        (json-read-from-string (plist-get base-result :body)))))
+           (db (cl-find-if (lambda (command)
+                             (equal (cdr (assoc "name" command)) "db"))
+                           base-commands))
+           (migrate (cl-find-if (lambda (command)
+                                  (equal (cdr (assoc "name" command)) "migrate"))
+                                (cdr (assoc "children" db))))
+           (seed (cl-find-if (lambda (command)
+                               (equal (cdr (assoc "name" command)) "seed"))
+                             (cdr (assoc "children" db))))
+           (choiceless-option (aref (cdr (assoc "options" migrate)) 0))
+           (choiceless-arg (aref (cdr (assoc "args" seed)) 0)))
+      (should-not (assoc "choices" choiceless-option))
+      (should-not (assoc "choices" choiceless-arg)))))
+
 (ert-deftest clime-test-serve/api-commands-excludes-hidden ()
   "/_api/commands excludes hidden commands."
   (skip-unless (featurep 'clime-serve))
@@ -812,6 +1257,17 @@ Regression test for URL-decode fix (clime-azs1)."
     (should (equal (cdr (assoc "name" parsed)) "migrate"))
     (should (equal (cdr (assoc "help" parsed)) "Run migrations"))))
 
+(ert-deftest clime-test-serve/api-command-detail-includes-hidden-serve-command ()
+  "/_api/commands/PATH preserves detail for hidden serve commands."
+  (skip-unless (featurep 'clime-serve))
+  (let* ((result (clime-serve--dispatch clime-test--serve-hidden-app
+                                         '("_api" "commands" "secret") nil))
+         (json-object-type 'alist)
+         (json-key-type 'string)
+         (parsed (json-read-from-string (plist-get result :body))))
+    (should (equal (plist-get result :status) 200))
+    (should (equal (cdr (assoc "name" parsed)) "secret"))))
+
 (ert-deftest clime-test-serve/api-command-detail-group ()
   "/_api/commands/db returns group detail with children."
   (skip-unless (featurep 'clime-serve))
@@ -848,7 +1304,14 @@ Regression test for URL-decode fix (clime-azs1)."
   (skip-unless (featurep 'clime-serve))
   (let* ((opt (clime-make-option :name 'verbose :flags '("--verbose" "-v")
                                   :help "Be verbose" :type 'string))
-         (alist (clime-serve--option-to-alist opt)))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :options (list opt)))
+         (app (clime-make-app :name "test"
+                              :children `(("show" . ,cmd))))
+         (_nodes (clime-contract-nodes
+                  app :surface 'serve :tree-mode 'prepared
+                  :visibility 'visible :value-mode 'declared))
+         (alist (clime-serve--option-to-alist opt clime-serve--contract-policy)))
     (should (equal (cdr (assoc "name" alist)) "verbose"))
     (should (equal (cdr (assoc "help" alist)) "Be verbose"))
     (should (equal (cdr (assoc "flags" alist)) ["--verbose" "-v"]))))
@@ -858,7 +1321,14 @@ Regression test for URL-decode fix (clime-azs1)."
   (skip-unless (featurep 'clime-serve))
   (let* ((arg (clime-arg--create :name 'file :help "Input file"
                                   :type 'string :required t))
-         (alist (clime-serve--arg-to-alist arg)))
+         (cmd (clime-make-command :name "show" :handler #'ignore
+                                  :args (list arg)))
+         (app (clime-make-app :name "test"
+                              :children `(("show" . ,cmd))))
+         (_nodes (clime-contract-nodes
+                  app :surface 'serve :tree-mode 'prepared
+                  :visibility 'visible :value-mode 'declared))
+         (alist (clime-serve--arg-to-alist arg clime-serve--contract-policy)))
     (should (equal (cdr (assoc "name" alist)) "file"))
     (should (equal (cdr (assoc "help" alist)) "Input file"))
     (should (equal (cdr (assoc "required" alist)) t))))

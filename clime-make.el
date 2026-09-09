@@ -30,6 +30,7 @@
 
 (require 'clime)
 (declare-function clime-serve "clime-serve" (app &rest args))
+(declare-function clime-skill-export "clime-skill" (app &rest keys))
 
 ;;; ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -682,47 +683,74 @@ CTX is the clime context."
         (let ((init-result (clime-make--init-handler ctx)))
           (format "%s\n%s" scaffold-result init-result))))))
 
+(defun clime-make--load-app (file app extras auto-paths)
+  "Load FILE and return its resolved, bound `clime-app' symbol.
+Extends `load-path' with shebang-detected paths (when AUTO-PATHS) and
+EXTRAS, loads FILE, then resolves the app symbol: APP (explicit) >
+shebang `CLIME_MAIN_APP' > first detected `(clime-app SYMBOL ...)'.
+Signals `clime-usage-error' on load failure or an unresolved/unbound
+symbol.  Shared by the `serve' and `skill' commands so both honor one
+app-loading contract."
+  (let* ((target (expand-file-name file))
+         (shebang-paths (when auto-paths
+                          (clime-make--parse-shebang-loadpaths target)))
+         (shebang-app (when auto-paths
+                        (clime-make--parse-shebang-main-app target)))
+         (all-paths (append shebang-paths
+                            (mapcar #'expand-file-name (or extras '())))))
+    ;; Extend load-path before loading the app file
+    (dolist (p all-paths)
+      (add-to-list 'load-path p))
+    ;; Load the app file to make its symbols available
+    (condition-case err
+        (load target nil t t)
+      (error
+       (signal 'clime-usage-error
+               (list (format "failed to load %s: %s"
+                             (file-name-nondirectory file)
+                             (error-message-string err))))))
+    ;; Resolve the app symbol: explicit > shebang > detected
+    (let ((app-sym (or (and app (intern app))
+                       shebang-app
+                       (clime-make--detect-app target))))
+      (unless app-sym
+        (signal 'clime-usage-error
+                (list (format "%s: no (clime-app SYMBOL ...) form found; pass --app"
+                              (file-name-nondirectory file)))))
+      (unless (boundp app-sym)
+        (signal 'clime-usage-error
+                (list (format "%s: %s is not bound after load"
+                              (file-name-nondirectory file) app-sym))))
+      app-sym)))
+
 (defun clime-make--serve-handler (ctx)
   "Handle the `serve' command: expose a clime app over HTTP.
 CTX is the clime context."
   (clime-let ctx (file port host app
                        (extras extra-load-path) auto-paths)
-    (let* ((target (expand-file-name file))
-           (shebang-paths (when auto-paths
-                            (clime-make--parse-shebang-loadpaths target)))
-           (shebang-app (when auto-paths
-                          (clime-make--parse-shebang-main-app target)))
-           (all-paths (append shebang-paths
-                              (mapcar #'expand-file-name (or extras '())))))
-      ;; Extend load-path before loading the app file
-      (dolist (p all-paths)
-        (add-to-list 'load-path p))
-      ;; Load the app file to make its symbols available
-      (condition-case err
-          (load target nil t t)
-        (error
-         (signal 'clime-usage-error
-                 (list (format "failed to load %s: %s"
-                               (file-name-nondirectory file)
-                               (error-message-string err))))))
-      ;; Resolve the app symbol: explicit > shebang > detected
-      (let ((app-sym (or (and app (intern app))
-                         shebang-app
-                         (clime-make--detect-app target))))
-        (unless app-sym
-          (signal 'clime-usage-error
-                  (list (format "%s: no (clime-app SYMBOL ...) form found; pass --app"
-                                (file-name-nondirectory file)))))
-        (unless (boundp app-sym)
-          (signal 'clime-usage-error
-                  (list (format "%s: %s is not bound after load"
-                                (file-name-nondirectory file) app-sym))))
-        ;; Start the server
-        (require 'clime-serve)
-        (clime-serve (symbol-value app-sym) :port port :host host)
-        ;; Block until interrupted.  In batch mode SIGINT signals
-        ;; `quit', which propagates out cleanly.
-        (while t (sleep-for 3600))))))
+    (let ((app-sym (clime-make--load-app file app extras auto-paths)))
+      ;; Start the server
+      (require 'clime-serve)
+      (clime-serve (symbol-value app-sym) :port port :host host)
+      ;; Block until interrupted.  In batch mode SIGINT signals
+      ;; `quit', which propagates out cleanly.
+      (while t (sleep-for 3600)))))
+
+(defun clime-make--skill-handler (ctx)
+  "Handle the `skill' command: export a clime app as an Agent Skill.
+CTX is the clime context.  Uses the shared `clime-make--load-app'
+contract to obtain the app, then delegates to `clime-skill-export'."
+  (clime-let ctx (file command target output force app
+                       (extras extra-load-path) auto-paths)
+    (let ((app-sym (clime-make--load-app file app extras auto-paths)))
+      (require 'clime-skill)
+      (format "done: wrote skill to %s"
+              (clime-skill-export
+               (symbol-value app-sym)
+               :command command
+               :target (intern (or target "portable"))
+               :output output
+               :force force)))))
 
 (defun clime-make--strip-handler (ctx)
   "Handle the `strip' command: remove a clime shebang from an Elisp file.
@@ -891,7 +919,38 @@ CTX is the clime context."
     (clime-opt auto-paths ("--auto-paths") :negatable :default t
       :help "Detect load paths and app symbol from the file's shebang")
 
-    (clime-handler (ctx) (clime-make--serve-handler ctx))))
+    (clime-handler (ctx) (clime-make--serve-handler ctx)))
+
+  ;; ── skill ────────────────────────────────────────────────────────
+  (clime-command skill
+    :help "Export a clime app as a portable Agent Skill"
+
+    (clime-arg file :type '(file :must-exist t)
+               :help "The .el file defining the clime-app")
+
+    (clime-opt command ("--command" "-c")
+      :help "Executable spelling agents should invoke (required when it cannot be derived)")
+
+    (clime-opt target ("--target" "-T")
+      :choices '("portable" "codex" "claude") :default "portable"
+      :help "Output/install layout")
+
+    (clime-opt output ("--output" "-o") :type 'path
+      :help "Destination: the skill dir for portable; the layout base for codex/claude")
+
+    (clime-opt app ("--app" "-a")
+      :help "App symbol to export (overrides shebang/auto-detect)")
+
+    (clime-opt extra-load-path ("--load-path" "-L")
+      :from make-load-path :type 'path
+      :help "Additional load paths for the app's dependencies")
+
+    (clime-opt auto-paths ("--auto-paths") :negatable :default t
+      :help "Detect load paths and app symbol from the file's shebang")
+
+    (clime-opt force ("--force" "-f") :from make-force)
+
+    (clime-handler (ctx) (clime-make--skill-handler ctx))))
 
 (provide 'clime-make)
 ;;; clime-make.el ends here
